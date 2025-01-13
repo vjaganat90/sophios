@@ -163,10 +163,10 @@ async def compile_wf(request: Request) -> Json:
     # currently there is a compiler bug where the output variables are duplicated
     # this is a workaround to remove the duplicates till the compiler is fixed
     for step in cwl_tree_run['steps']:
-
-        out_vars = cwl_tree_run['steps'][step]['out']
+        out_vars = step['out']
         out_vars_unique = list(set(out_vars))
-        cwl_tree_run['steps'][step]['out'] = out_vars_unique
+        step['out'] = out_vars_unique
+
     compute_workflow: Json = {}
     compute_workflow = {
         "name": yaml_stem,
