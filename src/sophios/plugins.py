@@ -481,7 +481,7 @@ def blindly_execute_python_workflows() -> None:
     # Since this is completely different test path we have to copy
     # default .txt files to default global_config.json
     config_file = Path().home()/'wic'/'global_config.json'
-    global_config = io.get_default_config()
+    global_config = io.read_config_from_disk(config_file)
     pythonapi.global_config = get_tools_cwl(global_config)  # Use path fallback in the CI
     paths = get_py_paths(global_config)
     # Above we are assuming that config is default

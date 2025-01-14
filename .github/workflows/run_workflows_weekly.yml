@@ -101,9 +101,13 @@ jobs:
     #   run: cd mm-workflows/ && ./dockerPull.sh
     #   # For self-hosted runners, make sure the docker cache is up-to-date.
 
-    - name: Install Workflow Inference Compiler
+    - name: Install Sophios
       if: always()
       run: cd sophios/ && pip install ".[all_except_runner_src]"
+
+    - name: Update Sophios Config
+      if: always()
+      run: cd sophios/ && python .github/update_sophios_config.py
 
     - name: Install Molecular Modeling Workflows
       if: always()
