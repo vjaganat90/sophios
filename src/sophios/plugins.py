@@ -466,5 +466,3 @@ def get_yml_paths(config: Json) -> Dict[str, Dict[str, Path]]:
 
 def get_py_paths(config: Json) -> Dict[str, Dict[str, Path]]:
     return get_workflow_paths(config, 'py')
-
-

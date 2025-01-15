@@ -9,15 +9,13 @@ from sophios import input_output as io
 from sophios.python_cwl_adapter import import_python_file
 
 
-def blindly_execute_python_workflows() -> None:
+def test_compile_python_workflows() -> None:
     """This function imports (read: blindly executes) all python files in 'search_paths_wic'
        The python files are assumed to have a top-level workflow() function
        which returns a sophios.api.pythonapi.Workflow object.
        The python files should NOT call the .run() method!
        (from any code path that is automatically executed on import)
     """
-    # I hope u like Remote Code Execution vulnerabilities!
-    # See https://en.wikipedia.org/wiki/Arithmetical_hierarchy
     from sophios.api import pythonapi  # pylint: disable=C0415:import-outside-toplevel
     # Since this is completely different test path we have to copy
     # default .txt files to default global_config.json
@@ -73,7 +71,3 @@ def blindly_execute_python_workflows() -> None:
                 traceback.print_exception(etype=type(e), value=e, tb=None)
     if any_import_errors:
         sys.exit(1)  # Make sure the CI fails
-
-
-if __name__ == "__main__":
-    blindly_execute_python_workflows()
