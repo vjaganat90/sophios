@@ -619,7 +619,13 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
                 if arg_key in steps[i].get('scatter', []):
                     # Promote scattered input types to arrays
-                    in_dict['type'] = {'type': 'array', 'items': in_dict['type']}
+                    print('\n==BEFORE==\n')
+                    print(in_dict['type'])
+                    scalar_type = copy.deepcopy(in_dict['type'])
+                    in_dict['type'] = {'type': 'array', 'items': scalar_type}
+                    # in_dict['type'] = {'type': 'array', 'items': in_dict['type']}
+                    print('\n==AFTER==\n')
+                    print(in_dict['type'])
 
                 inputs_workflow.update({in_name: in_dict})
                 in_dict = {**in_dict, 'value': arg_val}
