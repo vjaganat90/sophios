@@ -304,7 +304,7 @@ def run_local(args: argparse.Namespace, rose_tree: RoseTree, cachedir: Optional[
     return retval
 
 
-def copy_output_files(yaml_stem: str) -> None:
+def copy_output_files(yaml_stem: str, basepath: str = '') -> None:
     """Copies output files from the cachedir to outdir/
 
     Args:
@@ -338,7 +338,11 @@ def copy_output_files(yaml_stem: str) -> None:
             # except do it BEFORE the extension.
             # This could still cause problems with slicing, i.e. if you scatter across
             # indices 11-20 first, then 1-10 second, the output file indices will get switched.
-            dest = 'outdir/' + parentdirs + '/' + basename
+            dest = ''
+            if basepath:
+                dest = basepath + '/' + 'outdir/' + parentdirs + '/' + basename
+            else:
+                dest = 'outdir/' + parentdirs + '/' + basename
             if dest in dests:
                 idx = 2
                 while Path(dest).exists():
@@ -364,7 +368,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str, container_cmd:
     """
     quiet = ['--quiet']
     skip_schemas = ['--skip-schemas']
-    provenance = ['--provenance', f'provenance/{workflow_name}']
+    provenance = ['--provenance', f'{basepath}/provenance/{workflow_name}']
     container_cmd_: List[str] = []
     if container_cmd == 'docker':
         container_cmd_ = []
@@ -390,8 +394,8 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str, container_cmd:
         now = datetime.now()
         date_time = now.strftime("%Y%m%d%H%M%S")
         cmd = [script] + container_pull + provenance + container_cmd_ + path_check
-        cmd += ['--outdir', f'outdir_toil_{workflow_name}_{date_time}',
-                '--jobStore', f'file:./jobStore_{workflow_name}',  # NOTE: This is the equivalent of --cachedir
+        cmd += ['--outdir', f'{basepath}/outdir_toil_{date_time}',
+                '--jobStore', f'file:{basepath}/jobStore_{workflow_name}',  # NOTE: This is the equivalent of --cachedir
                 '--clean', 'always',  # This effectively disables caching, but is reproducible
                 '--disableProgress',  # disable the progress bar in the terminal, saves UI cycle
                 '--workDir', '/data1',
@@ -451,7 +455,7 @@ def run_cwl_workflow(workflow_name: str, basepath: str, cwl_runner: str, contain
             print(e)  # we are always running this on CI
     # only copy output files if using cwltool
     if cwl_runner == 'cwltool':
-        copy_output_files(workflow_name)
+        copy_output_files(workflow_name, basepath=basepath)
     return retval
 
 
@@ -468,11 +472,11 @@ async def run_cwl_serialized_async(workflow: Json, basepath: str,
         env_commands (List[str]): environment variables and commands needed to be run before running the workflow
     """
     workflow_name = workflow['name']
+    basepath = basepath.rstrip("/") if basepath != "/" else basepath
     output_dirs = pc.find_output_dirs(workflow)
     pc.create_output_dirs(output_dirs, basepath)
     compiled_cwl = workflow_name + '.cwl'
     inputs_yml = workflow_name + '_inputs.yml'
-    basepath = basepath.rstrip("/") if basepath != "/" else basepath
     # write _input.yml file
     with open(Path(basepath) / inputs_yml, 'w', encoding='utf-8') as f:
         yaml.dump(workflow['yaml_inputs'], f)
