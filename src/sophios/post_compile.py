@@ -18,17 +18,27 @@ def find_output_dirs(data: Union[RoseTree, Dict, list]) -> list:
         list: A list of location values.
     """
     results = []
-    if isinstance(data, Dict):
-        if "class" in data and data["class"] == "Directory" and "location" in data:
-            if isinstance(data["location"], dict) and "wic_inline_input" in data["location"]:
-                results.append(data["location"]["wic_inline_input"])
-            else:
-                results.append(data["location"])
-        for value in data.values():
-            results.extend(find_output_dirs(value))
-    elif isinstance(data, list):
-        for item in data:
-            results.extend(find_output_dirs(item))
+    match data:
+        case dict() as data_dict:
+            match data_dict:
+                case {"class": "Directory", "location": {"wic_inline_input": val}, **rest_data_dict}:
+                    results.append(val)
+                case {"class": "Directory", "location": dl, **rest_data_dict}:
+                    results.append(dl)
+                case _:
+                    pass
+            # if "class" in data_dict and data_dict["class"] == "Directory" and "location" in data_dict:
+            #     if isinstance(data_dict["location"], dict) and "wic_inline_input" in data_dict["location"]:
+            #         results.append(data_dict["location"]["wic_inline_input"])
+            #     else:
+            #         results.append(data_dict["location"])
+            for value in data_dict.values():
+                results.extend(find_output_dirs(value))
+        case list(l):
+            for item in l:
+                results.extend(find_output_dirs(item))
+        case _:
+            pass
 
     return results
 
@@ -79,6 +89,8 @@ def remove_entrypoints(container_engine: str, rose_tree: RoseTree) -> RoseTree:
     # Requires root, so guard behind CLI option
     if container_engine == 'docker':
         plugins.remove_entrypoints_docker()
-    if container_engine == 'podman':
+    elif container_engine == 'podman':
         plugins.remove_entrypoints_podman()
+    else:
+        pass
     return plugins.dockerPull_append_noentrypoint_rosetree(rose_tree)

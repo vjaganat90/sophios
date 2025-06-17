@@ -1,13 +1,10 @@
 import copy
 import logging
-import json
 import glob
 import os
 from pathlib import Path
 import re
-import sys
 import tempfile
-import traceback
 from typing import Any, Dict, Union
 
 import cwltool.load_tool
@@ -16,8 +13,7 @@ import podman
 import docker
 
 
-from . import input_output as io, utils_cwl, cli
-from .python_cwl_adapter import import_python_file
+from . import utils_cwl, cli
 from .wic_types import Cwl, NodeData, RoseTree, StepId, Tool, Tools, Json
 
 
