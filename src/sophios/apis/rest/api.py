@@ -54,9 +54,17 @@ def run_workflow(compiler_info: CompilerInfo, args: argparse.Namespace) -> int:
     # ======== TEST RUN =========================
     # verify container_engine install and config
     verify_container_engine_config(args.container_engine, args.ignore_docker_install)
-    retval = run_local.run_local(args, compiler_info.rose, args.cachedir, 'cwltool',
-                                 False, passthrough_args=[])
-    return retval
+    run_args_dict = {}
+    run_args_dict['container_engine'] = args.container_engine
+    run_args_dict['cwl_runner'] = args.cwl_runner
+    run_args_dict['copy_output_files'] = str(args.copy_output_files)
+    rose_tree = compiler_info.rose
+    retval = run_local.run_local(run_args_dict, rose_tree,
+                                 False, passthrough_args=[], workflow_name=rose_tree.data.name)
+    retval_local = 1
+    if retval:
+        retval_local = retval
+    return retval_local
 
 
 app = FastAPI()
@@ -97,7 +105,6 @@ async def compile_wf(request: Request) -> Json:
     print('---------- Compile Workflow! ---------')
     # ========= PROCESS REQUEST OBJECT ==========
     req: Json = await request.json()
-    suppliedargs = ['--generate_cwl_workflow']
     # clean up and convert the incoming object
     # schema preserving
     req = converter.update_payload_missing_inputs_outputs(req)
@@ -105,7 +112,7 @@ async def compile_wf(request: Request) -> Json:
     # schema non-preserving
     workflow_temp = converter.wfb_to_wic(wfb_payload, req["plugins"])
     wkflw_name = "workflow_"
-    args = get_args(wkflw_name, suppliedargs)
+    args = get_args(wkflw_name)  # Mock CLI args
 
     # Build canonical workflow object
     workflow_can = utils_cwl.desugar_into_canonical_normal_form(workflow_temp)
@@ -132,10 +139,6 @@ async def compile_wf(request: Request) -> Json:
     yaml_tree: YamlTree = YamlTree(StepId(wkflw_name, plugin_ns), workflow_can)
 
     # ========= COMPILE WORKFLOW ================
-    if req.get('run_local_env') == 'true':
-        args.ignore_dir_path = False
-    else:
-        args.ignore_dir_path = True
     compiler_info: CompilerInfo = compiler.compile_workflow(yaml_tree, args, [], [graph], {}, {}, {}, {},
                                                             tools_cwl, True, relative_run_path=True, testing=False)
 

@@ -798,11 +798,12 @@ class Workflow(BaseModel):
         # update the environment
         for k, v in user_env.items():
             os.environ[k] = v
-        args, unknown_args = get_known_and_unknown_args(
+        _, unknown_args = get_known_and_unknown_args(
             self.process_name, user_args)  # Use mock CLI args
         # if there are no unknown_args then unkown_args will be an empty list []
         # so no need for a separate check of a particular flag!
-        run_local_module.run_local(args, rose_tree, args.cachedir, args.cwl_runner, False,
-                                   passthrough_args=unknown_args)
+        run_local_module.run_local(run_args_dict, rose_tree, False,
+                                   workflow_name=self.process_name,
+                                   basepath=basepath, passthrough_args=unknown_args)
 
 # Process = Union[Step, Workflow]
