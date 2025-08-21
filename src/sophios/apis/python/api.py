@@ -3,7 +3,7 @@
 import logging
 import os
 from pathlib import Path, PurePath
-from typing import Any, ClassVar, Optional, TypeVar, Union, Dict, List
+from typing import Any, ClassVar, Optional, TypeVar, Union, Dict
 
 import cwl_utils.parser as cu_parser
 import yaml
@@ -698,20 +698,6 @@ class Workflow(BaseModel):
                 subworkflows += step.flatten_subworkflows()
         return subworkflows
 
-    def _convert_args_dict_to_args_list(self, args_dict: Dict[str, str]) -> List[str]:
-        """ A simple utility converting a dict whose keys are CLI flag/args and
-            values are CLI flag values
-        Args:
-            args_dict: A dictionary containing args and values
-
-        Returns:
-            List[str]: A syntactically correct list of arguments (CLI flags) and values
-        """
-        args_list: List[str] = []
-        for arg_name, arg_value in args_dict.items():
-            args_list += ['--' + arg_name, arg_value]
-        return args_list
-
     def compile(self, write_to_disk: bool = False) -> CompilerInfo:
         """Compile Workflow using WIC.
 
@@ -794,15 +780,14 @@ class Workflow(BaseModel):
             rose_tree = pc.remove_entrypoints(run_args_dict['container_engine'], rose_tree)
         user_args = convert_args_dict_to_args_list(run_args_dict)
 
-        # set up user envs
-        # update the environment
+        # update the environment with user supplied env args
         for k, v in user_env.items():
             os.environ[k] = v
         _, unknown_args = get_known_and_unknown_args(
             self.process_name, user_args)  # Use mock CLI args
         # if there are no unknown_args then unkown_args will be an empty list []
         # so no need for a separate check of a particular flag!
-        run_local_module.run_local(run_args_dict, rose_tree, False,
+        run_local_module.run_local(run_args_dict, False,
                                    workflow_name=self.process_name,
                                    basepath=basepath, passthrough_args=unknown_args)
 

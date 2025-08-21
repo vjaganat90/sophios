@@ -4,7 +4,7 @@ import copy
 import subprocess as sub
 from typing import Dict, Union
 from . import plugins
-from .wic_types import RoseTree, NodeData
+from .wic_types import RoseTree, NodeData, Yaml
 
 
 def find_output_dirs(data: Union[RoseTree, Dict, list]) -> list:
@@ -186,3 +186,39 @@ def remove_entrypoints(container_engine: str, rose_tree: RoseTree) -> RoseTree:
     else:
         pass
     return plugins.dockerPull_append_noentrypoint_rosetree(rose_tree)
+
+
+def stage_input_files(yml_inputs: Yaml, root_yml_dir_abs: Path,
+                      basepath: str, use_subdirs_cwl: bool = True,
+                      throw: bool = True) -> None:
+    """Copies the input files in yml_inputs to the working directory.
+
+    Args:
+        yml_inputs (Yaml): The yml inputs file for the root workflow.
+        root_yml_dir_abs (Path): The absolute path of the root workflow yml file.
+        basepath (str): The path at which the workflow to be executed
+        use_subdirs_cwl (bool): Controls whether to use subdirectories or\n
+        just one directory when writing the compiled CWL files to disk
+        throw (bool): Controls whether to raise/throw a FileNotFoundError.
+
+    Raises:
+        FileNotFoundError: If throw and it any of the input files do not exist.
+    """
+    for key, val in yml_inputs.items():
+        match val:
+            case {'class': 'File', **rest_of_val}:
+                path = root_yml_dir_abs / Path(val['path'])
+                if not path.exists() and throw:
+                    # raise FileNotFoundError(f'Error! {path} does not exist!')
+                    print(f'Error! {path} does not exist!')
+                    sys.exit(1)
+
+                relpath = Path(basepath) if use_subdirs_cwl else Path('.')
+                pathauto = relpath / Path(val['path'])  # .name # NOTE: Use .name ?
+                pathauto.parent.mkdir(parents=True, exist_ok=True)
+
+                if path != pathauto:
+                    cmd = ['cp', str(path), str(pathauto)]
+                    _ = sub.run(cmd, check=False)
+            case _:
+                pass
