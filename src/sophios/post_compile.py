@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 import copy
+import shutil
 import subprocess as sub
 from typing import Dict, Union
 from . import plugins
@@ -188,8 +189,10 @@ def remove_entrypoints(container_engine: str, rose_tree: RoseTree) -> RoseTree:
     return plugins.dockerPull_append_noentrypoint_rosetree(rose_tree)
 
 
-def stage_input_files(yml_inputs: Yaml, root_yml_dir_abs: Path,
-                      basepath: str, use_subdirs_cwl: bool = True,
+def stage_input_files(yml_inputs: Yaml,
+                      root_yml_dir_abs: Path,
+                      basepath: str,
+                      use_subdirs_cwl: bool = True,
                       throw: bool = True) -> None:
     """Copies the input files in yml_inputs to the working directory.
 
@@ -197,28 +200,29 @@ def stage_input_files(yml_inputs: Yaml, root_yml_dir_abs: Path,
         yml_inputs (Yaml): The yml inputs file for the root workflow.
         root_yml_dir_abs (Path): The absolute path of the root workflow yml file.
         basepath (str): The path at which the workflow to be executed
-        use_subdirs_cwl (bool): Controls whether to use subdirectories or\n
+        use_subdirs_cwl (bool): Controls whether to use subdirectories or
         just one directory when writing the compiled CWL files to disk
         throw (bool): Controls whether to raise/throw a FileNotFoundError.
 
     Raises:
-        FileNotFoundError: If throw and it any of the input files do not exist.
+        FileNotFoundError: If throw and any of the input files do not exist.
     """
-    for key, val in yml_inputs.items():
+
+    for val in yml_inputs.values():
         match val:
-            case {'class': 'File', **rest_of_val}:
-                path = root_yml_dir_abs / Path(val['path'])
-                if not path.exists() and throw:
-                    # raise FileNotFoundError(f'Error! {path} does not exist!')
-                    print(f'Error! {path} does not exist!')
+            case {"class": "File", "location": location, **_rest_val}:
+                src_path = root_yml_dir_abs / Path(location)
+                if not src_path.exists() and throw:
+                    print(f"Error! {src_path} does not exist!")
                     sys.exit(1)
 
-                relpath = Path(basepath) if use_subdirs_cwl else Path('.')
-                pathauto = relpath / Path(val['path'])  # .name # NOTE: Use .name ?
-                pathauto.parent.mkdir(parents=True, exist_ok=True)
+                relroot = Path(basepath) if use_subdirs_cwl else Path(".")
+                dst_path = relroot / Path(location)
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
 
-                if path != pathauto:
-                    cmd = ['cp', str(path), str(pathauto)]
-                    _ = sub.run(cmd, check=False)
+                # Avoid unnecessary copy
+                if src_path.resolve() != dst_path.resolve():
+                    shutil.copy2(src_path, dst_path)
+
             case _:
                 pass
