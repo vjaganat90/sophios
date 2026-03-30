@@ -32,6 +32,8 @@ If you only need to build a single standalone CLT, start with {doc}`cwl_builder_
 
 If you already have checked-in `.cwl` tools and only need to compose them, the workflow examples in {doc}`userguide` are still the right starting point.
 
+If your next step is compute-slurm submission rather than local execution, continue with {doc}`compute_payload_workflow`.
+
 ## Mental model
 
 The cleanest way to think about the boundary is:

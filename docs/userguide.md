@@ -86,6 +86,8 @@ Sophios also provides a separate Python API for authoring a single CWL `CommandL
 
 If you want to build a CLT in Python and then compose it directly into a `Workflow` without writing an intermediate `.cwl` file, see {doc}`Using cwl_builder and the Workflow Python API Together <cwl_builder_workflow>`.
 
+If you want to take that compiled Python workflow and turn it into a schema-validated compute-slurm payload for submission, see {doc}`From Python Workflow to Compute Payload <compute_payload_workflow>`.
+
 ### basics
 Let us take the most basic workflow *`hello world`*. This is how we write it in YAML syntax.
 
