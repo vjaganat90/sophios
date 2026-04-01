@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from pprint import pprint
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import requests
 
@@ -131,11 +131,16 @@ def _print_logs(
         Path(log_path).write_text(str(payload), encoding="utf-8")
 
 
-def _json_or_text(response: requests.Response) -> object:
+def _json_or_text(response: requests.Response) -> str | dict[str, Any] | list[Any]:
     try:
-        return response.json()
+        payload = response.json()
     except ValueError:
         return response.text
+    if isinstance(payload, dict):
+        return cast(dict[str, Any], payload)
+    if isinstance(payload, list):
+        return payload
+    return str(payload)
 
 
 def _url(submit_url: str, workflow_id: str | None = None, endpoint: str | None = None) -> str:
