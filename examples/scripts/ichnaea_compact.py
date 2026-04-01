@@ -1,10 +1,10 @@
-"""An example showcasing Sophios Python API and creating compute Json object
-   - onestep autosegmentation workflow
-"""
+"""Canonical end-to-end example: cwl_builder -> Workflow -> compute payload."""
+
+from argparse import ArgumentParser
 import copy
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
-from datetime import datetime
 
 from sophios.apis.python.api import Workflow
 from sophios.wic_types import Json
@@ -17,7 +17,8 @@ from sophios.compute_submit import submit_compute_payload
 def build_autoseg_CLT() -> CommandLineTool:
     """Create the SAM3 autosegmentation CLT using the declarative API."""
     inputs = Inputs(
-        input=Input(cwl.directory, position=1).label("Input Zarr dataset").doc("Path to input zarr dataset"),
+        input=Input(cwl.directory, position=1).label(
+            "Input Zarr dataset").doc("Path to input zarr dataset"),
         output=Input(cwl.directory, position=2).label("Output segmentation Zarr").doc(
             "Path for output segmentation zarr"
         ),
@@ -46,7 +47,8 @@ def build_autoseg_CLT() -> CommandLineTool:
         .label("LoRA alpha")
         .doc("LoRA alpha scaling factor used when lora_weights is set (default 32)"),
     )
-    outputs = Outputs(output=Output(cwl.directory, from_input=inputs.output).label("Output segmentation Zarr"))
+    outputs = Outputs(output=Output(
+        cwl.directory, from_input=inputs.output).label("Output segmentation Zarr"))
 
     return (
         CommandLineTool("sam3_ome_zarr_autosegmentation", inputs, outputs)
@@ -72,7 +74,8 @@ def workflow(input_dicts: Dict[str, str], workflow_name: str) -> Workflow:
     # =========== BUILD CLT ==========================
     autoseg_clt = build_autoseg_CLT()  # directly building the CLT in memory
     # =========== CREATE A STEP ======================
-    autoseg = autoseg_clt.to_step(step_name='autoseg')  # converting the built CLT into a workflow step
+    # converting the built CLT into a workflow step
+    autoseg = autoseg_clt.to_step(step_name='autoseg')
     # assign input values to the step
     autoseg.output = input_dicts['output_dir']
     autoseg.input = input_dicts['input_dir']
@@ -105,11 +108,13 @@ def create_compute_payload(workflow_id: str, cwl_workflow: Json, cwl_job_inputs:
 
 
 def main() -> int:
-    """main function to build and run workflows"""
-    # NOTE : Everything related to workflow creation aand submission here is in-memory nothing touches disk
-    # ========== CONSTANTS ===========================
-    # compute URL
-    BASE_URL = 'http://127.0.0.1:7998/compute/'
+    """Build the workflow, create the compute payload, and optionally submit it."""
+    parser = ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--submit-url",
+        help="Optional compute create-workflow endpoint. If omitted, only build the payload in memory.",
+    )
+    args = parser.parse_args()
 
     # ========== INPUTS TO WORKFLOW ==================
     # The main directory constants
@@ -127,7 +132,8 @@ def main() -> int:
     # workflow Name
     workflow_name = workflow_json['name']
     # adjust workflow name/id to distinguish after submit using a timestamp
-    workflow_name = workflow_name + '__' + datetime.now().strftime('%Y_%m_%d_%H.%M.%S') + '__'
+    workflow_name = workflow_name + '__' + \
+        datetime.now().strftime('%Y_%m_%d_%H.%M.%S') + '__'
     # workflow Inputs
     workflow_inputs = copy.deepcopy(workflow_json['yaml_inputs'])
     # workflow CWL
@@ -136,11 +142,18 @@ def main() -> int:
     compiled_cwl_workflow = copy.deepcopy(workflow_json)
 
     # ========== CONSTRUCT COMPUTE OBJECT ============
-    compute_object = create_compute_payload(workflow_name, compiled_cwl_workflow, workflow_inputs)
+    compute_object = create_compute_payload(
+        workflow_name, compiled_cwl_workflow, workflow_inputs)
+
+    if args.submit_url is None:
+        print("Built compute payload object in memory. Pass --submit-url to submit it.")
+        return 0
 
     # =========  SUBMIT TO COMPUTE ===================
-    return submit_compute_payload(compute_object, BASE_URL)
+    submission_status: int = submit_compute_payload(
+        compute_object, args.submit_url)
+    return submission_status
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

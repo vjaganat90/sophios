@@ -18,6 +18,10 @@ compute request body.
 A runnable version of this pattern lives in
 [examples/scripts/compute_payload_workflow.py](https://github.com/PolusAI/workflow-inference-compiler/blob/master/examples/scripts/compute_payload_workflow.py).
 
+If you want the canonical production-like example that starts from the Ichnaea
+autosegmentation CLT and carries that tool all the way through workflow
+construction and compute submission, see [ichnaea_compact_compute](ichnaea_compact_compute.md).
+
 ## What this buys you
 
 This split gives you confidence at the right boundaries:
@@ -196,8 +200,8 @@ Submission is intentionally a separate concern:
 ```python
 from sophios.compute_submit import submit_compute_json, submit_compute_payload
 
-retval = submit_compute_payload(payload, "http://dali-polus.ncats.nih.gov:7998/compute/")
-retval = submit_compute_json(compute_json, "http://dali-polus.ncats.nih.gov:7998/compute/")
+retval = submit_compute_payload(payload, "http://127.0.0.1:7998/compute/")
+retval = submit_compute_json(compute_json, "http://127.0.0.1:7998/compute/")
 ```
 
 Submission behavior is intentionally narrow:
@@ -215,7 +219,7 @@ From the repository root:
 ```bash
 PYTHONPATH=src python examples/scripts/compute_payload_workflow.py
 PYTHONPATH=src python examples/scripts/compute_payload_workflow.py --validate-tool
-PYTHONPATH=src python examples/scripts/compute_payload_workflow.py --submit-url http://dali-polus.ncats.nih.gov:7998/compute/
+PYTHONPATH=src python examples/scripts/compute_payload_workflow.py --submit-url http://127.0.0.1:7998/compute/
 ```
 
 The first command writes a validated compute payload JSON file.

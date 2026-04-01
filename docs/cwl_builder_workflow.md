@@ -28,11 +28,11 @@ This hybrid style is useful when:
 - you want to validate the generated CLT before putting it into a workflow,
 - or you want a workflow to mix generated tools with ordinary file-backed `Step(...)` objects.
 
-If you only need to build a single standalone CLT, start with {doc}`cwl_builder_sam3`.
+If you only need to build a single standalone CLT, start with [cwl_builder_sam3](cwl_builder_sam3.md).
 
-If you already have checked-in `.cwl` tools and only need to compose them, the workflow examples in {doc}`userguide` are still the right starting point.
+If you already have checked-in `.cwl` tools and only need to compose them, the workflow examples in [userguide](userguide.md) are still the right starting point.
 
-If your next step is compute-slurm submission rather than local execution, continue with {doc}`compute_payload_workflow`.
+If your next step is compute-slurm submission rather than local execution, continue with [ichnaea_compact_compute](ichnaea_compact_compute.md) for the canonical production-like example or [compute_payload_workflow](compute_payload_workflow.md) for the lower-level compute payload API.
 
 ## Mental model
 

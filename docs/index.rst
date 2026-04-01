@@ -11,6 +11,7 @@ Sophios documentation
    userguide.md
    cwl_builder_sam3.md
    cwl_builder_workflow.md
+   ichnaea_compact_compute.md
    compute_payload_workflow.md
    advanced.md
    validation.md
