@@ -57,7 +57,8 @@ def run_cwl_local(workflow_name: str, cwl_runner: str, docker_cmd: str, use_subp
     path_check = ["--relax-path-checks"]
     docker_pull = ["--disable-pull"]
     script = "cwltool_filterlog" if cwl_runner == "cwltool" else cwl_runner
-    cmd = [script] + docker_pull + quiet + provenance + docker_cmd_ + write_summary + skip_schemas + path_check
+    cmd = [script] + docker_pull + quiet + provenance + \
+        docker_cmd_ + write_summary + skip_schemas + path_check
     if cwl_runner == "cwltool":
         cmd += [
             "--leave-outputs",
@@ -91,12 +92,15 @@ def run_cwl_local(workflow_name: str, cwl_runner: str, docker_cmd: str, use_subp
             else:
                 raise Exception("Invalid cwl_runner!")
 
-            print(f"Final output json metadata blob is in output_{workflow_name}.json")
+            print(
+                f"Final output json metadata blob is in output_{workflow_name}.json")
         except Exception as exc:  # pylint: disable=W0718:broad-exception-caught
             print("Failed to execute", workflow_name)
-            print(f"See error_{workflow_name}.txt for detailed technical information.")
+            print(
+                f"See error_{workflow_name}.txt for detailed technical information.")
             with open(f"error_{workflow_name}.txt", mode="w", encoding="utf-8") as f:
-                traceback.print_exception(type(exc), value=exc, tb=None, file=f)
+                traceback.print_exception(
+                    type(exc), value=exc, tb=None, file=f)
             print(exc)
     return retval
 
@@ -179,3 +183,15 @@ def test_rest_wfb_compile() -> None:
     inp_path = REST_OBJECTS / "multi_node_wfb.json"
     res = prepare_call_rest_api(inp_path)
     assert int(res["retval"]) == 0
+
+
+def test_rest_core_blank_plugin_id_uses_node_name() -> None:
+    """Compile inline-run REST payloads even when pluginId is blank.
+
+    Returns:
+        None: The assertion verifies a stable generated step name.
+    """
+    inp_path = REST_OBJECTS / "single_node_bbbc_download.json"
+    res = prepare_call_rest_api(inp_path)
+    assert int(res["retval"]) == 0
+    assert "workflow___step__1__bbbcdownload" in res["steps"]

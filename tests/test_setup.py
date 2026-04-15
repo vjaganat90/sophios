@@ -5,6 +5,7 @@ from typing import Dict
 
 from hypothesis.strategies import SearchStrategy
 import hypothesis_jsonschema as hj
+import yaml
 
 import sophios
 import sophios.cli
@@ -16,6 +17,7 @@ import sophios.utils
 import sophios.apis
 import sophios.apis.python.api
 from sophios.wic_types import Json, Yaml
+from sophios.utils_yaml import wic_loader
 
 
 args = sophios.cli.get_args()
@@ -32,17 +34,43 @@ yml_paths_tuples = [(yml_path_str, yml_path)
                     for yml_namespace, yml_paths_dict in yml_paths.items()
                     for yml_path_str, yml_path in yml_paths_dict.items()]
 
+
+def yml_path_is_workflow(yml_path: Path) -> bool:
+    """Return whether a `.wic` file looks like a compilable workflow root.
+
+    Args:
+        yml_path (Path): Path to a workflow-definition file.
+
+    Returns:
+        bool: True when the file declares steps or workflow implementations.
+    """
+    with open(yml_path, mode='r', encoding='utf-8') as yml_file:
+        yml = yaml.load(yml_file.read(), Loader=wic_loader())
+    if not isinstance(yml, dict):
+        return False
+    wic_tag = yml.get('wic', {})
+    return (
+        'steps' in yml
+        or 'implementations' in yml
+        or (isinstance(wic_tag, dict) and 'implementations' in wic_tag)
+    )
+
+
 if schema_store_path.exists():
     with open(schema_store_path, mode='r', encoding='utf-8') as f:
         schema_store = json.load(f)
-    expected_schema_ids = {f'workflows/{yml_path_str}.json' for yml_path_str, _ in yml_paths_tuples}
+    expected_schema_ids = {
+        f'workflows/{yml_path_str}.json' for yml_path_str, _ in yml_paths_tuples}
     if not expected_schema_ids.issubset(schema_store):
         schema_store = {}
 
 if not schema_store:
-    validator = sophios.schemas.wic_schema.get_validator(tools_cwl, yaml_stems, schema_store, write_to_disk=True)
+    validator = sophios.schemas.wic_schema.get_validator(
+        tools_cwl, yaml_stems, schema_store, write_to_disk=True)
 
     for yml_path_str, yml_path in yml_paths_tuples:
+        if not yml_path_is_workflow(yml_path):
+            continue
         schema = sophios.schemas.wic_schema.compile_workflow_generate_schema(args.homedir, yml_path_str, yml_path,
                                                                              tools_cwl, yml_paths, validator,
                                                                              args.ignore_validation_errors)
@@ -53,7 +81,8 @@ if not schema_store:
     with open(schema_store_path, mode='w', encoding='utf-8') as f:
         json.dump(schema_store, f, indent=2)
 
-validator = sophios.schemas.wic_schema.get_validator(tools_cwl, yaml_stems, schema_store, write_to_disk=True)
+validator = sophios.schemas.wic_schema.get_validator(
+    tools_cwl, yaml_stems, schema_store, write_to_disk=True)
 
 
 def wic_yaml_filter_blank_steps(yml: Yaml) -> bool:
@@ -66,7 +95,42 @@ def wic_yaml_filter_blank_steps(yml: Yaml) -> bool:
         bool: True if there are no blank steps.
     """
     steps = yml.get('steps', [])
-    return not (steps == [] or any([step == {} for step in steps]))
+    if isinstance(steps, list):
+        return not (
+            steps == []
+            or any([
+                step == {}
+                or not isinstance(step, dict)
+                or not isinstance(step.get('id'), str)
+                or step.get('id', '') == ''
+                for step in steps
+            ])
+        )
+    if isinstance(steps, dict):
+        return not (
+            steps == {}
+            or any([
+                not isinstance(key, str) or key == ''
+                for key in steps
+            ])
+        )
+    return bool(steps != [])
+
+
+def wic_yaml_filter_top_level_types(yml: Yaml) -> bool:
+    """Filters out obvious top-level type mismatches.
+
+    Args:
+        yml (Yaml): A randomly generated Yaml instance.
+
+    Returns:
+        bool: True if optional top-level fields use plausible container types.
+    """
+    namespaces = yml.get('$namespaces', {})
+    schemas = yml.get('$schemas', [])
+    namespaces_valid = namespaces is None or isinstance(namespaces, dict)
+    schemas_valid = schemas is None or isinstance(schemas, list)
+    return namespaces_valid and schemas_valid
 
 
 def wic_yaml_filter_implementations_or_steps(yml: Yaml) -> bool:
@@ -83,12 +147,14 @@ def wic_yaml_filter_implementations_or_steps(yml: Yaml) -> bool:
 
 time_initial = time.time()
 
-wic_schema = sophios.schemas.wic_schema.wic_main_schema(tools_cwl, yaml_stems, schema_store, hypothesis=True)
+wic_schema = sophios.schemas.wic_schema.wic_main_schema(
+    tools_cwl, yaml_stems, schema_store, hypothesis=True)
 wic_strategy: SearchStrategy = hj.from_schema(wic_schema)
 # NOTE: The CLI version of mypy and the VSCode version of mypy disagree on the
 # following line. The "type: ignore" comment is NOT unused.
 wic_strategy = wic_strategy.filter(wic_yaml_filter_blank_steps)
 wic_strategy = wic_strategy.filter(wic_yaml_filter_implementations_or_steps)
+wic_strategy = wic_strategy.filter(wic_yaml_filter_top_level_types)
 
 time_final = time.time()
 print(f'from_schema time: {round(time_final - time_initial, 4)} seconds')
