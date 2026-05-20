@@ -1,6 +1,6 @@
 # From Python Workflow to Compute Payload
 
-Sophios now has a clean path from Python-authored CWL all the way to a
+Sophios provides a clean path from Python-authored CWL all the way to a
 schema-validated compute-slurm submission payload.
 
 The key idea is simple:
@@ -139,7 +139,7 @@ It does not need to know what a `Workflow` is. It only needs the compiled output
 
 In this example the message is bound directly to `emit_step.inputs.message`.
 That is deliberate: it produces a real `cwlJobInputs` payload immediately, which
-is the most useful shape for a ready-to-submit demo.
+is the most useful shape for validating the submission boundary.
 
 ### 3. Validation happens before submission
 
@@ -210,7 +210,7 @@ Submission behavior is intentionally narrow:
 - poll `/status/` until the job reaches a started or terminal state
 - print logs only after the job reaches `RUNNING`
 
-That makes the client behavior predictable and easy to demonstrate.
+That makes the client behavior predictable and easy to inspect.
 
 ## Run the example
 

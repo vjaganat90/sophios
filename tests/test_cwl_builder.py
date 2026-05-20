@@ -15,7 +15,7 @@ from sophios.apis.python.cwl_builder import (
     cwl,
     secondary_file,
 )
-from sophios.apis.python.api import Step
+from sophios.apis.python.workflow import Step
 
 
 def _rich_tool() -> CommandLineTool:

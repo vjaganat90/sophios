@@ -2,7 +2,7 @@
 
 ## Tooling
 
-Tooling is essential to maximizing a developer's productivity and to minimizing the chance of introducing bugs. I highly recommend vscode, with the extensions listed in the [installation guide](../installguide.md#vscode). Most importantly, vscode provides [IntelliSense](https://code.visualstudio.com/docs/editor/intellisense) code completion.
+Tooling is essential to maximizing a developer's productivity and to minimizing the chance of introducing bugs. I highly recommend VS Code, with the YAML setup described in the [installation guide](../installguide.md#optional-yaml-editor-setup). Most importantly, VS Code provides [IntelliSense](https://code.visualstudio.com/docs/editor/intellisense) code completion.
 
 ## MyPy Type Annotations
 

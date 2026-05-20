@@ -15,7 +15,7 @@ import sophios.schemas
 import sophios.schemas.wic_schema
 import sophios.utils
 import sophios.apis
-import sophios.apis.python.api
+import sophios.apis.python.workflow
 from sophios.wic_types import Json, Yaml
 from sophios.utils_yaml import wic_loader
 

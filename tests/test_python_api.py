@@ -13,12 +13,13 @@ import yaml
 import sophios
 import sophios.apis.python as python_api_package
 import sophios.apis.python._workflow_runtime as python_runtime
+import sophios.apis.python.workflow as python_workflow
 import sophios.plugins
 import sophios.run_local as run_local
 from sophios import input_output as io
 from sophios import utils, utils_cwl
 from sophios.apis.python.cwl_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.apis.python.api import InvalidLinkError, Step, Workflow
+from sophios.apis.python.workflow import InvalidLinkError, Step, Workflow
 from sophios.compute_payload import ComputeConfig, ComputeWorkflowPayload, OutputConfig
 from sophios.python_cwl_adapter import import_python_file
 from sophios.schemas import wic_schema
@@ -73,15 +74,15 @@ def _step_registry_injected(tool_registry: Tools) -> Iterator[None]:
     Yields:
         Iterator[None]: Context where imported scripts see the patched ``Step``.
     """
-    from sophios.apis.python import api  # pylint: disable=C0415:import-outside-toplevel
+    from sophios.apis.python import workflow  # pylint: disable=C0415:import-outside-toplevel
 
-    step_class = api.Step
+    step_class = workflow.Step
 
     def step_factory(*args: Any, **kwargs: Any) -> Any:
         kwargs.setdefault("tool_registry", tool_registry)
         return step_class(*args, **kwargs)
 
-    with patch.object(api, "Step", step_factory):
+    with patch.object(workflow, "Step", step_factory):
         yield
 
 
@@ -110,6 +111,31 @@ def test_explicit_step_ports_match_legacy_yaml() -> None:
     explicit_yaml = Workflow([touch_explicit, append_explicit], "wf").yaml
 
     assert legacy_yaml == explicit_yaml
+
+
+@pytest.mark.fast
+def test_linear_python_workflow_reuses_compiler_edge_inference() -> None:
+    touch = Step(_adapter("touch"))
+    touch.inputs.filename = "empty.txt"
+
+    append = Step(_adapter("append"))
+    append.inputs.str = "Hello"
+
+    cat = Step(_adapter("cat"))
+
+    workflow = Workflow([touch, append, cat], "wf")
+    workflow_yaml = workflow.yaml
+    assert "file" not in workflow_yaml["steps"][1]["in"]
+    assert "file" not in workflow_yaml["steps"][2]["in"]
+
+    compiled = workflow.get_cwl_workflow()
+
+    assert compiled["steps"][1]["in"]["file"] == "wf__step__1__touch/file"
+    assert compiled["steps"][2]["in"]["file"] == "wf__step__2__append/file"
+    assert compiled["yaml_inputs"] == {
+        "wf__step__1__touch___filename": "empty.txt",
+        "wf__step__2__append___str": "Hello",
+    }
 
 
 @pytest.mark.fast
@@ -263,6 +289,59 @@ def test_incompatible_step_link_raises_invalid_link_error() -> None:
 
 
 @pytest.mark.fast
+def test_explicit_python_api_bindings_accept_cwl_any() -> None:
+    array_indices = Step(_adapter("array_indices"))
+    array_indices.inputs.input_array = ["hello world", "not", "what world?"]
+    array_indices.inputs.input_indices = [0, 2]
+
+    echo = Step(_adapter("echo_3"))
+    echo.inputs.message1 = array_indices.outputs.output_array
+    echo.inputs.message2 = array_indices.outputs.output_array
+    echo.inputs.message3 = "scalar"
+    echo.scatter_on(
+        echo.inputs.message1,
+        echo.inputs.message2,
+        method="flat_crossproduct",
+    )
+
+    workflow_yaml = Workflow([array_indices, echo], "wf").yaml
+    assert workflow_yaml["steps"][1]["scatter"] == ["message1", "message2"]
+    assert workflow_yaml["steps"][1]["scatterMethod"] == "flat_crossproduct"
+
+
+@pytest.mark.fast
+def test_workflow_write_artifacts_delegates_to_disk_compilation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = Workflow([], "wf")
+    sentinel = SimpleNamespace()
+    calls: dict[str, Any] = {}
+
+    def fake_compile_workflow(
+        workflow_arg: Workflow,
+        *,
+        write_to_disk: bool,
+        tool_registry: Tools | None,
+    ) -> SimpleNamespace:
+        calls["workflow"] = workflow_arg
+        calls["write_to_disk"] = write_to_disk
+        calls["tool_registry"] = tool_registry
+        return sentinel
+
+    monkeypatch.setattr(python_workflow, "_compile_workflow", fake_compile_workflow)
+
+    registry: Tools = {}
+    result = workflow.write_artifacts(tool_registry=registry)
+
+    assert result is sentinel
+    assert calls == {
+        "workflow": workflow,
+        "write_to_disk": True,
+        "tool_registry": registry,
+    }
+
+
+@pytest.mark.fast
 def test_workflow_outputs_are_serialized_with_type_and_source() -> None:
     touch = Step(_adapter("touch"))
     touch.inputs.filename = "empty.txt"
@@ -340,6 +419,15 @@ def test_top_level_python_api_exports_only_user_facing_names() -> None:
     assert not hasattr(python_api_package, "WorkflowInputReference")
     assert not hasattr(python_api_package, "set_input_Step_Workflow")
     assert not hasattr(python_api_package, "extract_tools_paths_NONPORTABLE")
+
+
+@pytest.mark.fast
+def test_legacy_python_api_module_reexports_workflow_surface() -> None:
+    import sophios.apis.python.api as legacy_api  # pylint: disable=import-outside-toplevel
+
+    assert legacy_api.Step is Step
+    assert legacy_api.Workflow is Workflow
+    assert legacy_api.InvalidLinkError is InvalidLinkError
 
 
 @pytest.mark.fast
@@ -448,7 +536,7 @@ def test_workflow_run_uses_basepath_for_docker_extract(
 @pytest.mark.fast
 def test_compile_python_workflows() -> None:
     """Import and compile all auto-discovered Python workflow scripts."""
-    from sophios.apis.python import api  # pylint: disable=C0415:import-outside-toplevel
+    from sophios.apis.python import workflow  # pylint: disable=C0415:import-outside-toplevel
 
     global_config = _load_global_config()
     tools_cwl = sophios.plugins.get_tools_cwl(global_config)
@@ -459,7 +547,7 @@ def test_compile_python_workflows() -> None:
         try:
             with _step_registry_injected(tools_cwl):
                 module = import_python_file(path_stem, path)
-                retval: api.Workflow = module.workflow()
+                retval: workflow.Workflow = module.workflow()
 
             retval.compile()
             retval.write_ast_to_disk(path.parent)
@@ -472,7 +560,7 @@ def test_compile_python_workflows() -> None:
                 with open(config_ci, mode="r", encoding="utf-8") as r:
                     json_contents = json.load(r)
             run_blacklist: list[str] = json_contents.get("run_blacklist", [])
-            subworkflows: list[api.Workflow] = retval.flatten_subworkflows()[
+            subworkflows: list[workflow.Workflow] = retval.flatten_subworkflows()[
                 1:]
             run_blacklist += [wf.process_name for wf in subworkflows]
             json_contents["run_blacklist"] = run_blacklist

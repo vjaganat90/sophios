@@ -66,7 +66,7 @@ from ._cwl_builder_support import (
 )
 
 if TYPE_CHECKING:
-    from .api import Step
+    from .workflow import Step
 
 
 @dataclass(slots=True)

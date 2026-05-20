@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Dict
 
-from sophios.apis.python.api import Workflow
+from sophios.apis.python.workflow import Workflow
 from sophios.wic_types import Json
 
 from sophios.apis.python.cwl_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl

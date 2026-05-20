@@ -44,7 +44,7 @@ First, when an edge definition site (!&) is encountered, its namespaces are stor
 
 ## Edge Inference
 
-Since users may eventually need to know how edge inference works, the edge inference algorithm is in the [user's guide](../userguide.md#edge-inference-algorithm).
+Since users may eventually need to know how edge inference works, the edge inference algorithm is described in [Advanced YAML and Operations](../advanced.md#edge-inference).
 
 Again note that if we are in a subworkflow, edge inference may temporarily fail for some inputs and we may need to defer to a parent workflow.
 

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from sophios.wic_types import Tools
 
 if TYPE_CHECKING:
-    from .api import Step
+    from .workflow import Step
 
 
 class _CommandLineToolLike(Protocol):  # pylint: disable=too-few-public-methods
@@ -45,7 +45,7 @@ def step_from_command_line_tool(
     Returns:
         Step: An in-memory workflow step backed by the built CLT.
     """
-    from .api import Step  # pylint: disable=C0415:import-outside-toplevel
+    from .workflow import Step  # pylint: disable=C0415:import-outside-toplevel
 
     resolved_name = step_name or tool.name
     resolved_run_path = run_path or Path(f"{resolved_name}.cwl")

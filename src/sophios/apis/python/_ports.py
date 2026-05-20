@@ -6,14 +6,15 @@ from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Generic, Iterator, TypeVar
 
-from ._utils import (infer_literal_parameter_type,
+from ._utils import (contains_any_type,
+                     infer_literal_parameter_type,
                      is_array_type,
                      normalize_parameter_name,
                      normalize_parameter_type,
                      serialize_value)
 
 if TYPE_CHECKING:
-    from .api import Workflow
+    from .workflow import Workflow
 
 
 ParameterT = TypeVar("ParameterT")
@@ -190,7 +191,10 @@ class InputParameter(_ParameterBase):
             case None:
                 return False
             case _:
-                return is_array_type(self._bound_parameter_type)
+                return (
+                    is_array_type(self._bound_parameter_type)
+                    or contains_any_type(self._bound_parameter_type)
+                )
 
     def is_bound(self) -> bool:
         return self._binding is not None

@@ -73,7 +73,7 @@ if TYPE_CHECKING:
         InvalidStepError,
         MissingRequiredValueError,
     )
-    from .api import (
+    from .workflow import (
         Step,
         Workflow,
     )
@@ -125,7 +125,7 @@ def __getattr__(name: str) -> Any:
         module = import_module("._errors", __name__)
         return getattr(module, name)
     if name in _API_EXPORTS:
-        module = import_module(".api", __name__)
+        module = import_module(".workflow", __name__)
         return getattr(module, name)
     if name in _CWL_BUILDER_EXPORTS:
         module = import_module(".cwl_builder", __name__)

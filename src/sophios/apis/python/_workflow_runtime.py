@@ -32,7 +32,7 @@ from ._utils import load_yaml as _load_yaml
 from ._api_config import DEFAULT_RUN_ARGS
 
 if TYPE_CHECKING:
-    from .api import Step, Workflow
+    from .workflow import Step, Workflow
 
 
 logger = logging.getLogger("WIC Python API")
@@ -287,7 +287,7 @@ def workflow_document(
     Returns:
         dict[str, Any]: Serialized workflow document.
     """
-    from .api import Workflow  # pylint: disable=import-outside-toplevel
+    from .workflow import Workflow  # pylint: disable=import-outside-toplevel
 
     workflow_inputs: dict[str, dict[str, Any]] = {}
     for parameter in workflow._inputs:

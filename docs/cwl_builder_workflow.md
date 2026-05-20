@@ -1,9 +1,9 @@
 # Using `cwl_builder` and the Workflow Python API Together
 
-Sophios now has two related Python surfaces:
+Sophios has two related Python surfaces:
 
 - `sophios.apis.python.cwl_builder` for authoring a single CWL `CommandLineTool`
-- `sophios.apis.python.api` for wiring tools into a workflow with `Step` and `Workflow`
+- `sophios.apis.python` for wiring tools into a workflow with `Step` and `Workflow`
 
 Those APIs are intentionally separate, but they can be combined cleanly.
 
@@ -30,7 +30,7 @@ This hybrid style is useful when:
 
 If you only need to build a single standalone CLT, start with [cwl_builder_sam3](cwl_builder_sam3.md).
 
-If you already have checked-in `.cwl` tools and only need to compose them, the workflow examples in [userguide](userguide.md) are still the right starting point.
+If you already have checked-in `.cwl` tools and only need to compose them, start with the [Python Workflow API](userguide.md).
 
 If your next step is compute-slurm submission rather than local execution, continue with [ichnaea_compact_compute](ichnaea_compact_compute.md) for the canonical production-like example or [compute_payload_workflow](compute_payload_workflow.md) for the lower-level compute payload API.
 
@@ -145,7 +145,7 @@ def build_workflow() -> Workflow:
 
 
 workflow = build_workflow()
-compiler_info = workflow.compile(write_to_disk=True)
+compiler_info = workflow.write_artifacts()
 ```
 
 ## Why this example is structured this way
@@ -234,7 +234,8 @@ That is easier to read than the legacy shorthand and makes directionality obviou
 - `inputs.*` are places you can bind values,
 - `outputs.*` are places you can read values from.
 
-The old shorthand still exists for compatibility, but it is not the best style to teach.
+The old shorthand still exists for compatibility, but explicit namespaces are
+the preferred documentation and review style.
 
 ### 5. Workflow interface should be declared deliberately
 
@@ -252,7 +253,7 @@ But explicit workflow inputs are much easier to reason about, especially when th
 Only the compiled workflow artifacts are written when you call:
 
 ```python
-workflow.compile(write_to_disk=True)
+workflow.write_artifacts()
 ```
 
 The generated `emit_text` CLT does **not** need to be written as a standalone `.cwl` file first.
@@ -327,4 +328,4 @@ PYTHONPATH=src python examples/scripts/cwl_builder_workflow.py --run
 ```
 
 The first command validates the generated CLTs and compiles the workflow.
-The second runs the full demo workflow through `Workflow.run()`.
+The second runs the full example workflow through `Workflow.run()`.
