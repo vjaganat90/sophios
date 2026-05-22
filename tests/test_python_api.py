@@ -625,6 +625,67 @@ def test_workflow_run_uses_basepath_for_docker_extract(
 
 
 @pytest.mark.fast
+def test_workflow_run_does_not_forward_python_run_flags_to_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    touch = Step(_adapter("touch"))
+    touch.inputs.filename = "empty.txt"
+    workflow = Workflow([touch], "runtime_flag_demo")
+
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        python_runtime.pc,
+        "find_and_create_output_dirs",
+        lambda rose_tree: None,
+    )
+    monkeypatch.setattr(
+        python_runtime.pc,
+        "verify_container_engine_config",
+        lambda container, ignore: None,
+    )
+    monkeypatch.setattr(
+        python_runtime.pc,
+        "cwl_docker_extract",
+        lambda container, pull_dir, cwl_path: None,
+    )
+
+    def fake_run_local(
+        run_args_dict: dict[str, str],
+        use_subprocess: bool,
+        passthrough_args: list[str],
+        workflow_name: str,
+        basepath: str,
+        user_env_vars: dict[str, str] | None = None,
+    ) -> int:
+        captured["run_args_dict"] = run_args_dict
+        captured["use_subprocess"] = use_subprocess
+        captured["passthrough_args"] = passthrough_args
+        captured["workflow_name"] = workflow_name
+        captured["basepath"] = basepath
+        captured["user_env_vars"] = user_env_vars
+        return 0
+
+    monkeypatch.setattr(python_runtime.rl, "run_local", fake_run_local)
+
+    workflow.run(
+        basepath=str(tmp_path),
+        run_args_dict={
+            "copy_output_files": "yes",
+            "generate_run_script": "yes",
+            "logLevel": "INFO",
+        },
+    )
+
+    assert captured["passthrough_args"] == ["--logLevel", "INFO"]
+    assert captured["run_args_dict"]["copy_output_files"] == "yes"
+    assert captured["run_args_dict"]["generate_run_script"] == "yes"
+    assert captured["workflow_name"] == "runtime_flag_demo"
+    assert captured["basepath"] == str(tmp_path)
+
+
+@pytest.mark.fast
 def test_compile_python_workflows() -> None:
     """Import and compile all auto-discovered Python workflow scripts."""
     from sophios.apis.python import workflow  # pylint: disable=C0415:import-outside-toplevel

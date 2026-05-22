@@ -54,7 +54,7 @@ from ._workflow_runtime import (
 )
 
 
-logger = logging.getLogger("WIC Python API")
+logger = logging.getLogger("Sophios Python API")
 
 
 class DisableEverythingFilter(logging.Filter):

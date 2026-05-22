@@ -50,7 +50,7 @@ That split is intentional. The constructor shows the tool contract. The chained 
 
 ## Why this is easier to read
 
-The old builder style asked you to mentally assemble the CLT while reading a long chain.
+Less structured builder code asks you to mentally assemble the CLT while reading a long chain.
 
 The new style makes the shape visible immediately:
 
@@ -256,9 +256,9 @@ In particular:
 - resource requirements are optional,
 - EDAM metadata is optional and available through `.edam()`.
 
-## Why you can trust the result
+## Validation And Error Prevention
 
-There are two separate sources of confidence.
+There are two ways the builder helps users catch mistakes early.
 
 ### 1. The API narrows the common error surface
 
@@ -286,9 +286,9 @@ tool.validate()
 
 Sophios validates the generated CLT as a real CWL `CommandLineTool`.
 
-That is a much stronger guarantee than "this happened to produce YAML". Sophios
-checks the concrete tool document it will save or hand to the workflow API, so
-mistakes show up at the tool boundary instead of later inside a larger workflow.
+Sophios checks the concrete tool document it will save or hand to the workflow
+API, so mistakes show up at the tool boundary instead of later inside a larger
+workflow.
 
 ## Escape hatches
 
@@ -301,7 +301,7 @@ The main API is intentionally structured, but escape hatches still exist for adv
 
 Those are for the unusual edges of CWL. They should be the exception, not the starting point.
 
-## Using a built CLT in the workflow DSL
+## Using a built CLT in the workflow API
 
 The CLT builder can also hand off directly to the workflow Python API without writing a `.cwl` file:
 
@@ -318,11 +318,9 @@ step.inputs.message = "hello"
 workflow = Workflow([step], "wf")
 ```
 
-That bridge stays intentionally small:
-
-- the builder still only knows how to render a CLT,
-- the workflow API still only knows how to work with a parsed CLT document,
-- and the in-memory handoff is handled through a tiny adapter layer.
+The handoff is direct: the same built tool can be validated, written to disk, or
+wrapped in `Step(tool, step_name=...)` and composed into a workflow without
+creating an intermediate `.cwl` file first.
 
 ## Run the example
 

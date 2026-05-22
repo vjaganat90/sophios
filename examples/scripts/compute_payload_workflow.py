@@ -30,7 +30,7 @@ SUBMIT_URL: str | None = None
 
 
 def build_emit_text_tool(python_executable: str | None = None) -> CommandLineTool:
-    """Create a tiny CLT that writes a message to stdout.
+    """Create a compact CLT that writes a message to stdout.
 
     Args:
         python_executable (str | None): Optional Python interpreter override.

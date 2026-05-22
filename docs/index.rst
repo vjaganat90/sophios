@@ -2,15 +2,19 @@ Sophios documentation
 =====================
 
 Sophios is a high-level way to create, build, and execute Common Workflow
-Language (CWL) workflows. It is for users who want the portability and explicit
-execution model of CWL without hand-authoring every CWL field for every tool,
-step, input, output, and workflow edge.
+Language (CWL) workflows. It is for people who already have useful command-line
+tools and want to turn them into portable, inspectable workflows without making
+raw CWL the day-to-day authoring language.
 
 With Sophios, you describe command-line tool contracts, compose those tools into
 workflow graphs, compile the graph to CWL, and run the result locally or prepare
 it for execution on remote, HPC, or cloud resources. The generated workflow,
 generated job inputs, exported ``.wic`` source, and execution artifacts remain
 available for inspection.
+
+The practical outcome is straightforward: workflow authors work in Python by
+default, execution remains grounded in standard CWL, and teams can inspect the
+exact artifacts that a local runner or remote execution service will receive.
 
 There are two authoring modes:
 
@@ -36,7 +40,7 @@ resources. Sophios gives that work a clear structure:
 
 The goal is not to hide the workflow. The goal is to make the workflow easier to
 author while keeping the compiled CWL and execution artifacts concrete enough to
-understand, debug, and trust.
+understand, debug, and review.
 
 .. toctree::
    :maxdepth: 2

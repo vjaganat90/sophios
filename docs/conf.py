@@ -69,7 +69,7 @@ autodoc_default_options = {
 # See https://www.sphinx-doc.org/en/master/usage/extensions/napoleon.html#confval-napoleon_type_aliases
 # The sphinx autodoc documentation claims type aliases defined in wic_types.py
 # can be added to autodoc_type_aliases instead of showing their expansions.
-# However, I can't seem to get it to work.
+# The automatic alias expansion is disabled until it works reliably.
 # TODO: Consider removing all type aliases in favor of classes.
 autodoc_type_aliases: Dict[str, str] = {
 }

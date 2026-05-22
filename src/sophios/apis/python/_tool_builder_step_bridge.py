@@ -1,7 +1,7 @@
 """Small bridge between the CLT builder and the workflow Python API.
 
 This module is intentionally the only place that imports both surfaces.
-Keeping the bridge narrow lets the builder and workflow DSL evolve mostly
+Keeping the bridge narrow lets the builder and workflow API evolve mostly
 independently while still supporting an in-memory handoff.
 """
 

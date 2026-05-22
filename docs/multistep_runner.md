@@ -4,8 +4,8 @@ Sophios can run Python-authored workflows locally through supported CWL
 runners. The default runner is `cwltool`. The other supported local runner is
 `toil-cwl-runner`.
 
-This page uses a small three-step workflow so the runner configuration is easy
-to see:
+This page uses a three-step workflow so the runner configuration is easy to
+see:
 
 ```text
 touch.cwl -> append.cwl -> cat.cwl -> workflow output "result"

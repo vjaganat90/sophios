@@ -1,26 +1,54 @@
 # Install Guide
 
-This page gives two installation paths:
+This page is for installing Sophios as a package. It focuses on two things:
 
-- install the published `sophios` package when you only need to use Sophios,
-- install from source when you want the latest repository code, editable local
-  changes, examples, tests, or documentation builds.
+- installing the Python package with `pip`,
+- installing the non-Python tools that local workflow execution may need.
 
-The Python version requirement in `pyproject.toml` is the source of truth for a
-checkout. At the time this guide was written, Sophios requires Python 3.11 or
-newer.
+If you want to edit Sophios itself, run the test suite, build the documentation,
+or use the repository examples directly from a checkout, use the
+[Developer Install Guide](dev/installguide.md) instead.
 
-## Install the Published Package
+## Python Requirement
 
-Use this path when you do not need to edit the Sophios source tree.
+Sophios declares its supported Python range in `pyproject.toml`. For the current
+package, use Python 3.11 or newer.
+
+Check your interpreter:
 
 ```bash
+python --version
+```
+
+If your system Python is older, create an environment with a newer Python before
+installing Sophios.
+
+## Install Sophios
+
+Using a virtual environment is recommended:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install sophios
+```
+
+On Windows PowerShell, activate the virtual environment with:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install sophios
+```
+
+Verify the command-line entry point:
+
+```bash
 sophios --help
 ```
 
-Verify the public Python imports:
+Verify the public Python APIs:
 
 ```bash
 python - <<'PY'
@@ -32,205 +60,133 @@ print("Sophios is installed")
 PY
 ```
 
-## Install From Source
+## What `pip install sophios` Provides
 
-Use this path when you want to run examples from the repository, build the docs,
-or work on Sophios itself.
+The `sophios` package installs the Python libraries needed for authoring,
+compiling, validating, and running workflows through the supported Python APIs
+and CLI.
 
-### Step 1: Clone the Repository
+That includes the Python packages for:
 
-```bash
-git clone https://github.com/PolusAI/sophios.git
-cd sophios
-```
+- CWL compilation and local runner integration,
+- `.wic` YAML parsing and validation,
+- Python workflow authoring with `Step` and `Workflow`,
+- Python tool authoring with `CommandLineTool`,
+- compute payload construction and validation.
 
-If you are working from a fork, clone your fork instead and keep
-`https://github.com/PolusAI/sophios.git` as the upstream remote.
+`pip` does not install every system executable that a workflow may call. The
+next section covers those tools.
 
-### Step 2: Create an Environment
+## Install Non-Python Runtime Tools
 
-Conda is the recommended source-install path because it can install runtime
-tools such as Graphviz and Node.js alongside Python packages.
+The exact tools you need depend on the workflows you run.
 
-On macOS and Linux:
+### Container Runtime
 
-```bash
-conda env create -n sophios_dev -f install/system_deps.yml
-conda activate sophios_dev
-python --version
-```
+Install Docker or Podman when workflows use containerized CWL tools.
 
-On Windows:
+Sophios can author and compile workflows without Docker or Podman, but local
+execution of containerized tools requires a working container runtime.
 
-```bash
-conda env create -n sophios_dev -f install/system_deps_windows.yml
-conda activate sophios_dev
-python --version
-```
-
-If the environment already exists, update it instead of creating a second one:
+Check one of:
 
 ```bash
-conda activate sophios_dev
-conda env update -n sophios_dev -f install/system_deps.yml --prune
+docker --version
+podman --version
 ```
 
-The environment files intentionally do not hard-code an environment name, so
-passing `-n sophios_dev` keeps the command explicit and repeatable.
+For Docker, Docker Desktop is the usual path on macOS and Windows. On Linux,
+install Docker or Podman through your distribution package manager.
 
-If you are not using conda, create a virtual environment and install system
-runtime tools separately:
+### Node.js
+
+Install Node.js when workflows use CWL JavaScript expressions such as
+`InlineJavascriptRequirement`.
+
+Check:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
+node --version
 ```
 
-On Windows PowerShell, activate the virtual environment with:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-With a plain virtual environment, install Graphviz, Node.js, and any container
-runtime you need through your operating system package manager.
-
-### Step 3: Install Sophios in Editable Mode
-
-From the repository root:
+Install examples:
 
 ```bash
-python -m pip install -e ".[test,doc]"
+conda install -c conda-forge nodejs
 ```
-
-Editable mode means Python imports Sophios from this checkout. Source edits are
-visible immediately without reinstalling the package.
-
-For a smaller user-only source install, omit the optional test and documentation
-extras:
 
 ```bash
-python -m pip install -e .
+brew install node
 ```
-
-### Step 4: Verify the Source Install
-
-Check that Python imports the checkout and that the public API modules are
-available:
 
 ```bash
-python - <<'PY'
-import sophios
-from sophios.apis.python.workflow import Step, Workflow
-from sophios.apis.python.tool_builder import CommandLineTool, Input, Output, cwl
-from sophios.compute_payload import ComputeWorkflowPayload
-
-print(f"Sophios version: {sophios.__version__}")
-print(f"Sophios module:  {sophios.__file__}")
-print("Workflow API, tool builder API, and compute payload API are available")
-PY
+sudo apt-get update
+sudo apt-get install -y nodejs
 ```
 
-The printed module path should point inside the checkout you just installed.
+### Graphviz
 
-Verify the command-line entry point:
+Install the Graphviz system package when you want rendered workflow diagrams.
+The Python `graphviz` package installed by `pip` is only the Python binding; the
+`dot` executable is a separate system dependency.
+
+Check:
 
 ```bash
-sophios --help
+dot -V
 ```
 
-### Step 5: Compile a Repository Example
-
-Run a Python-authored workflow example from the repository root:
+Install examples:
 
 ```bash
-python examples/scripts/reusable_interface_pyapi.py
+conda install -c conda-forge graphviz
 ```
-
-That command builds a small workflow through the Python Workflow API and writes
-generated artifacts under `autogenerated/`.
-
-To validate the tool-builder-plus-workflow path:
 
 ```bash
-python examples/scripts/tool_builder_workflow.py
+brew install graphviz
 ```
-
-That command builds CWL `CommandLineTool` objects in Python, validates them, and
-then composes them into a normal Sophios workflow.
-
-### Step 6: Build the Documentation
-
-If you installed the `doc` extra, build the local documentation with:
 
 ```bash
-sphinx-build -b html docs docs/_build/html
+sudo apt-get update
+sudo apt-get install -y graphviz
 ```
 
-Open `docs/_build/html/index.html` in a browser to inspect the generated site.
+### Tools Invoked by Your Workflow
 
-## Execution Environment
+Sophios describes workflows. It does not install every command-line program
+that your workflow might invoke.
 
-Sophios installs the Python packages it uses for workflow authoring, CWL
-generation, validation, and local runner integration. Some workflows also rely
-on system-level tools because the commands inside the workflow need them.
+For example, if your CWL tool runs `samtools`, `python`, `bash`, or a project
+specific executable outside a container, that executable must be available in
+the runtime environment.
 
-Common external tools are:
+## Quick Environment Check
 
-- Node.js when a workflow uses CWL JavaScript expressions,
-- Graphviz when generating workflow diagrams,
-- Docker or Podman when a workflow uses containerized tools,
-- command-line programs invoked by your own CWL tools.
-
-The conda environment files install several useful non-Python tools for local
-development. Container runtimes such as Docker Desktop or system Podman may
-still require separate installation and local setup.
-
-## Avoid `PYTHONPATH=src` for Normal Use
-
-After an editable install, you should not need `PYTHONPATH=src`. If a command
-only works when `PYTHONPATH` is set manually, the active environment is probably
-not the one where Sophios was installed.
-
-Use this check:
+This check reports the optional system tools Sophios commonly uses:
 
 ```bash
 python - <<'PY'
-import sophios
-print(sophios.__file__)
-PY
-```
+import shutil
 
-If the printed path does not point to your checkout, reactivate the intended
-environment and reinstall with `python -m pip install -e ".[test,doc]"`.
-
-## Optional YAML Editor Setup
-
-The Python Workflow API is the recommended authoring path, but `.wic` files
-remain useful for standalone, file-native workflows. If you edit `.wic` files
-directly, VS Code plus the Red Hat YAML extension can validate them against a
-generated schema.
-
-Generate the schema:
-
-```bash
-sophios --generate_schemas
-```
-
-Then add this to `.vscode/settings.json`:
-
-```json
-{
-  "yaml.schemas": {
-    "autogenerated/schemas/wic.json": "*.wic"
-  },
-  "[yaml]": {
-    "editor.suggest.showWords": false
-  }
+checks = {
+    "node": "needed for CWL JavaScript expressions",
+    "dot": "needed for Graphviz diagrams",
+    "docker": "needed for Docker-backed local execution",
+    "podman": "needed for Podman-backed local execution",
 }
+
+for executable, reason in checks.items():
+    path = shutil.which(executable)
+    status = path if path else "not found"
+    print(f"{executable:>6}: {status} ({reason})")
+PY
 ```
 
-Regenerate schemas whenever the available CWL tools or `.wic` workflows change.
-If the editor shows surprising validation errors, stale schemas are the first
-thing to check.
+Missing optional tools are not always errors. Install the tools required by the
+workflows you plan to run.
+
+## Next Steps
+
+After installation, start with the [Python Workflow API](userguide.md). If you
+need standalone `.wic` workflows or YAML editor validation, see
+[Advanced YAML and Operations](advanced.md).

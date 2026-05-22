@@ -1,17 +1,18 @@
 # Overview
 
 Sophios is a high-level way to create, build, and execute
-[Common Workflow Language (CWL)](https://www.commonwl.org/) workflows without
-manually writing the full CWL structure for every tool, step, input, output,
-and workflow edge.
+[Common Workflow Language (CWL)](https://www.commonwl.org/) workflows. It is
+designed for people who have useful command-line tools and need those tools to
+become portable, inspectable workflows without making raw CWL the day-to-day
+authoring language.
 
 CWL is an excellent execution target: it is explicit, portable, runner-backed,
 and designed for reproducible command-line workflows. The tradeoff is that raw
-CWL can be verbose when the work you are trying to express is conceptually
-simple: run this tool, pass its output to that tool, expose these inputs, and
-keep the final workflow inspectable.
+CWL can be verbose when the work you are trying to express is direct: run this
+tool, pass its output to that tool, name the results that matter, and keep the
+final workflow inspectable.
 
-Sophios is the layer above CWL. You author in a smaller, clearer model, then
+Sophios is the layer above CWL. You author in a higher-level model, then
 compile to ordinary CWL artifacts that can be inspected, executed, submitted,
 tested, archived, or compared.
 
@@ -38,6 +39,17 @@ Python tool contract
 The important point is that Sophios does not replace CWL. It produces CWL. The
 generated workflow, generated job inputs, and execution artifacts remain visible
 because transparency is part of the design.
+
+For a workflow author, that means Sophios should help answer practical questions
+before a workflow is run on expensive or shared infrastructure:
+
+- What command is going to run?
+- What inputs must the user provide?
+- What files, directories, or values will the workflow produce?
+- Which step consumes which prior output?
+- What exact CWL and job input object will the runner receive?
+- Where should I look when local execution and remote execution behave
+  differently?
 
 ## Why This Matters
 
@@ -68,7 +80,7 @@ should make the important questions obvious:
 - What does each command produce?
 - Which values are fixed by the workflow and which are supplied at runtime?
 - Which output feeds which input?
-- What public interface does this workflow expose?
+- Which named results should downstream users or services consume?
 - What exact CWL workflow and job input object will a runner receive?
 
 That is the core promise: use a high-level authoring interface without giving up
@@ -112,7 +124,7 @@ workflows.
 Sophios workflows are built from ordinary command-line tools, but the workflow
 definition is more structured than a shell script. Each tool has a typed
 interface. Each step has named inputs and outputs. Each workflow has a graph,
-public inputs, public outputs, and generated execution artifacts.
+named results, and generated execution artifacts.
 
 That structure matters because workflow failures rarely come from command order
 alone. They come from unclear interfaces:
@@ -120,7 +132,7 @@ alone. They come from unclear interfaces:
 - Was this value meant to be fixed in the workflow or supplied at runtime?
 - Did this step consume the output file from the previous step, or an older file
   with the same type?
-- Which inputs are part of the public workflow interface?
+- Which outputs are stable enough for downstream use?
 - What CWL workflow and input object will a runner actually receive?
 - Which artifacts should be inspected when local execution differs from remote
   execution?
@@ -139,7 +151,7 @@ turn into boilerplate:
 - building CWL `CommandLineTool` objects directly in Python,
 - binding literal values and upstream outputs,
 - inferring straightforward linear edges from compatible CWL types and formats,
-- serializing Python workflows into the internal Sophios workflow tree,
+- translating Python workflow objects into compiler-ready workflow definitions,
 - compiling workflows to CWL,
 - exporting Python-authored workflows as `.wic` source files,
 - writing generated workflow artifacts to disk,
@@ -255,16 +267,18 @@ Depending on how you compile or run, you may see:
 - provenance files,
 - remote execution payload JSON.
 
-These artifacts make the workflow debuggable and reviewable. They let a
-reviewer ask concrete questions:
+These artifacts make the workflow debuggable and reviewable. They let you ask
+concrete questions:
 
 - Which command ran?
 - Which input fed this step?
-- Which output became part of the public workflow interface?
+- Which output became a named workflow result?
 - What exactly would be submitted for remote execution?
 - Where did the generated CWL differ from the Python object I expected?
 
-The generated artifacts are not noise. They are evidence.
+The generated artifacts are the concrete inspection surface. They give users
+something specific to examine before a workflow becomes part of a larger
+pipeline or a remote execution request.
 
 ## Why Python First
 
@@ -288,7 +302,7 @@ edges, runtime inputs, compiled CWL, and submission payloads can each be
 inspected at the point where they become relevant.
 
 Python is the authoring layer. CWL is the portable execution target. YAML is the
-advanced file representation.
+file-native mode for advanced and operational workflows.
 
 ## Why CWL Still Matters
 
@@ -302,8 +316,8 @@ is the layer above it:
 - Sophios compiles those workflows into CWL.
 - CWL runners execute the compiled result.
 
-This gives you a practical split. Users can work in Python, reviewers can inspect
-generated CWL, and execution remains grounded in a workflow standard.
+This gives you a practical split. Users can work in Python, generated CWL can be
+inspected when needed, and execution remains grounded in a workflow standard.
 
 ## Where YAML Fits
 
@@ -312,7 +326,7 @@ the Python API.
 
 Use YAML when you need:
 
-- a workflow that is just a file,
+- a workflow that should live as a single file,
 - headless execution from CI or batch scripts,
 - a compact artifact for review or archive,
 - explicit custom tags for inline inputs and anchors,
@@ -337,10 +351,10 @@ Use local execution while developing:
 workflow.run()
 ```
 
-Local runs compile the workflow, invoke a CWL runner, and write output artifacts.
-Sophios supports `cwltool` as the default local runner and `toil-cwl-runner` as
-the Toil-based local runner. This is the fastest way to verify a small workflow
-end to end.
+Local runs compile the workflow, invoke a CWL runner, and write output
+artifacts. Sophios supports `cwltool` as the default local runner and
+`toil-cwl-runner` as the Toil-based local runner. This is the direct path for
+verifying development-scale workflows end to end.
 
 ### Remote Execution
 
@@ -404,7 +418,7 @@ still the foundation of a clear workflow.
 For a new project or integration, use this order:
 
 1. Install Sophios and verify that the Python API imports.
-2. Build the smallest Python workflow with `Step` and `Workflow`.
+2. Build a minimal Python workflow with `Step` and `Workflow`.
 3. Bind a step output into a later step input.
 4. Name workflow outputs when downstream code needs stable result names.
 5. Compile and inspect generated CWL.
@@ -419,7 +433,7 @@ boundaries explicit in the workflow definition and generated artifacts.
 ## What To Read Next
 
 - [Install Guide](installguide.md): set up Sophios and verify the environment.
-- [Python Workflow API](userguide.md): use `Step`, `Workflow`, bindings, inputs, outputs, compile, and run.
+- [Python Workflow API](userguide.md): use `Step`, `Workflow`, bindings, compile, and run.
 - [Building Tool Contracts in Python](tool_builder_sam3.md): define CWL `CommandLineTool` contracts.
 - [Using Tool Builder and the Workflow Python API Together](tool_builder_workflow.md): compose generated tools in memory.
 - [From Python Workflow to Compute Payload](compute_payload_workflow.md): package compiled workflows for validated remote execution payloads.

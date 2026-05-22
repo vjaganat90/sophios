@@ -286,7 +286,7 @@ class ParameterNamespace(Generic[ParameterT, ViewT]):
     """List-like attribute namespace for input and output parameters.
 
     The "magic" lives here: `step.inputs.foo`, `workflow.inputs.foo`, and
-    `step.outputs.bar` all route through the same tiny proxy instead of four
+    `step.outputs.bar` all route through the same compact proxy instead of four
     near-duplicate wrapper classes.
     """
 

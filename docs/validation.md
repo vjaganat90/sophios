@@ -45,8 +45,8 @@ stale. Regenerate it when you add, remove, or rename tools.
 
 ### Compute Payload Validation
 
-`ComputeWorkflowPayload` validates compute-slurm requests against the checked-in
-payload schema before submission:
+`ComputeWorkflowPayload` validates compute submission requests against the
+checked-in payload schema before submission:
 
 ```python
 compute_json = payload.get_compute_payload()

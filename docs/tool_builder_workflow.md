@@ -12,7 +12,7 @@ This guide shows the intended end-to-end pattern:
 1. define a new tool in Python,
 2. validate that tool as a real CWL `CommandLineTool`,
 3. convert it into an in-memory `Step`,
-4. compose it with the normal Sophios workflow DSL.
+4. compose it with the normal Sophios workflow API.
 
 The important part is that the handoff stays **in memory**. You do not need to write a temporary `.cwl` file just to use a freshly built tool inside a workflow.
 
@@ -32,7 +32,7 @@ If you only need to build a single standalone CLT, start with [tool_builder_sam3
 
 If you already have checked-in `.cwl` tools and only need to compose them, start with the [Python Workflow API](userguide.md).
 
-If your next step is compute-slurm submission rather than local execution, continue with [ichnaea_compact_compute](ichnaea_compact_compute.md) for the canonical production-like example or [compute_payload_workflow](compute_payload_workflow.md) for the lower-level compute payload API.
+If your next step is compute submission rather than local execution, continue with [ichnaea_compact_compute](ichnaea_compact_compute.md) for the larger end-to-end example or [compute_payload_workflow](compute_payload_workflow.md) for the lower-level compute payload API.
 
 ## Mental model
 
@@ -46,13 +46,13 @@ The cleanest way to think about the boundary is:
 That separation is deliberate.
 
 The builder does not need to know about workflows.
-The workflow DSL does not need to know how the tool was authored.
-The bridge is small: `Step(tool, step_name=...)` lets client code use a built
-tool exactly like any other workflow step.
+The workflow API does not need to know how the tool was authored.
+The handoff is direct: `Step(tool, step_name=...)` lets client code use a built
+tool with the same workflow API used for file-backed steps.
 
 ## What we will build
 
-We will build a tiny tool called `emit_text`:
+We will build a compact example tool called `emit_text`:
 
 - it accepts one string input named `message`,
 - it runs `echo`,
@@ -112,7 +112,7 @@ def build_emit_text_tool() -> CommandLineTool:
         CommandLineTool("emit_text", inputs, outputs)
         .describe(
             "Emit a message",
-            "Small example CLT built in Python and consumed by the workflow DSL.",
+            "Example CLT built in Python and consumed by the workflow API.",
         )
         .base_command("echo")
         .stdout("stdout")
@@ -187,19 +187,18 @@ Validation belongs naturally on the builder side:
 emit_tool.validate()
 ```
 
-That gives you confidence that Sophios rendered a valid CWL `CommandLineTool`
-**before** it participates in a larger workflow.
+That checks the generated tool as a valid CWL `CommandLineTool` **before** it
+participates in a larger workflow.
 
 For self-authored tools, that is usually the best debugging boundary:
 
 - first make the tool valid,
 - then compose it into the workflow.
 
-This is more than a syntax check. It confirms that the generated document has a
-valid CWL shape, that declared inputs and outputs are represented correctly, and
-that the tool contract is ready to be handed to `Step(...)`.
+This is more than a syntax check. It verifies the CWL shape, the declared inputs
+and outputs, and the tool contract that the workflow will consume.
 
-### 3. `Step(tool)` is the bridge
+### 3. `Step(tool)` is the handoff
 
 This is the key handoff:
 
@@ -226,7 +225,9 @@ emit_step.inputs.message = "hello from Sophios"
 cat_step.inputs.file = emit_step.outputs.file
 ```
 
-That is the main design goal of the bridge: once a built tool becomes a step, it should feel boring.
+That is the main design goal of the handoff: once a built tool becomes a step,
+users work with the same `inputs` and `outputs` API they use for file-backed
+steps.
 
 ### 4. Workflow bindings should stay explicit
 
@@ -244,7 +245,7 @@ That is easier to read than the legacy shorthand and makes directionality obviou
 - `outputs.*` are places you can read values from.
 
 The old shorthand still exists for compatibility, but explicit namespaces are
-the preferred documentation and review style.
+the preferred documentation style.
 
 ## What gets written to disk
 
@@ -263,11 +264,11 @@ That means this pattern is suitable for:
 - short-lived tools used only inside a larger workflow,
 - and tests that want to build tools programmatically.
 
-## How to trust this pattern
+## Validation And Inspection Points
 
-There are two separate confidence checks here, and they complement each other.
+There are two separate checks here, and they answer different user questions.
 
-### 1. Tool confidence
+### 1. Tool validation
 
 `emit_tool.validate()` checks the generated CLT as a real CWL document.
 
@@ -275,19 +276,20 @@ That tells you:
 
 - the tool structure is valid,
 - the CWL fields are in the right shape,
-- and the generated CLT is not just "some YAML that looks plausible".
+- and the generated CLT is ready to be composed into a workflow.
 
-### 2. Workflow confidence
+### 2. Workflow compilation
 
 `workflow.compile(...)` checks that the generated step can participate in the normal Sophios compilation path.
 
 That tells you:
 
-- the workflow DSL can consume the built tool,
+- the workflow API can consume the built tool,
 - the step ports are wired correctly,
 - and the result compiles into the same pipeline machinery as any other Sophios workflow.
 
-Those are different guarantees, and you usually want both.
+Those are different checks, and both are useful before a generated tool becomes
+part of a larger workflow.
 
 ## Recommended workflow for teams
 

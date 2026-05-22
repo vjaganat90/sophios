@@ -1,14 +1,14 @@
 """Internal runtime helpers for the Python workflow API.
 
 This module keeps filesystem loading, compilation, and execution details out
-of `api.py` so the public `Step` and `Workflow` classes stay focused on the
-Python-facing DSL.
+of the public workflow module so `Step` and `Workflow` stay focused on
+Python-facing workflow authoring.
 """
 
 from __future__ import annotations
 
 # pylint: disable=protected-access
-# This module is the private adapter layer between the DSL objects and the
+# This module is the private adapter layer between the workflow objects and the
 # legacy compiler/runtime internals, so reaching internal state is intentional.
 
 import logging
@@ -35,9 +35,15 @@ if TYPE_CHECKING:
     from .workflow import Step, Workflow
 
 
-logger = logging.getLogger("WIC Python API")
+logger = logging.getLogger("Sophios Python API")
 
 ParameterT = TypeVar("ParameterT")
+
+_RUN_ARG_BOOLEAN_FLAGS = {
+    "copy_output_files",
+    "docker_remove_entrypoints",
+    "generate_run_script",
+}
 
 
 class _CWLParameterDefinition(Protocol):  # pylint: disable=too-few-public-methods
@@ -547,6 +553,11 @@ def effective_run_args(run_args_dict: dict[str, str] | None = None) -> dict[str,
     return effective
 
 
+def _run_arg_enabled(value: Any) -> bool:
+    """Return whether a yes/no style runtime option is enabled."""
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def run_workflow(
     workflow: Workflow,
     *,
@@ -585,9 +596,12 @@ def run_workflow(
         resolved_run_args["pull_dir"],
         Path(basepath) / f"{workflow.process_name}.cwl",
     )
-    if resolved_run_args.get("docker_remove_entrypoints"):
+    if _run_arg_enabled(resolved_run_args.get("docker_remove_entrypoints")):
         rose_tree = pc.remove_entrypoints(resolved_run_args["container_engine"], rose_tree)
-    user_args = convert_args_dict_to_args_list(resolved_run_args)
+    user_args = convert_args_dict_to_args_list(
+        resolved_run_args,
+        boolean_flags=_RUN_ARG_BOOLEAN_FLAGS,
+    )
 
     _, unknown_args = get_known_and_unknown_args(workflow.process_name, user_args)
     rl.run_local(

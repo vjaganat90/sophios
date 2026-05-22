@@ -18,7 +18,7 @@ dependencies:
 # scipy is only used for least_squares fitting in the tests, but
 # it needs to build binary wheels.
   - scipy
-# NOTE: Although wic doesn't have an explicit dependency on numpy, several
+# NOTE: Although Sophios doesn't have an explicit dependency on numpy, several
 # issues arise when numpy is installed as a transitive dependency of matplotlib.
 # On linux and macos, using pip to install numpy may cause this error with pytest:
 # "Fatal Python error: Illegal instruction"

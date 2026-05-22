@@ -27,7 +27,7 @@ WRITE_TOOLS_DIR: Path | None = None
 
 
 def build_emit_text_tool(python_executable: str | None = None) -> CommandLineTool:
-    """Create a tiny CLT that writes a message to stdout."""
+    """Create a compact CLT that writes a message to stdout."""
     interpreter = python_executable or sys.executable
     inputs = Inputs(
         message=Input(cwl.string, position=1)
