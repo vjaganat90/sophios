@@ -37,7 +37,7 @@ That last point matters. The payload is not just "some JSON that happens to look
 
 Think in terms of layers:
 
-- `cwl_builder` defines a single CWL tool
+- `tool_builder` defines a single CWL tool
 - the workflow Python API composes tools into a CWL workflow
 - `ComputeWorkflowPayload` packages that compiled workflow for compute-slurm
 
@@ -49,14 +49,17 @@ That keeps the implementation understandable and the user-facing API small.
 ```python
 from datetime import datetime
 
-from sophios.apis.python import (
+from sophios.apis.python.tool_builder import (
     CommandLineTool,
     Input,
     Inputs,
     Output,
     Outputs,
-    Workflow,
     cwl,
+)
+from sophios.apis.python.workflow import (
+    Step,
+    Workflow,
 )
 from sophios.compute_payload import (
     ComputeConfig,
@@ -88,11 +91,11 @@ def build_emit_text_tool() -> CommandLineTool:
 
 
 def build_workflow(message: str) -> Workflow:
-    emit_step = build_emit_text_tool().to_step(step_name="emit_text")
+    emit_step = Step(build_emit_text_tool(), step_name="emit_text")
 
     workflow = Workflow([emit_step], "compute_payload_workflow_demo")
     emit_step.inputs.message = message
-    workflow.add_output("text_file", emit_step.outputs.text_file)
+    workflow.outputs.text_file = emit_step.outputs.text_file
     return workflow
 
 
@@ -217,20 +220,17 @@ That makes the client behavior predictable and easy to inspect.
 From the repository root:
 
 ```bash
-PYTHONPATH=src python examples/scripts/compute_payload_workflow.py
-PYTHONPATH=src python examples/scripts/compute_payload_workflow.py --validate-tool
-PYTHONPATH=src python examples/scripts/compute_payload_workflow.py --submit-url http://127.0.0.1:7998/compute/
+python examples/scripts/compute_payload_workflow.py
 ```
 
-The first command writes a validated compute payload JSON file.
-The second also validates the generated CLT first.
-The third submits the payload to compute-slurm.
+The script validates the generated CLT and writes a compute payload JSON file by
+default. To submit the payload, set `SUBMIT_URL` near the top of the script.
 
 ## Summary
 
 The intended flow is now:
 
-- author tools with `cwl_builder`
+- author tools with `tool_builder`
 - compose them with the workflow Python API
 - compile in memory with `Workflow.get_cwl_workflow()`
 - package and validate with `ComputeWorkflowPayload`

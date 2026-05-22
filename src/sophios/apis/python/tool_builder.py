@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, Any, Mapping
 import yaml
 from sophios.wic_types import Tools
 
-from ._cwl_builder_namespaces import Field, Input, Inputs, Output, Outputs, cwl
-from ._cwl_builder_specs import (
+from ._tool_builder_namespaces import Field, Input, Inputs, Output, Outputs, cwl
+from ._tool_builder_specs import (
     CommandArgument,
     CommandLineBinding,
     CommandOutputBinding,
@@ -50,7 +50,7 @@ from ._cwl_builder_specs import (
     WorkReuse,
     secondary_file,
 )
-from ._cwl_builder_support import (
+from ._tool_builder_support import (
     _validate_path,
     _SUPPORT,
     _contains_expression,
@@ -60,7 +60,7 @@ from ._cwl_builder_support import (
     _render_doc,
     _sanitize_raw_mapping,
     _warn_raw_escape_hatch,
-    CWLBuilderValidationError,
+    ToolBuilderValidationError,
     ValidationResult,
     validate_cwl_document,
 )
@@ -96,10 +96,16 @@ class CommandLineTool:
     _extra: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.inputs, Inputs):
-            raise TypeError("inputs must be an Inputs(...) collection")
-        if not isinstance(self.outputs, Outputs):
-            raise TypeError("outputs must be an Outputs(...) collection")
+        match self.inputs:
+            case Inputs():
+                pass
+            case _:
+                raise TypeError("inputs must be an Inputs(...) collection")
+        match self.outputs:
+            case Outputs():
+                pass
+            case _:
+                raise TypeError("outputs must be an Outputs(...) collection")
 
     def _store_requirement(
         self,
@@ -129,9 +135,11 @@ class CommandLineTool:
         target = self._hints if as_hint else self._requirements
         payload = target.setdefault(class_name, {list_key: []})
         listing = payload.setdefault(list_key, [])
-        if not isinstance(listing, list):
-            raise TypeError(f"{class_name} {list_key} must be a list")
-        listing.append(_render(item))
+        match listing:
+            case list() as items:
+                items.append(_render(item))
+            case _:
+                raise TypeError(f"{class_name} {list_key} must be a list")
         return self
 
     def describe(
@@ -573,7 +581,7 @@ def step_from_command_line_tool(
     Returns:
         Step: A workflow step backed by the CLT without touching disk.
     """
-    from ._cwl_builder_step_bridge import (  # pylint: disable=import-outside-toplevel
+    from ._tool_builder_step_bridge import (  # pylint: disable=import-outside-toplevel
         step_from_command_line_tool as _step_from_command_line_tool,
     )
 
@@ -587,7 +595,7 @@ def step_from_command_line_tool(
 
 
 __all__ = [
-    "CWLBuilderValidationError",
+    "ToolBuilderValidationError",
     "CommandArgument",
     "CommandLineBinding",
     "CommandLineTool",

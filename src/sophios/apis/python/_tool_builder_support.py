@@ -1,8 +1,8 @@
-"""Private support code for the public CWL builder façade.
+"""Private support code for the public Tool Builder façade.
 
 The public module deliberately keeps the visible API small. This helper module
 holds the repetitive rendering, validation, and sanitization logic so the
-main `cwl_builder.py` file can stay focused on the user-facing surface.
+main `tool_builder.py` file can stay focused on the user-facing surface.
 """
 
 from argparse import Namespace
@@ -19,7 +19,7 @@ import yaml
 
 @dataclass(frozen=True, slots=True)
 class _BuilderRules:
-    """Immutable support namespace for CWL builder internals."""
+    """Immutable support namespace for Tool Builder internals."""
 
     unset: object
     expression_markers: tuple[str, ...]
@@ -116,11 +116,11 @@ def _record_type_payload(
     name: str | None = None,
 ) -> dict[str, Any]:
     """Build a CWL record schema payload from named or positional field specs."""
-    field_defs = (
-        [spec.named(field_name).to_dict() for field_name, spec in fields.items()]
-        if isinstance(fields, dict)
-        else [_render(field_spec) for field_spec in fields]
-    )
+    match fields:
+        case dict() as mapping:
+            field_defs = [spec.named(field_name).to_dict() for field_name, spec in mapping.items()]
+        case _:
+            field_defs = [_render(field_spec) for field_spec in fields]
     payload: dict[str, Any] = {"type": "record", "fields": field_defs}
     _merge_if_set(payload, "name", name)
     return payload
@@ -143,9 +143,11 @@ def _apply_required(type_: Any, required: bool) -> Any:
     if required:
         return _canonicalize_type(type_)
     canonical = _canonicalize_type(type_)
-    if isinstance(canonical, list) and "null" in canonical:
-        return canonical
-    return ["null", canonical]
+    match canonical:
+        case list() as items if "null" in items:
+            return items
+        case _:
+            return ["null", canonical]
 
 
 def _contains_expression(value: Any) -> bool:
@@ -191,33 +193,44 @@ def _sanitize_raw_mapping(
     reserved_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     rendered = _render(mapping)
-    if not isinstance(rendered, dict):
-        raise TypeError(f"{context} must be a mapping")
-    if any(not isinstance(key, str) or not key for key in rendered):
+    match rendered:
+        case dict() as rendered_mapping:
+            pass
+        case _:
+            raise TypeError(f"{context} must be a mapping")
+    if any(not _is_non_empty_string(key) for key in rendered_mapping):
         raise TypeError(f"{context} keys must be non-empty strings")
-    blocked = sorted(key for key in rendered if key in _SUPPORT.dangerous_raw_keys)
+    blocked = sorted(key for key in rendered_mapping if key in _SUPPORT.dangerous_raw_keys)
     if blocked:
         raise ValueError(
             f"{context} does not accept SALAD document-assembly keys: {', '.join(blocked)}"
         )
     if reserved_keys is not None:
-        collisions = sorted(key for key in rendered if key in reserved_keys)
+        collisions = sorted(key for key in rendered_mapping if key in reserved_keys)
         if collisions:
             raise ValueError(
                 f"{context} cannot override builder-managed keys: {', '.join(collisions)}"
             )
-    if not allow_class_key and "class" in rendered:
+    if not allow_class_key and "class" in rendered_mapping:
         raise ValueError(f"{context} cannot set 'class' directly")
-    if any(key.startswith("$") for key in rendered):
+    if any(key.startswith("$") for key in rendered_mapping):
         raise ValueError(f"{context} does not accept raw '$'-prefixed document keys")
-    return rendered
+    return rendered_mapping
+
+
+def _is_non_empty_string(value: Any) -> bool:
+    match value:
+        case str() as text if text:
+            return True
+        case _:
+            return False
 
 
 def _named_parameter(reference: Any, *, kind: str) -> str:
     match reference:
         case str() as name:
             return name
-        case _ if isinstance(getattr(reference, "name", None), str):
+        case _ if _is_non_empty_string(getattr(reference, "name", None)):
             return str(reference.name)
         case _:
             raise TypeError(f"{kind} reference must be a named Input/Output or a string")
@@ -237,7 +250,7 @@ class ValidationResult:
     process: Any
 
 
-class CWLBuilderValidationError(ValueError):
+class ToolBuilderValidationError(ValueError):
     """Raised when a generated CLT fails schema validation."""
 
 
@@ -287,7 +300,7 @@ def validate_cwl_document(
     skip_schemas: bool = False,
 ) -> ValidationResult:
     """Validate a generated CLT document through cwltool/schema-salad."""
-    with tempfile.TemporaryDirectory(prefix="sophios-cwl-builder-") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="sophios-tool-builder-") as tmpdir:
         temp_path = Path(tmpdir) / filename
         temp_path.write_text(
             yaml.safe_dump(_render(document), sort_keys=False, line_break="\n"),
@@ -309,7 +322,7 @@ def _validate_path(path: Path, *, skip_schemas: bool = False) -> ValidationResul
         )
         process = load_tool.make_tool(uri, loading_context)
     except Exception as exc:  # pylint: disable=W0718:broad-exception-caught
-        raise CWLBuilderValidationError(f"Generated CommandLineTool failed validation: {path}") from exc
+        raise ToolBuilderValidationError(f"Generated CommandLineTool failed validation: {path}") from exc
     return ValidationResult(path=path, uri=uri, process=process)
 
 

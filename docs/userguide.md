@@ -1,13 +1,20 @@
 # Python Workflow API
 
-The Python Workflow API is the primary way to author Sophios workflows.
+The Python Workflow API is the primary way to author Sophios workflows. It lets
+you describe a workflow in the same place where you already have names,
+functions, imports, tests, and reusable Python helpers, while still compiling to
+portable CWL artifacts.
 
-This guide documents the core workflow model: load or create tools, place them
-in steps, bind inputs and outputs, wrap the steps in a workflow, then compile or
-run the result.
+The API is intentionally centered on a small set of concepts:
 
-The goal is not just to show syntax. The goal is to make the workflow graph
-visible in ordinary Python code.
+- a `CommandLineTool` describes one executable tool,
+- a `Step` places that tool inside a workflow graph,
+- a `Workflow` owns the graph, named outputs, and compiled artifacts,
+- assignments such as `cat.inputs.file = touch.outputs.file` record workflow
+  bindings rather than executing commands immediately.
+
+If you remember one rule, make it this: Python describes the graph; compilation
+turns that graph into CWL and job inputs; execution happens after that.
 
 ## Scope
 
@@ -15,12 +22,12 @@ This page covers:
 
 - what a `Step` represents,
 - what a `Workflow` represents,
-- how literal values differ from workflow inputs,
+- how literal values bind to step inputs,
 - how a step output becomes a later step input,
 - what compilation produces,
 - how to compile and inspect workflow artifacts,
 - when to run locally,
-- when to keep compiled CWL in memory for compute payload construction.
+- when to keep compiled CWL in memory for submission payload construction.
 
 It does not cover every CWL feature. Advanced YAML controls, static dispatch,
 and program synthesis are documented separately in
@@ -52,7 +59,7 @@ A `Step` is a CWL `CommandLineTool` placed inside a workflow context.
 ```python
 from pathlib import Path
 
-from sophios.apis.python import Step
+from sophios.apis.python.workflow import Step
 
 
 echo = Step(Path("cwl_adapters") / "echo.cwl")
@@ -107,7 +114,7 @@ The docs use the explicit form because it is clearer:
 Wrap the step in a workflow:
 
 ```python
-from sophios.apis.python import Workflow
+from sophios.apis.python.workflow import Workflow
 
 
 workflow = Workflow([echo], "hello_python")
@@ -133,7 +140,7 @@ The smallest complete example is therefore:
 ```python
 from pathlib import Path
 
-from sophios.apis.python import Step, Workflow
+from sophios.apis.python.workflow import Step, Workflow
 
 
 def build_workflow() -> Workflow:
@@ -157,7 +164,7 @@ Most workflows become useful when one step consumes another step's output.
 ```python
 from pathlib import Path
 
-from sophios.apis.python import Step, Workflow
+from sophios.apis.python.workflow import Step, Workflow
 
 
 touch = Step(Path("cwl_adapters") / "touch.cwl")
@@ -215,73 +222,67 @@ append.outputs.file -> cat.inputs.file
 
 Use inference when the workflow is a clear linear chain and the generated graph
 is easy to inspect. Prefer explicit bindings when multiple prior outputs could
-match, when names matter, or when code review needs to make the data flow
-unambiguous.
+match, when names matter, or when the workflow definition must make data flow
+unambiguous without relying on generated artifacts.
 
 ## Binding Types
 
-There are three common input binding patterns.
+There are two common input binding patterns.
 
 | Binding | Python shape | Meaning |
 | --- | --- | --- |
 | Literal value | `step.inputs.message = "hello"` | The value is known now. |
 | Step output | `cat.inputs.file = append.outputs.file` | The value comes from an earlier step. |
-| Workflow input | `echo.inputs.message = workflow.inputs.message` | The value will be supplied by the workflow caller. |
 
 This table is one of the most important concepts in the Python API. Most
 workflow code is a readable sequence of these bindings.
 
-## Formal Workflow Inputs
+## What Bindings Become
 
-Literal inputs are appropriate when a value is fixed for the workflow definition.
-Reusable workflows should declare their public interface.
+Python assignments in a Sophios workflow are declarative. They do not execute a
+command when the assignment runs. They record enough information for the
+compiler to generate a CWL workflow and a CWL job input object.
+
+For example, this literal binding:
 
 ```python
-from pathlib import Path
-
-from sophios.apis.python import Step, Workflow, cwl
-
-
-echo = Step(Path("cwl_adapters") / "echo.cwl")
-workflow = Workflow([echo], "say_message")
-
-workflow.add_input("message", cwl.string)
-echo.inputs.message = workflow.inputs.message
+echo.inputs.message = "hello"
 ```
 
-This creates a formal workflow input named `message`. The workflow no longer
-hardcodes the message. A caller can provide it at execution or submission time.
+becomes part of the generated job input data. Sophios keeps the value out of the
+CWL tool definition so the compiled workflow and runtime inputs remain separate.
 
-Use formal workflow inputs when:
+This edge binding:
 
-- a value should vary between runs,
-- a workflow will be reused,
-- workflow structure should be separated from runtime input data,
-- a compute payload should carry explicit job inputs.
+```python
+cat.inputs.file = append.outputs.file
+```
 
-## Formal Workflow Outputs
+becomes a CWL workflow `source` relationship. The compiled workflow connects the
+concrete output port from the `append` step to the concrete input port on the
+`cat` step.
+
+The practical rule is: write Python that describes the graph, then inspect the
+generated CWL when exact execution behavior matters.
+
+## Named Workflow Outputs
 
 Outputs should also be deliberate.
-
-```python
-workflow.add_output("captured_stdout", echo.outputs.stdout)
-```
-
-That line exposes the step output as part of the workflow's public output
-interface.
-
-The namespace form is equivalent:
 
 ```python
 workflow.outputs.captured_stdout = echo.outputs.stdout
 ```
 
-Use named workflow outputs when a downstream user, test, or compute service
+That line exposes the step output as part of the workflow's public output
+interface.
+
+Use named workflow outputs when a downstream user, test, or execution service
 needs a stable result name.
 
-## What `workflow.yaml` Shows You
+## Export `.wic` From Python
 
-Every `Workflow` can render the in-memory Sophios workflow tree:
+Every `Workflow` can render the lower-level Sophios workflow representation.
+For a quick in-memory view, inspect `workflow.yaml`:
 
 ```python
 print(workflow.yaml)
@@ -291,9 +292,41 @@ This shows the bridge between Python objects and the lower-level Sophios
 representation. It is useful when debugging surprising bindings before
 compilation.
 
+When you want a real `.wic` file, use `write_wic()`:
+
+```python
+workflow.write_wic("hello_python.wic")
+```
+
+This writes a source `.wic` workflow from the Python object. It does not compile
+the workflow and it does not write generated CWL. Literal bindings, named
+outputs, explicit edges, and intentionally unbound linear inputs are preserved
+in the `.wic` representation so the normal Sophios compiler can still apply
+edge inference later.
+
+If you need the text instead of a file:
+
+```python
+wic_text = workflow.to_wic()
+```
+
+For nested workflows, `write_wic()` embeds subworkflows in the root document by
+default. If you want a sibling-file tree instead, pass
+`inline_subworkflows=False`:
+
+```python
+workflow.write_wic("workflows", inline_subworkflows=False)
+```
+
 ## Compile Paths
 
 Sophios gives you two common compile paths.
+
+Compilation is the point where the high-level Python workflow becomes concrete
+CWL. During compilation, Sophios validates the workflow structure, resolves
+explicit bindings, applies edge inference where inputs were intentionally left
+unbound, emits runtime input data for literal values, and produces a CWL
+workflow document that can be inspected or executed by a CWL runner.
 
 ### Write Artifacts to Disk
 
@@ -305,7 +338,6 @@ Use this when you want to inspect generated files. Typical artifacts include:
 
 - `autogenerated/<workflow>.cwl`,
 - `autogenerated/<workflow>_inputs.yml`,
-- intermediate `.wic` workflow trees,
 - Graphviz files when graph output is enabled.
 
 This is the best path when generated artifacts need to be reviewed, committed to
@@ -313,6 +345,8 @@ a test fixture, or inspected during debugging.
 
 `workflow.compile(write_to_disk=True)` is still available. `write_artifacts()`
 is the clearer public method for the common "compile and inspect files" path.
+Neither method writes intermediate `.wic` compiler trees by default. Use
+`workflow.write_wic(...)` when you want a source `.wic` file.
 
 ### Keep Compiled CWL in Memory
 
@@ -321,7 +355,7 @@ compiled = workflow.get_cwl_workflow()
 ```
 
 Use this when the next step is another Python operation, such as packaging a
-compute payload.
+submission payload.
 
 The returned object contains:
 
@@ -329,8 +363,9 @@ The returned object contains:
 - the workflow name,
 - generated `yaml_inputs`.
 
-The compute payload API expects the CWL workflow document and job inputs as
-separate pieces. The compute payload guide shows that split in detail.
+Submission payloads commonly expect the CWL workflow document and job inputs as
+separate pieces. The compute payload guide shows one concrete service-oriented
+payload shape in detail.
 
 ## Running Locally
 
@@ -339,6 +374,11 @@ Run locally with:
 ```python
 workflow.run()
 ```
+
+Sophios supports two local CWL runners through `Workflow.run()`:
+
+- `cwltool`, the default local runner,
+- `toil-cwl-runner`, for local execution through Toil.
 
 Runtime options can be passed through `run_args_dict`:
 
@@ -352,9 +392,26 @@ workflow.run(
 )
 ```
 
+To run the same workflow with Toil, switch the runner:
+
+```python
+workflow.run(
+    run_args_dict={
+        "cwl_runner": "toil-cwl-runner",
+        "container_engine": "docker",
+        "logLevel": "INFO",
+    }
+)
+```
+
+Sophios uses recognized local-run options for setup and passes runner-specific
+key/value options to the selected CWL runner. See
+[Running a Multistep Workflow Locally](multistep_runner.md) for a complete
+example.
+
 Local execution is best for:
 
-- smoke-testing small workflows,
+- verifying small workflows,
 - verifying tool contracts,
 - checking generated outputs before submission,
 - verifying end-to-end behavior in a controlled environment.
@@ -416,12 +473,15 @@ artifacts:
 
 - `autogenerated/<workflow>.cwl`: compiled root CWL workflow.
 - `autogenerated/<workflow>_inputs.yml`: generated job inputs.
-- `autogenerated/*_tree_raw.wic` and related files: intermediate workflow trees.
 - `autogenerated/schemas/`: generated schemas for `.wic` validation.
 - `cachedir*`: CWL runner caches and intermediate files.
 - `provenance/`: CWL provenance data unless disabled.
 - `outdir/`: copied primary outputs when output copying is enabled.
 - `error_<workflow>.txt`: tracebacks from compilation or runner startup failures.
+
+Intermediate compiler `.wic` trees are not written under `autogenerated/` during
+normal compilation. The CLI writes them only when explicitly invoked with
+`--write_intermediate_wic`.
 
 These files are the main debugging surface. A serious workflow should be
 reviewed through its generated artifacts, not only through the Python code.
@@ -441,27 +501,28 @@ When a workflow fails:
   need a clean local run.
 - Replace advanced controls with simpler bindings when isolating a failure.
 
-## Tested Lightweight Examples
+## Maintained Examples
 
 The following examples are intended to stay lightweight:
 
 - `examples/scripts/helloworld_pyapi.py`: smallest Python workflow.
 - `examples/scripts/multistep1_pyapi.py`: step-to-step file flow.
 - `examples/scripts/multistep1_toJson_pyapi.py`: in-memory compiled workflow JSON.
-- `examples/scripts/reusable_interface_pyapi.py`: formal workflow inputs and outputs.
+- `examples/scripts/multistep_runner_pyapi.py`: local runner selection for a multistep workflow.
+- `examples/scripts/reusable_interface_pyapi.py`: reusable workflow interface example.
 - `examples/scripts/scatter_pyapi.py`: scatter over array-valued bindings.
 - `examples/scripts/when_pyapi.py`: conditional execution.
-- `examples/scripts/cwl_builder_workflow.py`: generated CLTs composed in memory.
+- `examples/scripts/tool_builder_workflow.py`: generated CLTs composed in memory.
 - `examples/scripts/compute_payload_workflow.py`: Python workflow to validated compute payload.
 
-The Ichnaea and SAM3 walkthroughs are intentionally larger and are documented as
-production-style examples rather than quick smoke tests.
+The Ichnaea and SAM3 walkthroughs are larger, production-oriented examples with
+heavier runtime assumptions.
 
 ## Next Steps
 
 Continue with:
 
-- [Building a CWL CommandLineTool in Python](cwl_builder_sam3.md) to author tools.
-- [Using `cwl_builder` and the Workflow Python API Together](cwl_builder_workflow.md) to build tools in memory and compose them immediately.
-- [From Python Workflow to Compute Payload](compute_payload_workflow.md) to submit compiled workflows to compute-slurm.
+- [Building Tool Contracts in Python](tool_builder_sam3.md) to author tools.
+- [Using Tool Builder and the Workflow Python API Together](tool_builder_workflow.md) to build tools in memory and compose them immediately.
+- [From Python Workflow to Compute Payload](compute_payload_workflow.md) to prepare validated submission payloads from compiled workflows.
 - [Advanced YAML and Operations](advanced.md) when you need `.wic` files, schema validation, inference controls, or audit-friendly artifacts.

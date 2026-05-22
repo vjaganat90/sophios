@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from sophios.apis.python import Step, Workflow
+from sophios.apis.python.workflow import Step, Workflow
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

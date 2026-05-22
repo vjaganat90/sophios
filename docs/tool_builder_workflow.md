@@ -1,9 +1,9 @@
-# Using `cwl_builder` and the Workflow Python API Together
+# Using Tool Builder and the Workflow Python API Together
 
 Sophios has two related Python surfaces:
 
-- `sophios.apis.python.cwl_builder` for authoring a single CWL `CommandLineTool`
-- `sophios.apis.python` for wiring tools into a workflow with `Step` and `Workflow`
+- `sophios.apis.python.tool_builder` for authoring a single CWL `CommandLineTool`
+- `sophios.apis.python.workflow` for wiring tools into a workflow with `Step` and `Workflow`
 
 Those APIs are intentionally separate, but they can be combined cleanly.
 
@@ -17,7 +17,7 @@ This guide shows the intended end-to-end pattern:
 The important part is that the handoff stays **in memory**. You do not need to write a temporary `.cwl` file just to use a freshly built tool inside a workflow.
 
 A runnable version of this pattern lives in
-[examples/scripts/cwl_builder_workflow.py](https://github.com/PolusAI/sophios/blob/main/examples/scripts/cwl_builder_workflow.py).
+[examples/scripts/tool_builder_workflow.py](https://github.com/PolusAI/sophios/blob/main/examples/scripts/tool_builder_workflow.py).
 
 ## When to use this pattern
 
@@ -28,7 +28,7 @@ This hybrid style is useful when:
 - you want to validate the generated CLT before putting it into a workflow,
 - or you want a workflow to mix generated tools with ordinary file-backed `Step(...)` objects.
 
-If you only need to build a single standalone CLT, start with [cwl_builder_sam3](cwl_builder_sam3.md).
+If you only need to build a single standalone CLT, start with [tool_builder_sam3](tool_builder_sam3.md).
 
 If you already have checked-in `.cwl` tools and only need to compose them, start with the [Python Workflow API](userguide.md).
 
@@ -40,14 +40,15 @@ The cleanest way to think about the boundary is:
 
 - `CommandLineTool(...)` defines a **tool contract**
 - `tool.validate()` checks that contract as real CWL
-- `tool.to_step()` turns that contract into a **workflow node**
+- `Step(tool, step_name=...)` turns that contract into a **workflow node**
 - `Workflow(...)` composes that node with other steps
 
 That separation is deliberate.
 
 The builder does not need to know about workflows.
 The workflow DSL does not need to know how the tool was authored.
-The bridge is small: it passes a normal CWL document from one side to the other.
+The bridge is small: `Step(tool, step_name=...)` lets client code use a built
+tool exactly like any other workflow step.
 
 ## What we will build
 
@@ -62,14 +63,13 @@ Then we will:
 
 - convert that built tool into a Sophios `Step`,
 - feed its file output into the existing checked-in [`cat.cwl`](https://github.com/PolusAI/sophios/blob/main/cwl_adapters/cat.cwl),
-- expose a workflow input called `message`,
 - and expose a workflow output called `result`.
 
 So the final workflow shape is:
 
 ```text
-workflow input "message"
-    -> emit_text (generated in memory)
+literal message
+    -> emit_text (built in Python)
     -> cat.cwl (file-backed step)
     -> workflow output "result"
 ```
@@ -81,15 +81,17 @@ The snippet below assumes you are running from the repository root, so the check
 ```python
 from pathlib import Path
 
-from sophios.apis.python import (
+from sophios.apis.python.tool_builder import (
     CommandLineTool,
     Input,
     Inputs,
     Output,
     Outputs,
+    cwl,
+)
+from sophios.apis.python.workflow import (
     Step,
     Workflow,
-    cwl,
 )
 
 
@@ -120,23 +122,19 @@ def build_emit_text_tool() -> CommandLineTool:
 def build_workflow() -> Workflow:
     emit_tool = build_emit_text_tool()
 
-    # Optional but recommended while developing new generated tools.
-    # This requires cwltool/schema-salad in your Python environment.
+    # Validate the generated CLT before composing it into the workflow.
     emit_tool.validate()
 
     # No temporary file is needed here. The CLT is handed to Step in memory.
-    emit_step = emit_tool.to_step(step_name="emit_text")
+    emit_step = Step(emit_tool, step_name="emit_text")
 
     # This is an ordinary checked-in CWL adapter.
     cat_step = Step(Path("cwl_adapters") / "cat.cwl")
 
     workflow = Workflow([emit_step, cat_step], "builder_and_pyapi_demo")
 
-    # Be explicit about the workflow interface.
-    workflow.add_input("message", cwl.string)
-
-    # Recommended explicit binding style.
-    emit_step.inputs.message = workflow.inputs.message
+    # Recommended explicit binding style: values go into inputs.
+    emit_step.inputs.message = "hello from Sophios"
     cat_step.inputs.file = emit_step.outputs.file
 
     # Expose a workflow output.
@@ -189,31 +187,42 @@ Validation belongs naturally on the builder side:
 emit_tool.validate()
 ```
 
-That gives you confidence that the generated CLT is valid CWL **before** it participates in a larger workflow.
+That gives you confidence that Sophios rendered a valid CWL `CommandLineTool`
+**before** it participates in a larger workflow.
 
 For self-authored tools, that is usually the best debugging boundary:
 
 - first make the tool valid,
 - then compose it into the workflow.
 
-### 3. `tool.to_step()` is the bridge
+This is more than a syntax check. It confirms that the generated document has a
+valid CWL shape, that declared inputs and outputs are represented correctly, and
+that the tool contract is ready to be handed to `Step(...)`.
+
+### 3. `Step(tool)` is the bridge
 
 This is the key handoff:
+
+```python
+emit_step = Step(emit_tool, step_name="emit_text")
+```
+
+That call:
+
+- uses the built tool directly,
+- avoids a temporary `.cwl` file,
+- and gives you a normal `Step`.
+
+The equivalent convenience form also works:
 
 ```python
 emit_step = emit_tool.to_step(step_name="emit_text")
 ```
 
-That call:
-
-- renders the CLT to a standard CWL document,
-- parses it through the Python workflow API,
-- and returns a normal `Step`.
-
 After that, you work with the object exactly like any other `Step`:
 
 ```python
-emit_step.inputs.message = workflow.inputs.message
+emit_step.inputs.message = "hello from Sophios"
 cat_step.inputs.file = emit_step.outputs.file
 ```
 
@@ -224,7 +233,7 @@ That is the main design goal of the bridge: once a built tool becomes a step, it
 This guide uses the explicit form:
 
 ```python
-emit_step.inputs.message = workflow.inputs.message
+emit_step.inputs.message = "hello from Sophios"
 cat_step.inputs.file = emit_step.outputs.file
 workflow.outputs.result = cat_step.outputs.output
 ```
@@ -236,17 +245,6 @@ That is easier to read than the legacy shorthand and makes directionality obviou
 
 The old shorthand still exists for compatibility, but explicit namespaces are
 the preferred documentation and review style.
-
-### 5. Workflow interface should be declared deliberately
-
-This line is important:
-
-```python
-workflow.add_input("message", cwl.string)
-```
-
-Yes, the compatibility layer can still create workflow inputs implicitly in some situations.
-But explicit workflow inputs are much easier to reason about, especially when the workflow is meant to be reused or reviewed by someone else.
 
 ## What gets written to disk
 
@@ -297,7 +295,7 @@ For day-to-day development, this sequence tends to work well:
 
 1. build the tool with `CommandLineTool(...)`
 2. call `tool.validate()`
-3. convert it with `tool.to_step()`
+3. build the step with `Step(tool, step_name=...)`
 4. wire it into a `Workflow(...)`
 5. call `workflow.compile(...)`
 6. only then move on to full execution
@@ -308,7 +306,7 @@ That keeps failures close to the layer that caused them.
 
 The combined Python story is now:
 
-- use `cwl_builder` to define a proper CWL tool,
+- use `tool_builder` to define a proper CWL tool,
 - validate it while it is still a tool,
 - turn it into a `Step` in memory,
 - compose it with ordinary Sophios workflow steps.
@@ -323,9 +321,9 @@ That gives you the best of both worlds:
 From the repository root:
 
 ```bash
-PYTHONPATH=src python examples/scripts/cwl_builder_workflow.py --validate
-PYTHONPATH=src python examples/scripts/cwl_builder_workflow.py --run
+python examples/scripts/tool_builder_workflow.py
 ```
 
-The first command validates the generated CLTs and compiles the workflow.
-The second runs the full example workflow through `Workflow.run()`.
+The script validates the generated CLTs and compiles the workflow by default.
+To run the workflow locally or write the generated CLTs for inspection, edit the
+configuration constants near the top of the script.

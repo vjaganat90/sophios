@@ -1,7 +1,7 @@
-# Building a CWL CommandLineTool in Python
+# Building Tool Contracts in Python
 
 This walkthrough shows how to build a real CWL `CommandLineTool` using
-`sophios.apis.python.cwl_builder`.
+`sophios.apis.python.tool_builder`.
 
 The design goal is simple:
 
@@ -10,7 +10,7 @@ The design goal is simple:
 - and optional CWL details should feel like optional add-ons, not required boilerplate.
 
 The full working example lives in
-[examples/scripts/sam3_cwl_builder.py](https://github.com/PolusAI/sophios/blob/main/examples/scripts/sam3_cwl_builder.py).
+[examples/scripts/sam3_tool_builder.py](https://github.com/PolusAI/sophios/blob/main/examples/scripts/sam3_tool_builder.py).
 
 ## The core idea
 
@@ -157,7 +157,7 @@ Again, the goal is to describe what the output means, not to hand-assemble `outp
 ```python
 from pathlib import Path
 
-from sophios.apis.python.cwl_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 
 
 inputs = Inputs(
@@ -284,9 +284,11 @@ or:
 tool.validate()
 ```
 
-the generated CLT is validated through the `cwltool` and schema-salad stack.
+Sophios validates the generated CLT as a real CWL `CommandLineTool`.
 
-That is a much stronger guarantee than "this happened to produce YAML". It means the generated document has gone through the same validation path users already trust.
+That is a much stronger guarantee than "this happened to produce YAML". Sophios
+checks the concrete tool document it will save or hand to the workflow API, so
+mistakes show up at the tool boundary instead of later inside a larger workflow.
 
 ## Escape hatches
 
@@ -310,7 +312,7 @@ tool = CommandLineTool(
     Outputs(out=Output.stdout()),
 ).stdout("stdout.txt")
 
-step = tool.to_step(step_name="say_hello")
+step = Step(tool, step_name="say_hello")
 step.inputs.message = "hello"
 
 workflow = Workflow([step], "wf")
@@ -327,10 +329,8 @@ That bridge stays intentionally small:
 From the repository root:
 
 ```bash
-PYTHONPATH=src python examples/scripts/sam3_cwl_builder.py
-PYTHONPATH=src python examples/scripts/sam3_cwl_builder.py --validate
+python examples/scripts/sam3_tool_builder.py
 ```
 
-The first command writes the CLT. The second also validates it.
-
-Validation requires `cwltool` and schema-salad to be installed in your Python environment.
+The script writes and validates the generated CLT by default. To change the
+output path or skip validation, edit the constants near the top of the script.

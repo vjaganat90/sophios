@@ -52,7 +52,7 @@ YAML gives you:
 - stable artifacts for audits and papers,
 - direct access to inference tags, anchors, and metadata,
 - schema validation in editors,
-- a compact intermediate representation when debugging the compiler.
+- optional compiler-internal `.wic` trees when debugging the compiler.
 
 ## CLI Modes
 
@@ -64,6 +64,13 @@ sophios --yaml workflow.wic --run_local
 sophios --yaml workflow.wic --generate_run_script
 sophios --generate_schemas
 sophios --generate_config
+```
+
+Intermediate compiler `.wic` trees are not written by default. If you need them
+while debugging the compiler, opt in explicitly:
+
+```bash
+sophios --yaml workflow.wic --generate_cwl_workflow --write_intermediate_wic
 ```
 
 Useful flags:

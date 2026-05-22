@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import logging
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, ClassVar, Mapping
+from typing import Any, ClassVar
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
@@ -48,7 +48,9 @@ from ._workflow_runtime import (
     validate_step_assignment as _validate_step_assignment,
     workflow_document as _workflow_document,
     compiled_cwl_json as _compiled_cwl_json,
+    workflow_wic_text as _workflow_wic_text,
     write_workflow_ast_to_disk as _write_workflow_ast_to_disk,
+    write_workflow_wic as _write_workflow_wic,
 )
 
 
@@ -68,6 +70,15 @@ logger_wicad.addFilter(DisableEverythingFilter())
 
 
 StrPath = str | Path
+
+
+def _tool_builder_source_name(value: Any) -> str | None:
+    """Return the default step name for CommandLineTool-like objects."""
+    match getattr(value, "name", None), getattr(value, "to_dict", None):
+        case str() as name, to_dict if callable(to_dict):
+            return name
+        case _:
+            return None
 
 
 def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
@@ -222,39 +233,69 @@ class Step:
 
     def __init__(
         self,
-        clt_path: StrPath,
+        clt_path: Any,
         config_path: StrPath | None = None,
         *,
+        step_name: str | None = None,
         tool_registry: Tools | None = None,
     ):
-        """Create a ``Step`` from a CWL CommandLineTool file.
+        """Create a ``Step`` from a CWL file or CommandLineTool-like object.
 
         Args:
-            clt_path (StrPath): Path to the CWL tool definition.
-            config_path (StrPath | None): Optional YAML config used to pre-bind inputs.
+            clt_path (Any): Path to a CWL tool definition, or an object with
+                ``name`` and ``to_dict()`` such as
+                ``tool_builder.CommandLineTool``.
+            config_path (StrPath | None): Optional YAML config used to pre-bind
+                file-backed step inputs.
+            step_name (str | None): Optional workflow step name override.
             tool_registry (Tools | None): Optional fallback registry for known tools.
 
         Raises:
-            TypeError: If ``clt_path`` or ``config_path`` uses an unsupported type.
+            TypeError: If the source or config uses an unsupported type.
             InvalidCLTError: If the CWL tool cannot be loaded from disk or the registry.
 
         Returns:
             None: The step is initialized in place.
         """
-        clt_path_ = _coerce_path(clt_path, field_name="clt_path")
-        config_path_ = _coerce_path(config_path, field_name="config_path", allow_none=True)
-        assert clt_path_ is not None
         resolved_registry = {} if tool_registry is None else tool_registry
-        clt, yaml_file = _load_clt(clt_path_, resolved_registry)
-        cfg_yaml = _load_yaml(config_path_) if config_path_ is not None else {}
 
-        self._initialize_loaded_tool(
-            clt=clt,
-            yaml_file=yaml_file,
-            clt_path=clt_path_,
-            cfg_yaml=cfg_yaml,
-            tool_registry=resolved_registry,
-        )
+        match clt_path:
+            case str() | Path() as path:
+                clt_path_ = _coerce_path(path, field_name="clt_path")
+                config_path_ = _coerce_path(config_path, field_name="config_path", allow_none=True)
+                assert clt_path_ is not None
+                clt, yaml_file = _load_clt(clt_path_, resolved_registry)
+                cfg_yaml = _load_yaml(config_path_) if config_path_ is not None else {}
+
+                self._initialize_loaded_tool(
+                    clt=clt,
+                    yaml_file=yaml_file,
+                    clt_path=clt_path_,
+                    cfg_yaml=cfg_yaml,
+                    tool_registry=resolved_registry,
+                    process_name=step_name,
+                )
+            case _ if (tool_name := _tool_builder_source_name(clt_path)) is not None:
+                if config_path is not None:
+                    raise TypeError("config_path is only supported when Step is created from a CWL file path")
+                resolved_name = step_name or tool_name
+                run_path = Path(f"{resolved_name}.cwl")
+                match clt_path.to_dict():
+                    case Mapping() as document:
+                        clt, yaml_file = _load_clt_document(document, run_path=run_path)
+                    case _:
+                        raise TypeError("CommandLineTool-like Step source must return a mapping from to_dict()")
+
+                self._initialize_loaded_tool(
+                    clt=clt,
+                    yaml_file=yaml_file,
+                    clt_path=run_path,
+                    cfg_yaml={},
+                    tool_registry=resolved_registry,
+                    process_name=resolved_name,
+                )
+            case _:
+                raise TypeError("Step source must be a path or CommandLineTool-like object")
 
     @classmethod
     def from_cwl(
@@ -724,7 +765,11 @@ class Workflow:
         return _workflow_document(self, inline_subtrees=True)
 
     def write_ast_to_disk(self, directory: Path) -> None:
-        """Write this workflow tree to disk as ``.wic`` files.
+        """Write this workflow tree to disk as sibling ``.wic`` files.
+
+        This compatibility method is retained for existing callers. New code
+        should prefer :meth:`write_wic`, which can write either one inline
+        document or a sibling-file tree.
 
         Args:
             directory (Path): Directory where the workflow AST should be written.
@@ -733,6 +778,39 @@ class Workflow:
             None: Files are written to disk as a side effect.
         """
         _write_workflow_ast_to_disk(self, directory)
+
+    def to_wic(self, *, inline_subworkflows: bool = True) -> str:
+        """Return this workflow as ``.wic`` YAML text.
+
+        Args:
+            inline_subworkflows (bool): Whether nested workflows should be
+                embedded in the returned document.
+
+        Returns:
+            str: The serialized ``.wic`` document.
+        """
+        return _workflow_wic_text(self, inline_subworkflows=inline_subworkflows)
+
+    def write_wic(
+        self,
+        path: StrPath | None = None,
+        *,
+        inline_subworkflows: bool = True,
+    ) -> Path:
+        """Write this workflow as a ``.wic`` file.
+
+        Args:
+            path (StrPath | None): Destination ``.wic`` path or output
+                directory. When omitted, writes ``<workflow>.wic`` in the
+                current directory.
+            inline_subworkflows (bool): Whether nested workflows should be
+                embedded in the root file. When false, nested workflows are
+                written as sibling ``.wic`` files beside the root document.
+
+        Returns:
+            Path: The root ``.wic`` file that was written.
+        """
+        return _write_workflow_wic(self, path, inline_subworkflows=inline_subworkflows)
 
     def flatten_steps(self) -> list[Step]:
         """Return every concrete step in this workflow tree.

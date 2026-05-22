@@ -1,9 +1,12 @@
 """Build a CWL CommandLineTool for SAM3 OME Zarr autosegmentation."""
 
-from argparse import ArgumentParser
 from pathlib import Path
 
-from sophios.apis.python.cwl_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+
+
+OUTPUT_PATH = Path(__file__).with_name("sam3_ome_zarr_autosegmentation.cwl")
+VALIDATE = True
 
 
 def build_tool() -> CommandLineTool:
@@ -63,23 +66,9 @@ def build_tool() -> CommandLineTool:
 
 def main() -> int:
     """Write the generated CLT to disk and optionally validate it."""
-    parser = ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path(__file__).with_name("sam3_ome_zarr_autosegmentation.cwl"),
-        help="Where to write the generated CWL file.",
-    )
-    parser.add_argument(
-        "--validate",
-        action="store_true",
-        help="Validate the generated CLT with cwltool/schema-salad before returning.",
-    )
-    args = parser.parse_args()
-
-    output_path = build_tool().save(args.output, validate=args.validate)
+    output_path = build_tool().save(OUTPUT_PATH, validate=VALIDATE)
     print(f"Wrote {output_path}")
-    if args.validate:
+    if VALIDATE:
         print("Validation succeeded.")
     return 0
 

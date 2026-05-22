@@ -1,125 +1,216 @@
 # Install Guide
 
-Use a Python version supported by the Sophios release you are installing. The
-project metadata in `pyproject.toml` is the source of truth. The recommended
-starting point is a Python environment where you can import the Python API, then
-add CWL runtime dependencies when you are ready to execute workflows.
+This page gives two installation paths:
 
-## Install Sophios
+- install the published `sophios` package when you only need to use Sophios,
+- install from source when you want the latest repository code, editable local
+  changes, examples, tests, or documentation builds.
 
-For most users:
+The Python version requirement in `pyproject.toml` is the source of truth for a
+checkout. At the time this guide was written, Sophios requires Python 3.11 or
+newer.
+
+## Install the Published Package
+
+Use this path when you do not need to edit the Sophios source tree.
 
 ```bash
-pip install sophios
+python -m pip install --upgrade pip
+python -m pip install sophios
+sophios --help
 ```
 
-For development from a checkout:
+Verify the public Python imports:
+
+```bash
+python - <<'PY'
+from sophios.apis.python.workflow import Step, Workflow
+from sophios.apis.python.tool_builder import CommandLineTool, Input, Output, cwl
+from sophios.compute_payload import ComputeWorkflowPayload
+
+print("Sophios is installed")
+PY
+```
+
+## Install From Source
+
+Use this path when you want to run examples from the repository, build the docs,
+or work on Sophios itself.
+
+### Step 1: Clone the Repository
+
+```bash
+git clone https://github.com/PolusAI/sophios.git
+cd sophios
+```
+
+If you are working from a fork, clone your fork instead and keep
+`https://github.com/PolusAI/sophios.git` as the upstream remote.
+
+### Step 2: Create an Environment
+
+Conda is the recommended source-install path because it can install runtime
+tools such as Graphviz and Node.js alongside Python packages.
+
+On macOS and Linux:
+
+```bash
+conda env create -n sophios_dev -f install/system_deps.yml
+conda activate sophios_dev
+python --version
+```
+
+On Windows:
+
+```bash
+conda env create -n sophios_dev -f install/system_deps_windows.yml
+conda activate sophios_dev
+python --version
+```
+
+If the environment already exists, update it instead of creating a second one:
+
+```bash
+conda activate sophios_dev
+conda env update -n sophios_dev -f install/system_deps.yml --prune
+```
+
+The environment files intentionally do not hard-code an environment name, so
+passing `-n sophios_dev` keeps the command explicit and repeatable.
+
+If you are not using conda, create a virtual environment and install system
+runtime tools separately:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+On Windows PowerShell, activate the virtual environment with:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+With a plain virtual environment, install Graphviz, Node.js, and any container
+runtime you need through your operating system package manager.
+
+### Step 3: Install Sophios in Editable Mode
+
+From the repository root:
+
+```bash
+python -m pip install -e ".[test,doc]"
+```
+
+Editable mode means Python imports Sophios from this checkout. Source edits are
+visible immediately without reinstalling the package.
+
+For a smaller user-only source install, omit the optional test and documentation
+extras:
 
 ```bash
 python -m pip install -e .
 ```
 
-If you are working inside this repository without installing the package, many
-examples can be run with:
+### Step 4: Verify the Source Install
 
-```bash
-PYTHONPATH=src python examples/scripts/helloworld_pyapi.py
-```
-
-## Verify the Python API
-
-Start with an import check:
+Check that Python imports the checkout and that the public API modules are
+available:
 
 ```bash
 python - <<'PY'
-from sophios.apis.python import Step, Workflow, CommandLineTool, Input, Output
+import sophios
+from sophios.apis.python.workflow import Step, Workflow
+from sophios.apis.python.tool_builder import CommandLineTool, Input, Output, cwl
 from sophios.compute_payload import ComputeWorkflowPayload
-print("Sophios Python API is available")
+
+print(f"Sophios version: {sophios.__version__}")
+print(f"Sophios module:  {sophios.__file__}")
+print("Workflow API, tool builder API, and compute payload API are available")
 PY
 ```
 
-Then verify that package metadata can be prepared:
+The printed module path should point inside the checkout you just installed.
+
+Verify the command-line entry point:
 
 ```bash
-python -m pip install --dry-run --no-deps sophios
+sophios --help
 ```
 
-For a local checkout:
+### Step 5: Compile a Repository Example
+
+Run a Python-authored workflow example from the repository root:
 
 ```bash
-python -m pip install --dry-run --no-deps .
+python examples/scripts/reusable_interface_pyapi.py
 ```
 
-## Runtime Dependencies
+That command builds a small workflow through the Python Workflow API and writes
+generated artifacts under `autogenerated/`.
 
-Sophios can build and compile workflow objects without immediately running them.
-To execute compiled CWL locally, your environment also needs a CWL runner and its
-system dependencies.
-
-Common local execution dependencies include:
-
-- `cwltool` or `toil-cwl-runner`
-- Docker or Podman when workflows use containers
-- Graphviz when you want rendered workflow diagrams
-- Node.js for CWL `InlineJavascriptRequirement`
-
-The exact runtime stack depends on the workflow. A workflow that only compiles to
-CWL needs less than a workflow that runs containers, renders graphs, or submits
-to compute-slurm.
-
-## Conda Environments
-
-Conda is often the easiest way to install binary/runtime dependencies such as
-Graphviz, Node.js, and scientific Python packages.
-
-From this repository, the development environment files live under `install/`:
+To validate the tool-builder-plus-workflow path:
 
 ```bash
-conda env create -f install/system_deps.yml
+python examples/scripts/tool_builder_workflow.py
 ```
 
-Windows users can use:
+That command builds CWL `CommandLineTool` objects in Python, validates them, and
+then composes them into a normal Sophios workflow.
+
+### Step 6: Build the Documentation
+
+If you installed the `doc` extra, build the local documentation with:
 
 ```bash
-conda env create -f install/system_deps_windows.yml
+sphinx-build -b html docs docs/_build/html
 ```
 
-The conda environment files are convenience environments for users and
-developers. They are separate from the conda-forge feedstock recipe that builds
-the published conda package.
+Open `docs/_build/html/index.html` in a browser to inspect the generated site.
 
-## Verify a Minimal Python Workflow
+## Execution Environment
 
-From the repository root:
+Sophios installs the Python packages it uses for workflow authoring, CWL
+generation, validation, and local runner integration. Some workflows also rely
+on system-level tools because the commands inside the workflow need them.
+
+Common external tools are:
+
+- Node.js when a workflow uses CWL JavaScript expressions,
+- Graphviz when generating workflow diagrams,
+- Docker or Podman when a workflow uses containerized tools,
+- command-line programs invoked by your own CWL tools.
+
+The conda environment files install several useful non-Python tools for local
+development. Container runtimes such as Docker Desktop or system Podman may
+still require separate installation and local setup.
+
+## Avoid `PYTHONPATH=src` for Normal Use
+
+After an editable install, you should not need `PYTHONPATH=src`. If a command
+only works when `PYTHONPATH` is set manually, the active environment is probably
+not the one where Sophios was installed.
+
+Use this check:
 
 ```bash
-PYTHONPATH=src python examples/scripts/helloworld_pyapi.py
+python - <<'PY'
+import sophios
+print(sophios.__file__)
+PY
 ```
 
-That example builds a tiny Python-authored workflow and runs it locally. If local
-execution fails because a CWL runner or container runtime is missing, try
-compiling first before running:
-
-```python
-from pathlib import Path
-
-from sophios.apis.python import Step, Workflow
-
-echo = Step(Path("cwl_adapters") / "echo.cwl")
-echo.inputs.message = "hello"
-
-workflow = Workflow([echo], "hello_python")
-workflow.write_artifacts()
-```
-
-Compilation writes generated artifacts under `autogenerated/`.
+If the printed path does not point to your checkout, reactivate the intended
+environment and reinstall with `python -m pip install -e ".[test,doc]"`.
 
 ## Optional YAML Editor Setup
 
-The Python API is the recommended authoring path, but `.wic` YAML files remain
-useful for standalone, auditable workflows. If you edit `.wic` files directly,
-VS Code plus the Red Hat YAML extension can validate them against a generated
-schema.
+The Python Workflow API is the recommended authoring path, but `.wic` files
+remain useful for standalone, file-native workflows. If you edit `.wic` files
+directly, VS Code plus the Red Hat YAML extension can validate them against a
+generated schema.
 
 Generate the schema:
 

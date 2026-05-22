@@ -1,10 +1,11 @@
+import importlib
 from pathlib import Path
 
 import pytest
 import yaml
 
-import sophios.apis.python._cwl_builder_support as cwl_builder_support
-from sophios.apis.python.cwl_builder import (
+import sophios.apis.python._tool_builder_support as tool_builder_support
+from sophios.apis.python.tool_builder import (
     CommandLineTool,
     Dirent,
     Field,
@@ -16,6 +17,12 @@ from sophios.apis.python.cwl_builder import (
     secondary_file,
 )
 from sophios.apis.python.workflow import Step
+
+
+@pytest.mark.fast
+def test_old_tool_builder_module_name_is_not_available() -> None:
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("sophios.apis.python." + "cwl" + "_builder")
 
 
 def _rich_tool() -> CommandLineTool:
@@ -61,13 +68,13 @@ def _rich_tool() -> CommandLineTool:
 
 
 @pytest.mark.fast
-def test_cwl_builder_requires_structural_core() -> None:
+def test_tool_builder_requires_structural_core() -> None:
     with pytest.raises(TypeError):
         CommandLineTool("missing-inputs")  # type: ignore[call-arg]
 
 
 @pytest.mark.fast
-def test_cwl_builder_covers_common_clt_surface() -> None:
+def test_tool_builder_covers_common_clt_surface() -> None:
     tool = _rich_tool().to_dict()
 
     assert tool["$namespaces"] == {"edam": "https://edamontology.org/"}
@@ -102,7 +109,7 @@ def test_cwl_builder_covers_common_clt_surface() -> None:
 
 
 @pytest.mark.fast
-def test_cwl_builder_accepts_raw_extensions() -> None:
+def test_tool_builder_accepts_raw_extensions() -> None:
     tool = CommandLineTool(
         "custom-tool",
         Inputs(message=Input(cwl.string)),
@@ -118,7 +125,7 @@ def test_cwl_builder_accepts_raw_extensions() -> None:
 
 
 @pytest.mark.fast
-def test_cwl_builder_rejects_reserved_or_salad_raw_keys() -> None:
+def test_tool_builder_rejects_reserved_or_salad_raw_keys() -> None:
     tool = CommandLineTool(
         "custom-tool",
         Inputs(message=Input(cwl.string)),
@@ -133,7 +140,7 @@ def test_cwl_builder_rejects_reserved_or_salad_raw_keys() -> None:
 
 
 @pytest.mark.fast
-def test_cwl_builder_high_level_helpers_hide_cwl_plumbing() -> None:
+def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
     inputs = Inputs(
         input=Input(cwl.directory, position=1).label("Input Zarr dataset").doc("Path to input zarr dataset"),
         output=Input(cwl.directory, position=2).label("Output segmentation Zarr").doc(
@@ -191,7 +198,7 @@ def test_cwl_builder_high_level_helpers_hide_cwl_plumbing() -> None:
 
 
 @pytest.mark.fast
-def test_cwl_builder_save_round_trips_yaml(tmp_path: Path) -> None:
+def test_tool_builder_save_round_trips_yaml(tmp_path: Path) -> None:
     tool = _rich_tool()
     output_path = tmp_path / "aligner.cwl"
 
@@ -202,7 +209,7 @@ def test_cwl_builder_save_round_trips_yaml(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_cwl_builder_validate_uses_cwltool_stack(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tool_builder_validate_uses_cwltool_stack(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeRuntimeContext:
         def __init__(self, kwargs: dict[str, object]) -> None:
             self.kwargs = kwargs
@@ -256,9 +263,9 @@ def test_cwl_builder_validate_uses_cwltool_stack(monkeypatch: pytest.MonkeyPatch
         return "prepared-context"
 
     fake_load_tool = FakeLoadTool()
-    monkeypatch.setattr(cwl_builder_support, "_import_cwltool_load_tool", lambda: fake_load_tool)
+    monkeypatch.setattr(tool_builder_support, "_import_cwltool_load_tool", lambda: fake_load_tool)
     monkeypatch.setattr(
-        cwl_builder_support,
+        tool_builder_support,
         "_import_cwltool_validation_support",
         lambda: (FakeRuntimeContext, fake_get_default_args, fake_setup_loading_context),
     )
@@ -273,7 +280,7 @@ def test_cwl_builder_validate_uses_cwltool_stack(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.fast
-def test_cwl_builder_converts_to_in_memory_step() -> None:
+def test_tool_builder_converts_to_in_memory_step() -> None:
     tool = CommandLineTool(
         "echo_tool",
         Inputs(message=Input(cwl.string, position=1)),
@@ -283,7 +290,11 @@ def test_cwl_builder_converts_to_in_memory_step() -> None:
     step = tool.to_step(step_name="say_hello")
     step.inputs.message = "hello"
 
-    assert isinstance(step, Step)
+    match step:
+        case Step():
+            pass
+        case _:
+            pytest.fail("tool.to_step() must return a Step")
     assert step.process_name == "say_hello"
     assert step.clt_path.name == "say_hello.cwl"
     assert step.yaml["inputs"]["message"]["type"] == "string"

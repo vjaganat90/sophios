@@ -1,4 +1,4 @@
-"""Private namespace objects for the public CWL builder.
+"""Private namespace objects for the public Tool Builder.
 
 The builder surface is intentionally small:
 
@@ -10,8 +10,8 @@ The builder surface is intentionally small:
 
 from typing import Any, Iterator, Mapping, TypeVar
 
-from ._cwl_builder_specs import FieldSpec, InputSpec, OutputSpec
-from ._cwl_builder_support import _canonicalize_type, _merge_if_set, _record_type_payload
+from ._tool_builder_specs import FieldSpec, InputSpec, OutputSpec
+from ._tool_builder_support import _canonicalize_type, _merge_if_set, _record_type_payload
 
 
 class _CWLNamespace:
@@ -32,9 +32,11 @@ class _CWLNamespace:
     def optional(self, type_: Any) -> list[Any]:
         """Wrap a CWL type in a nullable union."""
         canonical = _canonicalize_type(type_)
-        if isinstance(canonical, list) and self.null in canonical:
-            return canonical
-        return [self.null, canonical]
+        match canonical:
+            case list() as items if self.null in items:
+                return items
+            case _:
+                return [self.null, canonical]
 
     def array(self, items: Any) -> dict[str, Any]:
         """Create a CWL array type."""

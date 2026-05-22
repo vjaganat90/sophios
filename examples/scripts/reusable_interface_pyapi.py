@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from sophios.apis.python import Step, Workflow, cwl
+from sophios.apis.python.workflow import Step, Workflow
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -10,13 +10,12 @@ ADAPTERS = REPO_ROOT / "cwl_adapters"
 
 
 def workflow() -> Workflow:
-    """Build a workflow with a formal input and a declared output."""
+    """Build a workflow with a reusable input and a named output."""
     echo = Step(ADAPTERS / "echo.cwl")
 
     workflow_ = Workflow([echo], "reusable_interface_pyapi_py")
-    workflow_.add_input("message", cwl.string)
     echo.inputs.message = workflow_.inputs.message
-    workflow_.add_output("stdout", echo.outputs.stdout)
+    workflow_.outputs.stdout = echo.outputs.stdout
 
     return workflow_
 

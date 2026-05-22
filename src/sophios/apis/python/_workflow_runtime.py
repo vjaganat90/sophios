@@ -330,7 +330,7 @@ def workflow_document(
 
 
 def write_workflow_ast_to_disk(workflow: Workflow, directory: Path) -> None:
-    """Write a workflow tree to disk as `.wic` files.
+    """Write a workflow tree to disk as sibling `.wic` files.
 
     Args:
         workflow (Workflow): Workflow to serialize.
@@ -339,11 +339,90 @@ def write_workflow_ast_to_disk(workflow: Workflow, directory: Path) -> None:
     Returns:
         None: Files are written to disk as a side effect.
     """
-    yaml_contents = workflow_document(workflow, inline_subtrees=False, directory=directory)
-    directory.mkdir(exist_ok=True, parents=True)
-    output_path = directory / f"{workflow.process_name}.wic"
-    with output_path.open(mode="w", encoding="utf-8") as file_handle:
-        file_handle.write(yaml.dump(yaml_contents, sort_keys=False, line_break="\n", indent=2))
+    write_workflow_wic(workflow, directory, inline_subworkflows=False)
+
+
+def _wic_output_path(workflow: Workflow, path: str | Path | None) -> Path:
+    """Resolve user-provided `.wic` output destinations."""
+    if path is None:
+        return Path(f"{workflow.process_name}.wic")
+
+    output_path = Path(path)
+    if output_path.suffix == ".wic":
+        return output_path
+    if output_path.suffix:
+        raise ValueError("path must be a .wic file or a directory")
+    return output_path / f"{workflow.process_name}.wic"
+
+
+def workflow_wic_text(workflow: Workflow, *, inline_subworkflows: bool = True) -> str:
+    """Render a workflow as `.wic` YAML text.
+
+    Args:
+        workflow (Workflow): Workflow to serialize.
+        inline_subworkflows (bool): Whether nested workflows should be embedded
+            in the returned document. When false, nested workflows are expected
+            to be written as sibling `.wic` files by `write_workflow_wic`.
+
+    Returns:
+        str: The serialized `.wic` YAML text.
+    """
+    from .workflow import Workflow  # pylint: disable=import-outside-toplevel
+
+    workflow._validate()
+    if not inline_subworkflows and any(isinstance(step, Workflow) for step in workflow.steps):
+        raise ValueError(
+            "to_wic(inline_subworkflows=False) cannot emit sibling files; "
+            "use write_wic(..., inline_subworkflows=False) instead"
+        )
+    document = workflow_document(workflow, inline_subtrees=inline_subworkflows)
+    return yaml.dump(
+        document,
+        sort_keys=False,
+        line_break="\n",
+        indent=2,
+        Dumper=input_output.NoAliasDumper,
+    )
+
+
+def write_workflow_wic(
+    workflow: Workflow,
+    path: str | Path | None = None,
+    *,
+    inline_subworkflows: bool = True,
+) -> Path:
+    """Write a workflow as a `.wic` file.
+
+    Args:
+        workflow (Workflow): Workflow to serialize.
+        path (str | Path | None): Destination `.wic` path or output directory.
+            When omitted, writes `<workflow>.wic` in the current directory.
+        inline_subworkflows (bool): Whether nested workflows should be embedded
+            in the root `.wic` file. When false, nested workflows are written as
+            sibling `.wic` files beside the root document.
+
+    Returns:
+        Path: The path to the root `.wic` file that was written.
+    """
+    workflow._validate()
+    output_path = _wic_output_path(workflow, path)
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    document = workflow_document(
+        workflow,
+        inline_subtrees=inline_subworkflows,
+        directory=output_path.parent if not inline_subworkflows else None,
+    )
+    output_path.write_text(
+        yaml.dump(
+            document,
+            sort_keys=False,
+            line_break="\n",
+            indent=2,
+            Dumper=input_output.NoAliasDumper,
+        ),
+        encoding="utf-8",
+    )
+    return output_path
 
 
 def _extract_tools_paths_nonportable(steps: list[Step]) -> Tools:
