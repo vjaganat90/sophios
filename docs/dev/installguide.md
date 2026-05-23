@@ -135,6 +135,18 @@ sphinx-build -b html docs docs/_build/html
 
 Open `docs/_build/html/index.html` to inspect the generated site.
 
+To build a unified PDF of the user docs followed by the developer docs, run:
+
+```bash
+cd docs
+make pdf
+```
+
+The PDF builder reuses the Sphinx documentation source, builds a single HTML
+document with a PDF-specific table of contents, and prints it with a local
+Chrome or Chromium executable. The generated file is written to
+`docs/_build/pdf/sophios-docs.pdf`.
+
 ## Step 6: Run Tests
 
 For a fast local confidence check:

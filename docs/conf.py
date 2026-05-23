@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import sys
 from typing import Dict
 # Configuration file for the Sphinx documentation builder.
@@ -83,15 +84,27 @@ templates_path = ['_templates']
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
+building_pdf = os.environ.get('SOPHIOS_BUILD_PDF') == '1'
+
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+if building_pdf:
+    exclude_patterns.append('index.rst')
+else:
+    exclude_patterns.append('pdf_index.rst')
 
 
 # -- Options for HTML output -------------------------------------------------
 
-# The theme to use for HTML and HTML Help pages.  See the documentation for
-# a list of builtin themes.
-#
-html_theme = 'alabaster'
+# The regular documentation site keeps the RTD-facing theme. The PDF build uses
+# Sphinx's minimal theme plus a dedicated print stylesheet so the generated
+# document reads like a native PDF instead of a captured web page.
+if building_pdf:
+    html_theme = 'basic'
+    html_css_files = ['pdf.css']
+else:
+    html_theme = 'alabaster'
+    html_css_files = []
+html_context = {'building_pdf': building_pdf}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
