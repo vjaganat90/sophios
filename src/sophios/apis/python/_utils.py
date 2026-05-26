@@ -32,6 +32,21 @@ def normalize_parameter_type(parameter_type: Any) -> tuple[Any, bool]:
     return canonical, required
 
 
+def contains_any_type(type_obj: Any) -> bool:
+    """Return whether a CWL type expression includes the permissive ``Any`` type."""
+    match type_obj:
+        case CWLAtomicType.ANY:
+            return True
+        case str() as type_name:
+            return type_name == CWLAtomicType.ANY.value
+        case list() | tuple() as type_options:
+            return any(contains_any_type(type_option) for type_option in type_options)
+        case dict() as type_dict:
+            return contains_any_type(type_dict.get("type"))
+        case _:
+            return False
+
+
 def is_array_type(parameter_type: Any) -> bool:
     """Return whether a normalized CWL type expression represents an array."""
     match parameter_type:

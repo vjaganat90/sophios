@@ -1,7 +1,7 @@
 # From Python Workflow to Compute Payload
 
-Sophios now has a clean path from Python-authored CWL all the way to a
-schema-validated compute-slurm submission payload.
+Sophios provides a clean path from Python-authored CWL all the way to a
+schema-validated compute submission payload.
 
 The key idea is simple:
 
@@ -13,50 +13,55 @@ The key idea is simple:
 
 You do not need to hand-build JSON.
 You do not need to write an intermediate `.cwl` file just to produce the
-compute request body.
+submission request body.
 
 A runnable version of this pattern lives in
 [examples/scripts/compute_payload_workflow.py](https://github.com/PolusAI/sophios/blob/main/examples/scripts/compute_payload_workflow.py).
 
-If you want the canonical production-like example that starts from the Ichnaea
-autosegmentation CLT and carries that tool all the way through workflow
-construction and compute submission, see [ichnaea_compact_compute](ichnaea_compact_compute.md).
+If you want a larger example that starts from the Ichnaea autosegmentation CLT
+and carries that tool all the way through workflow construction and compute
+submission, see [ichnaea_compact_compute](ichnaea_compact_compute.md).
 
-## What this buys you
+## What This Pattern Gives You
 
-This split gives you confidence at the right boundaries:
+This split gives you clear checkpoints:
 
 - `CommandLineTool(...)` keeps tool authoring structured and readable.
 - `Workflow(...)` keeps step wiring explicit and reviewable.
 - `Workflow.get_cwl_workflow()` gives you the exact compiled workflow plus job inputs.
 - `ComputeWorkflowPayload.get_compute_payload()` validates that request against the checked-in compute schema.
 
-That last point matters. The payload is not just "some JSON that happens to look right". It is checked against [`src/sophios/compute_payload_schema.json`](https://github.com/PolusAI/sophios/blob/main/src/sophios/compute_payload_schema.json) before you submit it.
+That last point matters. Schema validation catches payload-shape mistakes before
+you submit the request. The schema lives at
+[`src/sophios/compute_payload_schema.json`](https://github.com/PolusAI/sophios/blob/main/src/sophios/compute_payload_schema.json).
 
 ## Minimal mental model
 
 Think in terms of layers:
 
-- `cwl_builder` defines a single CWL tool
+- `tool_builder` defines a single CWL tool
 - the workflow Python API composes tools into a CWL workflow
-- `ComputeWorkflowPayload` packages that compiled workflow for compute-slurm
+- `ComputeWorkflowPayload` packages that compiled workflow for a compute service
 
 Each layer owns one job.
-That keeps the implementation understandable and the user-facing API small.
+That keeps the implementation understandable and the user-facing API focused.
 
 ## Full example
 
 ```python
 from datetime import datetime
 
-from sophios.apis.python import (
+from sophios.apis.python.tool_builder import (
     CommandLineTool,
     Input,
     Inputs,
     Output,
     Outputs,
-    Workflow,
     cwl,
+)
+from sophios.apis.python.workflow import (
+    Step,
+    Workflow,
 )
 from sophios.compute_payload import (
     ComputeConfig,
@@ -80,7 +85,7 @@ def build_emit_text_tool() -> CommandLineTool:
     )
     return (
         CommandLineTool("emit_text", inputs, outputs)
-        .describe("Emit text", "Small generated CLT that prints one message.")
+        .describe("Emit text", "Generated CLT that prints one message.")
         .base_command("python", "-c")
         .argument("import sys; print(sys.argv[1])", position=0)
         .stdout("stdout.txt")
@@ -88,11 +93,11 @@ def build_emit_text_tool() -> CommandLineTool:
 
 
 def build_workflow(message: str) -> Workflow:
-    emit_step = build_emit_text_tool().to_step(step_name="emit_text")
+    emit_step = Step(build_emit_text_tool(), step_name="emit_text")
 
     workflow = Workflow([emit_step], "compute_payload_workflow_demo")
     emit_step.inputs.message = message
-    workflow.add_output("text_file", emit_step.outputs.text_file)
+    workflow.outputs.text_file = emit_step.outputs.text_file
     return workflow
 
 
@@ -121,12 +126,12 @@ There are three design choices here that are worth keeping in mind.
 - the compiled CWL workflow document
 - the generated `yaml_inputs` payload
 
-That is exactly what compute-slurm needs.
+That is exactly what the compute payload layer needs.
 
 So instead of rebuilding the request manually, you split the compiled object once
 at the boundary and hand the two pieces to `ComputeWorkflowPayload`.
 
-### 2. The payload object is intentionally small
+### 2. The payload object stays focused
 
 The core constructor only needs:
 
@@ -134,16 +139,16 @@ The core constructor only needs:
 - `cwl_job_inputs`
 - optionally `workflow_id`
 
-That keeps the compute layer loosely coupled to the Python workflow DSL.
+That keeps the compute layer loosely coupled to the Python workflow API.
 It does not need to know what a `Workflow` is. It only needs the compiled output.
 
 In this example the message is bound directly to `emit_step.inputs.message`.
 That is deliberate: it produces a real `cwlJobInputs` payload immediately, which
-is the most useful shape for a ready-to-submit demo.
+is the most useful shape for validating the submission boundary.
 
 ### 3. Validation happens before submission
 
-This line is the trust boundary:
+This line is the validation boundary:
 
 ```python
 compute_json = payload.get_compute_payload()
@@ -189,7 +194,7 @@ payload = ComputeWorkflowPayload(
 )
 ```
 
-That keeps compute-specific concerns explicit without leaking them into the workflow DSL.
+That keeps compute-specific concerns explicit without leaking them into the workflow API.
 If you prefer the more Pythonic helpers, `OutputConfig.user_specified(...)` and
 `OutputConfig.workflow_declared()` still work too.
 
@@ -210,30 +215,28 @@ Submission behavior is intentionally narrow:
 - poll `/status/` until the job reaches a started or terminal state
 - print logs only after the job reaches `RUNNING`
 
-That makes the client behavior predictable and easy to demonstrate.
+That makes the client behavior predictable and easy to inspect.
 
 ## Run the example
 
 From the repository root:
 
 ```bash
-PYTHONPATH=src python examples/scripts/compute_payload_workflow.py
-PYTHONPATH=src python examples/scripts/compute_payload_workflow.py --validate-tool
-PYTHONPATH=src python examples/scripts/compute_payload_workflow.py --submit-url http://127.0.0.1:7998/compute/
+python examples/scripts/compute_payload_workflow.py
 ```
 
-The first command writes a validated compute payload JSON file.
-The second also validates the generated CLT first.
-The third submits the payload to compute-slurm.
+The script validates the generated CLT and writes a compute payload JSON file by
+default. To submit the payload, set `SUBMIT_URL` near the top of the script.
 
 ## Summary
 
 The intended flow is now:
 
-- author tools with `cwl_builder`
+- author tools with `tool_builder`
 - compose them with the workflow Python API
 - compile in memory with `Workflow.get_cwl_workflow()`
 - package and validate with `ComputeWorkflowPayload`
 - submit only when the payload is already known to match the schema
 
-That gives you a path from Python authoring to compute submission without raw JSON assembly and without losing confidence in what is being sent.
+That gives you a path from Python authoring to compute submission without raw
+JSON assembly, while keeping the submitted payload visible and schema-checked.

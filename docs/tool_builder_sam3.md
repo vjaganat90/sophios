@@ -1,7 +1,7 @@
-# Building a CWL CommandLineTool in Python
+# Building Tool Contracts in Python
 
 This walkthrough shows how to build a real CWL `CommandLineTool` using
-`sophios.apis.python.cwl_builder`.
+`sophios.apis.python.tool_builder`.
 
 The design goal is simple:
 
@@ -10,7 +10,7 @@ The design goal is simple:
 - and optional CWL details should feel like optional add-ons, not required boilerplate.
 
 The full working example lives in
-[examples/scripts/sam3_cwl_builder.py](https://github.com/PolusAI/sophios/blob/main/examples/scripts/sam3_cwl_builder.py).
+[examples/scripts/sam3_tool_builder.py](https://github.com/PolusAI/sophios/blob/main/examples/scripts/sam3_tool_builder.py).
 
 ## The core idea
 
@@ -50,7 +50,7 @@ That split is intentional. The constructor shows the tool contract. The chained 
 
 ## Why this is easier to read
 
-The old builder style asked you to mentally assemble the CLT while reading a long chain.
+Less structured builder code asks you to mentally assemble the CLT while reading a long chain.
 
 The new style makes the shape visible immediately:
 
@@ -157,7 +157,7 @@ Again, the goal is to describe what the output means, not to hand-assemble `outp
 ```python
 from pathlib import Path
 
-from sophios.apis.python.cwl_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 
 
 inputs = Inputs(
@@ -256,9 +256,9 @@ In particular:
 - resource requirements are optional,
 - EDAM metadata is optional and available through `.edam()`.
 
-## Why you can trust the result
+## Validation And Error Prevention
 
-There are two separate sources of confidence.
+There are two ways the builder helps users catch mistakes early.
 
 ### 1. The API narrows the common error surface
 
@@ -284,9 +284,11 @@ or:
 tool.validate()
 ```
 
-the generated CLT is validated through the `cwltool` and schema-salad stack.
+Sophios validates the generated CLT as a real CWL `CommandLineTool`.
 
-That is a much stronger guarantee than "this happened to produce YAML". It means the generated document has gone through the same validation path users already trust.
+Sophios checks the concrete tool document it will save or hand to the workflow
+API, so mistakes show up at the tool boundary instead of later inside a larger
+workflow.
 
 ## Escape hatches
 
@@ -299,7 +301,7 @@ The main API is intentionally structured, but escape hatches still exist for adv
 
 Those are for the unusual edges of CWL. They should be the exception, not the starting point.
 
-## Using a built CLT in the workflow DSL
+## Using a built CLT in the workflow API
 
 The CLT builder can also hand off directly to the workflow Python API without writing a `.cwl` file:
 
@@ -310,27 +312,23 @@ tool = CommandLineTool(
     Outputs(out=Output.stdout()),
 ).stdout("stdout.txt")
 
-step = tool.to_step(step_name="say_hello")
+step = Step(tool, step_name="say_hello")
 step.inputs.message = "hello"
 
 workflow = Workflow([step], "wf")
 ```
 
-That bridge stays intentionally small:
-
-- the builder still only knows how to render a CLT,
-- the workflow API still only knows how to work with a parsed CLT document,
-- and the in-memory handoff is handled through a tiny adapter layer.
+The handoff is direct: the same built tool can be validated, written to disk, or
+wrapped in `Step(tool, step_name=...)` and composed into a workflow without
+creating an intermediate `.cwl` file first.
 
 ## Run the example
 
 From the repository root:
 
 ```bash
-PYTHONPATH=src python examples/scripts/sam3_cwl_builder.py
-PYTHONPATH=src python examples/scripts/sam3_cwl_builder.py --validate
+python examples/scripts/sam3_tool_builder.py
 ```
 
-The first command writes the CLT. The second also validates it.
-
-Validation requires `cwltool` and schema-salad to be installed in your Python environment.
+The script writes and validates the generated CLT by default. To change the
+output path or skip validation, edit the constants near the top of the script.

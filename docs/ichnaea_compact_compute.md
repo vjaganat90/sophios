@@ -1,7 +1,7 @@
-# Canonical Python-to-Compute-Slurm Flow with `ichnaea_compact.py`
+# Canonical Python-to-Compute Flow with `ichnaea_compact.py`
 
 This document describes the recommended Python path in Sophios for taking a
-tool definition all the way to a compute-slurm submission payload.
+tool definition all the way to a validated compute submission payload.
 
 The canonical reference implementation is
 [`examples/scripts/ichnaea_compact.py`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py).
@@ -12,14 +12,14 @@ The goal of the example is precise:
 2. convert that tool into a Sophios `Step`,
 3. wrap the step in a `Workflow`,
 4. compile the workflow fully in memory,
-5. package the compiled workflow and job inputs as a schema-valid
-   compute-slurm payload,
-6. submit that payload to a compute-slurm service chosen by the user.
+5. package the compiled workflow and job inputs as a schema-valid compute
+   payload,
+6. submit that payload to the compute service chosen by the user.
 
 This guide is intended to be read after:
 
-- [Building a CWL CommandLineTool in Python](cwl_builder_sam3.md)
-- [Using `cwl_builder` and the Workflow Python API Together](cwl_builder_workflow.md)
+- [Building Tool Contracts in Python](tool_builder_sam3.md)
+- [Using Tool Builder and the Workflow Python API Together](tool_builder_workflow.md)
 - [From Python Workflow to Compute Payload](compute_payload_workflow.md)
 
 Those documents explain the individual APIs.
@@ -27,24 +27,26 @@ This one explains how they fit together in the current end-to-end path.
 
 ## Scope
 
-This document is specifically about submission to **compute-slurm**.
+This document is specifically about the compute submission path currently
+implemented by Sophios.
 
 That distinction matters for two reasons:
 
-- the payload schema is the compute-slurm schema checked into Sophios
-- the submission helper is designed around the compute-slurm HTTP API
+- the payload schema is checked into Sophios,
+- the submission helper expects the HTTP API shape used by that compute
+  service.
 
-This is not a generic remote-execution tutorial, and it does not describe
-arbitrary third-party compute backends.
+This is not a generic remote-execution tutorial, and it does not describe every
+possible third-party compute backend.
 
 ## What this example demonstrates
 
 `ichnaea_compact.py` is the canonical example because it captures the intended
 division of responsibilities across the Python surface:
 
-- `cwl_builder` defines the tool contract
+- `tool_builder` defines the tool contract
 - the workflow Python API defines orchestration
-- `ComputeWorkflowPayload` defines the compute-slurm submission payload
+- `ComputeWorkflowPayload` defines the submission payload
 - `submit_compute_payload(...)` performs submission and status polling
 
 That separation is the architectural point of the example.
@@ -52,7 +54,7 @@ That separation is the architectural point of the example.
 Sophios is not asking one object to behave simultaneously as:
 
 - a CLT authoring API,
-- a workflow DSL,
+- a workflow API,
 - a JSON payload builder,
 - and a network client.
 
@@ -67,8 +69,8 @@ Python CLT definition
     -> Sophios Step
     -> Sophios Workflow
     -> compiled CWL workflow + job inputs
-    -> compute-slurm payload
-    -> compute-slurm submission
+    -> compute payload
+    -> compute submission
 ```
 
 This is the simplest useful mental model for the example.
@@ -77,16 +79,16 @@ This is the simplest useful mental model for the example.
 
 The Python documentation now forms a sequence:
 
-1. [cwl_builder_sam3](cwl_builder_sam3.md) explains how to author one CLT in Python
-2. [cwl_builder_workflow](cwl_builder_workflow.md) explains how a built CLT becomes a workflow step
+1. [tool_builder_sam3](tool_builder_sam3.md) explains how to author one CLT in Python
+2. [tool_builder_workflow](tool_builder_workflow.md) explains how a built CLT becomes a workflow step
 3. [compute_payload_workflow](compute_payload_workflow.md) explains the generic compute payload API
-4. this document explains the recommended end-to-end compute-slurm path
+4. this document explains the recommended end-to-end compute submission path
 
 For most users, that means:
 
 - learn the CLT builder first
 - learn the CLT-to-workflow bridge second
-- use this document when moving to real compute-slurm submission
+- use this document when moving to real compute submission
 
 ## What `ichnaea_compact.py` is responsible for
 
@@ -97,7 +99,7 @@ Instead, it demonstrates one coherent workflow:
 - define the Ichnaea autosegmentation CLT
 - turn it into a one-step Sophios workflow
 - compile that workflow
-- package the compiled result for compute-slurm
+- package the compiled result for compute submission
 - optionally submit it
 
 That narrow scope is deliberate.
@@ -108,7 +110,7 @@ It makes the example suitable both as documentation and as a reference client.
 The first major function in the example is
 [`build_autoseg_CLT()`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py).
 
-This function belongs entirely to the `cwl_builder` layer.
+This function belongs entirely to the `tool_builder` layer.
 It is responsible for the CLT itself:
 
 - inputs
@@ -144,32 +146,32 @@ For example, the following all belong in the CLT:
 Those are properties of the tool itself.
 
 If you need a slower introduction to this style of CLT construction, return to
-[cwl_builder_sam3](cwl_builder_sam3.md).
+[tool_builder_sam3](tool_builder_sam3.md).
 
 ## Layer 2: the workflow wrapper
 
 The second major function is
 [`workflow(...)`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py).
 
-This function is intentionally small.
+This function is narrow by design.
 Its purpose is not to redescribe the tool.
 Its purpose is to place the tool in a Sophios workflow context.
 
 It does two things:
 
-1. converts the generated CLT into a `Step`
+1. builds a `Step` from the generated CLT
 2. binds concrete input values and wraps that step in a `Workflow`
 
-### CLT-to-step conversion
+### Build a step from the CLT
 
 The boundary crossing is:
 
 ```python
 autoseg_clt = build_autoseg_CLT()
-autoseg = autoseg_clt.to_step(step_name="autoseg")
+autoseg = Step(autoseg_clt, step_name="autoseg")
 ```
 
-This is the intended handoff from `cwl_builder` to the workflow API.
+This is the intended handoff from `tool_builder` to the workflow API.
 
 No intermediate `.cwl` file is required.
 The CLT remains in memory and becomes a normal Sophios `Step`.
@@ -228,7 +230,7 @@ This split is not incidental.
 It is the exact boundary between:
 
 - the result of workflow compilation
-- the input expected by the compute-slurm payload layer
+- the input expected by the compute payload layer
 
 After the split:
 
@@ -238,7 +240,7 @@ After the split:
 
 That explicit separation keeps the transition to the compute layer transparent.
 
-## Layer 4: compute-slurm payload construction
+## Layer 4: compute payload construction
 
 The next function,
 [`create_compute_payload(...)`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py),
@@ -259,7 +261,7 @@ compute_object = ComputeWorkflowPayload(
 )
 ```
 
-This is where compute-slurm-specific concerns are meant to live:
+This is where compute-specific concerns are meant to live:
 
 - Toil configuration
 - output handling
@@ -269,7 +271,7 @@ The workflow layer should not encode those concerns directly.
 Likewise, the compute payload layer should not need to know how the workflow was
 authored.
 
-That is why the payload layer stays small and declarative.
+That is why the payload layer stays focused and declarative.
 
 If you want the lower-level payload API in isolation, see
 [compute_payload_workflow](compute_payload_workflow.md).
@@ -282,18 +284,17 @@ The final step is submission:
 submit_compute_payload(compute_object, submit_url)
 ```
 
-The compute-slurm URL is supplied by the user:
+The compute service URL is supplied by the user in Python:
 
-```bash
-PYTHONPATH=src python examples/scripts/ichnaea_compact.py \
-  --submit-url http://127.0.0.1:7998/compute/
+```python
+SUBMIT_URL = "http://127.0.0.1:7998/compute/"
 ```
 
 This is the correct contract for an example client:
 
 - the script does not assume a fixed deployment endpoint
 - the user decides whether a real submission should occur
-- omitting `--submit-url` keeps the script in build-only mode
+- leaving `SUBMIT_URL = None` keeps the script in build-only mode
 
 That makes the script useful both as documentation and as a real client entry
 point.
@@ -314,16 +315,16 @@ The workflow can be compiled fully in memory before any submission occurs.
 ### Compute boundary
 
 The payload is constructed through `ComputeWorkflowPayload`, which validates the
-result against the checked-in compute-slurm schema.
+result against the checked-in compute schema.
 
-This means the trust model is incremental:
+This means validation is incremental:
 
 - first confirm the tool
 - then confirm the workflow
 - then confirm the payload
 - only then submit
 
-That is a much stronger model than assembling one large opaque object at the
+That is more reliable than assembling one large opaque object at the
 end.
 
 ## The verification-oriented sibling: `ichnaea_integrated.py`
@@ -376,7 +377,7 @@ That makes `ichnaea_integrated.py` the appropriate choice when:
 In other words:
 
 - use `ichnaea_compact.py` as the example to follow when creating your own
-  end-to-end Python workflow submission scripts for compute-slurm
+  end-to-end Python workflow submission scripts
 - use `ichnaea_integrated.py` when the same structure is needed but the CLT,
   compiled workflow artifacts, and final payload must also be written to disk
 
@@ -399,14 +400,14 @@ That order follows the actual transformation pipeline:
 ## Practical guidance
 
 Use `ichnaea_compact.py` as the example to follow when creating or adapting
-your own end-to-end compute-slurm submission scripts. Its structure is the
+your own end-to-end compute submission scripts. Its structure is the
 recommended baseline:
 
 - define the CLT in Python
 - convert it to a Sophios workflow
 - compile the workflow in memory
-- construct the compute-slurm payload from the compiled result
-- submit only when a concrete compute-slurm URL is supplied
+- construct the compute payload from the compiled result
+- submit only when a concrete compute service URL is supplied
 
 Use `ichnaea_integrated.py` when the same overall structure is required but the
 workflow must also produce explicit artifacts:
@@ -429,28 +430,24 @@ That keeps the investigation aligned with the actual system boundaries.
 Compact path:
 
 ```bash
-PYTHONPATH=src python examples/scripts/ichnaea_compact.py
-PYTHONPATH=src python examples/scripts/ichnaea_compact.py \
-  --submit-url http://127.0.0.1:7998/compute/
+python examples/scripts/ichnaea_compact.py
 ```
 
 Integrated path:
 
 ```bash
-PYTHONPATH=src python examples/scripts/ichnaea_integrated.py
-PYTHONPATH=src python examples/scripts/ichnaea_integrated.py \
-  --submit-url http://127.0.0.1:7998/compute/
+python examples/scripts/ichnaea_integrated.py
 ```
 
-The first integrated command writes the generated CLT, compiled workflow
-artifacts, and compute JSON without submission.
-The second performs the same steps and then submits the payload to
-compute-slurm.
+The integrated command writes the generated CLT, compiled workflow artifacts,
+and compute JSON without submission.
+To submit from either script, set `SUBMIT_URL` near the top of the file before
+running it.
 
 ## Summary
 
 `ichnaea_compact.py` is the canonical Sophios Python example for
-compute-slurm submission because it keeps the four layers of the system clear:
+compute submission because it keeps the four layers of the system clear:
 
 - CLT authoring
 - workflow composition
@@ -458,5 +455,5 @@ compute-slurm submission because it keeps the four layers of the system clear:
 - submission
 
 That clarity is the main value of the example.
-It makes the path from Python-authored tool to compute-slurm payload direct,
+It makes the path from Python-authored tool to compute payload direct,
 verifiable, and suitable for both documentation and real client use.

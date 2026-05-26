@@ -1,33 +1,32 @@
-from pathlib import Path
 import json
-from sophios.apis.python.api import Step, Workflow
+from pathlib import Path
+
+from sophios.apis.python.workflow import Step, Workflow
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ADAPTERS = REPO_ROOT / "cwl_adapters"
 
 
 def workflow() -> Workflow:
-    # step echo
-    touch = Step(clt_path='../../cwl_adapters/touch.cwl')
-    touch.filename = 'empty.txt'
-    append = Step(clt_path='../../cwl_adapters/append.cwl')
-    append.file = touch.file
-    append.str = 'Hello'
-    cat = Step(clt_path='../../cwl_adapters/cat.cwl')
-    cat.file = append.file
-    # arrange steps
-    steps = [touch, append, cat]
+    """Build a workflow and expose it as a compiled CWL JSON object."""
+    touch = Step(ADAPTERS / "touch.cwl")
+    touch.inputs.filename = "empty.txt"
 
-    # create workflow
-    filename = 'multistep1_toJson_pyapi_py'
-    wkflw = Workflow(steps, filename)
-    return wkflw
+    append = Step(ADAPTERS / "append.cwl")
+    append.inputs.file = touch.outputs.file
+    append.inputs.str = "Hello"
 
-# Do NOT .run() here
+    cat = Step(ADAPTERS / "cat.cwl")
+    cat.inputs.file = append.outputs.file
+
+    return Workflow([touch, append, cat], "multistep1_toJson_pyapi_py")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     multistep1 = workflow()
-    workflow_json = multistep1.get_cwl_workflow()  # .run() here inside main
-    fname = 'workflow.json'
-    paren_dir = Path(__file__).parent
-    with open(paren_dir / 'ground_truth_multistep1.json', 'r', encoding='utf-8') as file:
+    workflow_json = multistep1.get_cwl_workflow()
+    example_dir = Path(__file__).parent
+    with open(example_dir / "ground_truth_multistep1.json", "r", encoding="utf-8") as file:
         ground_truth = json.load(file)
     assert ground_truth == workflow_json

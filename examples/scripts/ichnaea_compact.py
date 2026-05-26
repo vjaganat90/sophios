@@ -1,17 +1,19 @@
-"""Canonical end-to-end example: cwl_builder -> Workflow -> compute payload."""
+"""Canonical end-to-end example: tool_builder -> Workflow -> compute payload."""
 
-from argparse import ArgumentParser
 import copy
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
-from sophios.apis.python.api import Workflow
+from sophios.apis.python.workflow import Step, Workflow
 from sophios.wic_types import Json
 
-from sophios.apis.python.cwl_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.compute_payload import ComputeWorkflowPayload, ComputeConfig, ToilConfig, OutputConfig, SlurmConfig
 from sophios.compute_submit import submit_compute_payload
+
+
+SUBMIT_URL: str | None = None
 
 
 def build_autoseg_CLT() -> CommandLineTool:
@@ -74,8 +76,8 @@ def workflow(input_dicts: Dict[str, str], workflow_name: str) -> Workflow:
     # =========== BUILD CLT ==========================
     autoseg_clt = build_autoseg_CLT()  # directly building the CLT in memory
     # =========== CREATE A STEP ======================
-    # converting the built CLT into a workflow step
-    autoseg = autoseg_clt.to_step(step_name='autoseg')
+    # build a step from the defined CLT
+    autoseg = Step(autoseg_clt, step_name='autoseg')
     # assign input values to the step
     autoseg.output = input_dicts['output_dir']
     autoseg.input = input_dicts['input_dir']
@@ -109,13 +111,6 @@ def create_compute_payload(workflow_id: str, cwl_workflow: Json, cwl_job_inputs:
 
 def main() -> int:
     """Build the workflow, create the compute payload, and optionally submit it."""
-    parser = ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--submit-url",
-        help="Optional compute create-workflow endpoint. If omitted, only build the payload in memory.",
-    )
-    args = parser.parse_args()
-
     # ========== INPUTS TO WORKFLOW ==================
     # The main directory constants
     inputs_dir = Path('/projects/collabs/mock_common/')
@@ -145,13 +140,13 @@ def main() -> int:
     compute_object = create_compute_payload(
         workflow_name, compiled_cwl_workflow, workflow_inputs)
 
-    if args.submit_url is None:
-        print("Built compute payload object in memory. Pass --submit-url to submit it.")
+    if SUBMIT_URL is None:
+        print("Built compute payload object in memory. Set SUBMIT_URL to submit it.")
         return 0
 
     # =========  SUBMIT TO COMPUTE ===================
     submission_status: int = submit_compute_payload(
-        compute_object, args.submit_url)
+        compute_object, SUBMIT_URL)
     return submission_status
 
 

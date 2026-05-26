@@ -1,0 +1,24 @@
+"""Reusable workflow interface example for the Sophios Python API."""
+
+from pathlib import Path
+
+from sophios.apis.python.workflow import Step, Workflow
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ADAPTERS = REPO_ROOT / "cwl_adapters"
+
+
+def workflow() -> Workflow:
+    """Build a workflow with a reusable input and a named output."""
+    echo = Step(ADAPTERS / "echo.cwl")
+
+    workflow_ = Workflow([echo], "reusable_interface_pyapi_py")
+    echo.inputs.message = workflow_.inputs.message
+    workflow_.outputs.stdout = echo.outputs.stdout
+
+    return workflow_
+
+
+if __name__ == "__main__":
+    workflow().write_artifacts()

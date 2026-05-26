@@ -1,4 +1,4 @@
-"""Private dataclasses for the CWL builder."""
+"""Private dataclasses for the Tool Builder."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields as dataclass_fields
 from typing import Any, ClassVar, Mapping, TypeVar, cast
 
-from ._cwl_builder_support import (
+from ._tool_builder_support import (
     _SUPPORT,
     _apply_required,
     _basename_expression,
@@ -52,8 +52,9 @@ class SecondaryFile:
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> str | dict[str, Any]:
-        if self.required is None and not self.extra and isinstance(self.pattern, str):
-            return self.pattern
+        match self.pattern, self.required, self.extra:
+            case str() as pattern, None, extra if not extra:
+                return pattern
         payload = {"pattern": _render(self.pattern)}
         _merge_if_set(payload, "required", self.required)
         payload.update(_render(self.extra))
@@ -164,8 +165,9 @@ class CommandArgument:
         binding_dict = {} if self.binding is None else self.binding.to_dict()
         if self.value is None and not binding_dict and not self.extra:
             return ""
-        if self.value is not None and not binding_dict and not self.extra and isinstance(self.value, str):
-            return str(self.value)
+        match self.value, binding_dict, self.extra:
+            case str() as value, binding, extra if not binding and not extra:
+                return value
         payload = dict(binding_dict)
         _merge_if_set(payload, "valueFrom", self.value)
         payload.update(_render(self.extra))

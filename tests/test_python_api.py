@@ -13,12 +13,14 @@ import yaml
 import sophios
 import sophios.apis.python as python_api_package
 import sophios.apis.python._workflow_runtime as python_runtime
+import sophios.apis.python.workflow as python_workflow
+import sophios.main as main_module
 import sophios.plugins
 import sophios.run_local as run_local
 from sophios import input_output as io
 from sophios import utils, utils_cwl
-from sophios.apis.python.cwl_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.apis.python.api import InvalidLinkError, Step, Workflow
+from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.apis.python.workflow import InvalidLinkError, Step, Workflow
 from sophios.compute_payload import ComputeConfig, ComputeWorkflowPayload, OutputConfig
 from sophios.python_cwl_adapter import import_python_file
 from sophios.schemas import wic_schema
@@ -73,15 +75,15 @@ def _step_registry_injected(tool_registry: Tools) -> Iterator[None]:
     Yields:
         Iterator[None]: Context where imported scripts see the patched ``Step``.
     """
-    from sophios.apis.python import api  # pylint: disable=C0415:import-outside-toplevel
+    from sophios.apis.python import workflow  # pylint: disable=C0415:import-outside-toplevel
 
-    step_class = api.Step
+    step_class = workflow.Step
 
     def step_factory(*args: Any, **kwargs: Any) -> Any:
         kwargs.setdefault("tool_registry", tool_registry)
         return step_class(*args, **kwargs)
 
-    with patch.object(api, "Step", step_factory):
+    with patch.object(workflow, "Step", step_factory):
         yield
 
 
@@ -113,6 +115,31 @@ def test_explicit_step_ports_match_legacy_yaml() -> None:
 
 
 @pytest.mark.fast
+def test_linear_python_workflow_reuses_compiler_edge_inference() -> None:
+    touch = Step(_adapter("touch"))
+    touch.inputs.filename = "empty.txt"
+
+    append = Step(_adapter("append"))
+    append.inputs.str = "Hello"
+
+    cat = Step(_adapter("cat"))
+
+    workflow = Workflow([touch, append, cat], "wf")
+    workflow_yaml = workflow.yaml
+    assert "file" not in workflow_yaml["steps"][1]["in"]
+    assert "file" not in workflow_yaml["steps"][2]["in"]
+
+    compiled = workflow.get_cwl_workflow()
+
+    assert compiled["steps"][1]["in"]["file"] == "wf__step__1__touch/file"
+    assert compiled["steps"][2]["in"]["file"] == "wf__step__2__append/file"
+    assert compiled["yaml_inputs"] == {
+        "wf__step__1__touch___filename": "empty.txt",
+        "wf__step__2__append___str": "Hello",
+    }
+
+
+@pytest.mark.fast
 def test_in_memory_cwl_step_compiles_through_workflow_api() -> None:
     tool = (
         CommandLineTool(
@@ -135,8 +162,34 @@ def test_in_memory_cwl_step_compiles_through_workflow_api() -> None:
 
 
 @pytest.mark.fast
-def test_cwl_builder_step_bridge_supports_multistep_workflow() -> None:
-    emit_step = _emit_text_tool().to_step(step_name="emit_text")
+def test_step_constructor_accepts_tool_builder_command_line_tool() -> None:
+    tool = _emit_text_tool()
+
+    default_step = Step(tool)
+    renamed_step = Step(tool, step_name="say_hello")
+    renamed_step.inputs.message = "hello"
+
+    compiled = Workflow([renamed_step], "wf").get_cwl_workflow()
+
+    assert default_step.process_name == "emit_text"
+    assert default_step.clt_path.name == "emit_text.cwl"
+    assert renamed_step.process_name == "say_hello"
+    assert renamed_step.clt_path.name == "say_hello.cwl"
+    assert renamed_step.yaml["class"] == "CommandLineTool"
+    assert compiled["steps"][0]["id"].endswith("say_hello")
+    assert compiled["steps"][0]["run"]["class"] == "CommandLineTool"
+    assert compiled["steps"][0]["run"]["baseCommand"] == "echo"
+
+
+@pytest.mark.fast
+def test_step_constructor_rejects_config_path_for_in_memory_tool() -> None:
+    with pytest.raises(TypeError, match="config_path is only supported"):
+        Step(_emit_text_tool(), "config.yml")
+
+
+@pytest.mark.fast
+def test_tool_builder_step_bridge_supports_multistep_workflow() -> None:
+    emit_step = Step(_emit_text_tool(), step_name="emit_text")
     read_step = Step(_adapter("cat"))
 
     workflow = Workflow([emit_step, read_step], "builder_and_pyapi_demo")
@@ -156,7 +209,7 @@ def test_cwl_builder_step_bridge_supports_multistep_workflow() -> None:
 
 @pytest.mark.fast
 def test_compute_payload_accepts_compiled_python_workflow() -> None:
-    emit_step = _emit_text_tool().to_step(step_name="emit_text")
+    emit_step = Step(_emit_text_tool(), step_name="emit_text")
     emit_step.inputs.message = "hello from compute"
 
     workflow = Workflow([emit_step], "compute_payload_workflow_demo")
@@ -263,6 +316,122 @@ def test_incompatible_step_link_raises_invalid_link_error() -> None:
 
 
 @pytest.mark.fast
+def test_explicit_python_api_bindings_accept_cwl_any() -> None:
+    array_indices = Step(_adapter("array_indices"))
+    array_indices.inputs.input_array = ["hello world", "not", "what world?"]
+    array_indices.inputs.input_indices = [0, 2]
+
+    echo = Step(_adapter("echo_3"))
+    echo.inputs.message1 = array_indices.outputs.output_array
+    echo.inputs.message2 = array_indices.outputs.output_array
+    echo.inputs.message3 = "scalar"
+    echo.scatter_on(
+        echo.inputs.message1,
+        echo.inputs.message2,
+        method="flat_crossproduct",
+    )
+
+    workflow_yaml = Workflow([array_indices, echo], "wf").yaml
+    assert workflow_yaml["steps"][1]["scatter"] == ["message1", "message2"]
+    assert workflow_yaml["steps"][1]["scatterMethod"] == "flat_crossproduct"
+
+
+@pytest.mark.fast
+def test_workflow_write_artifacts_delegates_to_disk_compilation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = Workflow([], "wf")
+    sentinel = SimpleNamespace()
+    calls: dict[str, Any] = {}
+
+    def fake_compile_workflow(
+        workflow_arg: Workflow,
+        *,
+        write_to_disk: bool,
+        tool_registry: Tools | None,
+    ) -> SimpleNamespace:
+        calls["workflow"] = workflow_arg
+        calls["write_to_disk"] = write_to_disk
+        calls["tool_registry"] = tool_registry
+        return sentinel
+
+    monkeypatch.setattr(python_workflow, "_compile_workflow", fake_compile_workflow)
+
+    registry: Tools = {}
+    result = workflow.write_artifacts(tool_registry=registry)
+
+    assert result is sentinel
+    assert calls == {
+        "workflow": workflow,
+        "write_to_disk": True,
+        "tool_registry": registry,
+    }
+
+
+@pytest.mark.fast
+def test_workflow_write_wic_exports_source_workflow_with_inferred_edges(tmp_path: Path) -> None:
+    touch = Step(_adapter("touch"))
+    touch.inputs.filename = "empty.txt"
+
+    append = Step(_adapter("append"))
+    append.inputs.str = "Hello"
+
+    workflow = Workflow([touch, append], "linear_export")
+    output_path = workflow.write_wic(tmp_path / "linear_export.wic")
+
+    assert output_path == tmp_path / "linear_export.wic"
+    exported = yaml.safe_load(output_path.read_text(encoding="utf-8"))
+    assert exported == workflow.yaml
+    assert "file" not in exported["steps"][1]["in"]
+
+
+@pytest.mark.fast
+def test_workflow_to_wic_matches_export_text(tmp_path: Path) -> None:
+    echo = Step(_adapter("echo"))
+    echo.inputs.message = "hello"
+    workflow = Workflow([echo], "hello_export")
+
+    output_path = workflow.write_wic(tmp_path)
+
+    assert output_path == tmp_path / "hello_export.wic"
+    assert output_path.read_text(encoding="utf-8") == workflow.to_wic()
+
+
+@pytest.mark.fast
+def test_workflow_write_wic_rejects_non_wic_file_extension(tmp_path: Path) -> None:
+    workflow = Workflow([], "wf")
+
+    with pytest.raises(ValueError, match=r"\.wic file or a directory"):
+        workflow.write_wic(tmp_path / "workflow.yaml")
+
+
+@pytest.mark.fast
+def test_workflow_write_artifacts_does_not_emit_intermediate_wic_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    echo = Step(_adapter("echo"))
+    echo.inputs.message = "hello"
+
+    Workflow([echo], "hello_artifacts").write_artifacts()
+
+    assert not list((tmp_path / "autogenerated").rglob("*.wic"))
+
+
+@pytest.mark.fast
+def test_intermediate_wic_writer_requires_explicit_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    disabled = main_module._write_intermediate_wic("wf", "tree_raw", {"steps": []}, enabled=False)
+    enabled = main_module._write_intermediate_wic("wf", "tree_raw", {"steps": []}, enabled=True)
+
+    assert disabled is None
+    assert enabled == Path("autogenerated") / "wf_tree_raw.wic"
+    assert list((tmp_path / "autogenerated").glob("*.wic")) == [tmp_path / enabled]
+
+
+@pytest.mark.fast
 def test_workflow_outputs_are_serialized_with_type_and_source() -> None:
     touch = Step(_adapter("touch"))
     touch.inputs.filename = "empty.txt"
@@ -337,9 +506,19 @@ def test_scatter_rejects_unbound_foreign_or_scalar_inputs() -> None:
 
 @pytest.mark.fast
 def test_top_level_python_api_exports_only_user_facing_names() -> None:
+    assert not hasattr(python_api_package, "CWL" + "BuilderValidationError")
     assert not hasattr(python_api_package, "WorkflowInputReference")
     assert not hasattr(python_api_package, "set_input_Step_Workflow")
     assert not hasattr(python_api_package, "extract_tools_paths_NONPORTABLE")
+
+
+@pytest.mark.fast
+def test_legacy_python_api_module_reexports_workflow_surface() -> None:
+    import sophios.apis.python.api as legacy_api  # pylint: disable=import-outside-toplevel
+
+    assert legacy_api.Step is Step
+    assert legacy_api.Workflow is Workflow
+    assert legacy_api.InvalidLinkError is InvalidLinkError
 
 
 @pytest.mark.fast
@@ -411,7 +590,7 @@ def test_workflow_run_uses_basepath_for_docker_extract(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    example_path = REPO_ROOT / "examples" / "scripts" / "cwl_builder_workflow.py"
+    example_path = REPO_ROOT / "examples" / "scripts" / "tool_builder_workflow.py"
     module = import_python_file(example_path.stem, example_path.resolve())
     workflow = module.build_workflow("hello from test")
     calls: dict[str, list[tuple[Any, ...]]] = {"verify": [], "extract": []}
@@ -442,13 +621,74 @@ def test_workflow_run_uses_basepath_for_docker_extract(
 
     assert calls["verify"] == [("docker", False)]
     assert calls["extract"] == [
-        ("docker", str(Path.cwd()), tmp_path / "cwl_builder_workflow_demo.cwl")]
+        ("docker", str(Path.cwd()), tmp_path / "tool_builder_workflow_demo.cwl")]
+
+
+@pytest.mark.fast
+def test_workflow_run_does_not_forward_python_run_flags_to_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    touch = Step(_adapter("touch"))
+    touch.inputs.filename = "empty.txt"
+    workflow = Workflow([touch], "runtime_flag_demo")
+
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        python_runtime.pc,
+        "find_and_create_output_dirs",
+        lambda rose_tree: None,
+    )
+    monkeypatch.setattr(
+        python_runtime.pc,
+        "verify_container_engine_config",
+        lambda container, ignore: None,
+    )
+    monkeypatch.setattr(
+        python_runtime.pc,
+        "cwl_docker_extract",
+        lambda container, pull_dir, cwl_path: None,
+    )
+
+    def fake_run_local(
+        run_args_dict: dict[str, str],
+        use_subprocess: bool,
+        passthrough_args: list[str],
+        workflow_name: str,
+        basepath: str,
+        user_env_vars: dict[str, str] | None = None,
+    ) -> int:
+        captured["run_args_dict"] = run_args_dict
+        captured["use_subprocess"] = use_subprocess
+        captured["passthrough_args"] = passthrough_args
+        captured["workflow_name"] = workflow_name
+        captured["basepath"] = basepath
+        captured["user_env_vars"] = user_env_vars
+        return 0
+
+    monkeypatch.setattr(python_runtime.rl, "run_local", fake_run_local)
+
+    workflow.run(
+        basepath=str(tmp_path),
+        run_args_dict={
+            "copy_output_files": "yes",
+            "generate_run_script": "yes",
+            "logLevel": "INFO",
+        },
+    )
+
+    assert captured["passthrough_args"] == ["--logLevel", "INFO"]
+    assert captured["run_args_dict"]["copy_output_files"] == "yes"
+    assert captured["run_args_dict"]["generate_run_script"] == "yes"
+    assert captured["workflow_name"] == "runtime_flag_demo"
+    assert captured["basepath"] == str(tmp_path)
 
 
 @pytest.mark.fast
 def test_compile_python_workflows() -> None:
     """Import and compile all auto-discovered Python workflow scripts."""
-    from sophios.apis.python import api  # pylint: disable=C0415:import-outside-toplevel
+    from sophios.apis.python import workflow  # pylint: disable=C0415:import-outside-toplevel
 
     global_config = _load_global_config()
     tools_cwl = sophios.plugins.get_tools_cwl(global_config)
@@ -459,10 +699,10 @@ def test_compile_python_workflows() -> None:
         try:
             with _step_registry_injected(tools_cwl):
                 module = import_python_file(path_stem, path)
-                retval: api.Workflow = module.workflow()
+                retval: workflow.Workflow = module.workflow()
 
             retval.compile()
-            retval.write_ast_to_disk(path.parent)
+            retval.write_wic(path.parent, inline_subworkflows=False)
             generated_workflows.extend(
                 path.parent / f"{wf.process_name}.wic" for wf in retval.flatten_subworkflows())
 
@@ -472,7 +712,7 @@ def test_compile_python_workflows() -> None:
                 with open(config_ci, mode="r", encoding="utf-8") as r:
                     json_contents = json.load(r)
             run_blacklist: list[str] = json_contents.get("run_blacklist", [])
-            subworkflows: list[api.Workflow] = retval.flatten_subworkflows()[
+            subworkflows: list[workflow.Workflow] = retval.flatten_subworkflows()[
                 1:]
             run_blacklist += [wf.process_name for wf in subworkflows]
             json_contents["run_blacklist"] = run_blacklist

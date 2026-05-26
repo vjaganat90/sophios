@@ -1,4 +1,4 @@
-"""Python workflow and CWL builder API exports."""
+"""Python workflow and Tool Builder API exports."""
 
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
@@ -20,8 +20,8 @@ _ERROR_EXPORTS = {
     "MissingRequiredValueError",
 }
 
-_CWL_BUILDER_EXPORTS = {
-    "CWLBuilderValidationError",
+_TOOL_BUILDER_EXPORTS = {
+    "ToolBuilderValidationError",
     "CommandArgument",
     "CommandLineBinding",
     "CommandLineTool",
@@ -62,7 +62,7 @@ _CWL_BUILDER_EXPORTS = {
     "validate_cwl_document",
 }
 
-__all__ = sorted(_API_EXPORTS | _ERROR_EXPORTS | _CWL_BUILDER_EXPORTS)
+__all__ = sorted(_API_EXPORTS | _ERROR_EXPORTS | _TOOL_BUILDER_EXPORTS)
 
 
 if TYPE_CHECKING:
@@ -73,12 +73,12 @@ if TYPE_CHECKING:
         InvalidStepError,
         MissingRequiredValueError,
     )
-    from .api import (
+    from .workflow import (
         Step,
         Workflow,
     )
-    from .cwl_builder import (
-        CWLBuilderValidationError,
+    from .tool_builder import (
+        ToolBuilderValidationError,
         CommandArgument,
         CommandLineBinding,
         CommandLineTool,
@@ -125,10 +125,10 @@ def __getattr__(name: str) -> Any:
         module = import_module("._errors", __name__)
         return getattr(module, name)
     if name in _API_EXPORTS:
-        module = import_module(".api", __name__)
+        module = import_module(".workflow", __name__)
         return getattr(module, name)
-    if name in _CWL_BUILDER_EXPORTS:
-        module = import_module(".cwl_builder", __name__)
+    if name in _TOOL_BUILDER_EXPORTS:
+        module = import_module(".tool_builder", __name__)
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
