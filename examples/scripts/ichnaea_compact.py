@@ -1,16 +1,20 @@
-"""Canonical end-to-end example: tool_builder -> Workflow -> compute payload."""
+"""Canonical end-to-end example: tool_builder -> Workflow -> compute request."""
 
-import copy
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
-from sophios.apis.python.workflow import Step, Workflow
-from sophios.wic_types import Json
+from sophios.apis.python.workflow import CompiledWorkflow, Step, Workflow
 
 from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.compute_payload import ComputeWorkflowPayload, ComputeConfig, ToilConfig, OutputConfig, SlurmConfig
-from sophios.compute_submit import submit_compute_payload
+from sophios.compute_request import (
+    ComputeExecutionConfig,
+    ComputeOutputConfig,
+    ComputeRequest,
+    SlurmJobConfig,
+    submit_compute_request,
+    ToilRuntimeConfig,
+)
 
 
 SUBMIT_URL: str | None = None
@@ -91,26 +95,21 @@ def workflow(input_dicts: Dict[str, str], workflow_name: str) -> Workflow:
     return wkflw
 
 
-def create_compute_payload(workflow_id: str, cwl_workflow: Json, cwl_job_inputs: Json) -> ComputeWorkflowPayload:
-    """Returns a compute payload object"""
-    # =========== BUILD COMPUTE PAYLOAD OBJECT =======
-    # Build the compute payload object here
-    compute_object = ComputeWorkflowPayload(
+def create_compute_request(workflow_id: str, compiled_workflow: CompiledWorkflow) -> ComputeRequest:
+    """Return a compute request object for the compiled workflow."""
+    return ComputeRequest.from_compiled(
+        compiled_workflow,
         workflow_id=workflow_id,
-        cwl_workflow=cwl_workflow,
-        cwl_job_inputs=cwl_job_inputs,
-        compute_config=ComputeConfig(
-            toil=ToilConfig(log_level="INFO"),
-            output=OutputConfig.workflow_declared(),
-            slurm=SlurmConfig(partition="normal_gpu", cpus_per_task=4)
-        )
+        compute_config=ComputeExecutionConfig(
+            toil=ToilRuntimeConfig(log_level="INFO"),
+            output=ComputeOutputConfig.workflow_declared(),
+            slurm=SlurmJobConfig(partition="normal_gpu", cpus_per_task=4),
+        ),
     )
-    # =========== RETURN COMPUTE PAYLOAD OBJECT ======
-    return compute_object
 
 
 def main() -> int:
-    """Build the workflow, create the compute payload, and optionally submit it."""
+    """Build the workflow, create the compute request, and optionally submit it."""
     # ========== INPUTS TO WORKFLOW ==================
     # The main directory constants
     inputs_dir = Path('/projects/collabs/mock_common/')
@@ -121,32 +120,25 @@ def main() -> int:
 
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")
-    workflow_json = autoseg_workflow.get_cwl_workflow()
+    compiled_workflow = autoseg_workflow.compile_to_cwl()
 
     # ========== COMPUTE INPUT =======================
     # workflow Name
-    workflow_name = workflow_json['name']
+    workflow_name = compiled_workflow.name
     # adjust workflow name/id to distinguish after submit using a timestamp
     workflow_name = workflow_name + '__' + \
         datetime.now().strftime('%Y_%m_%d_%H.%M.%S') + '__'
-    # workflow Inputs
-    workflow_inputs = copy.deepcopy(workflow_json['yaml_inputs'])
-    # workflow CWL
-    workflow_json.pop('name')
-    workflow_json.pop('yaml_inputs')
-    compiled_cwl_workflow = copy.deepcopy(workflow_json)
 
     # ========== CONSTRUCT COMPUTE OBJECT ============
-    compute_object = create_compute_payload(
-        workflow_name, compiled_cwl_workflow, workflow_inputs)
+    compute_request = create_compute_request(workflow_name, compiled_workflow)
 
     if SUBMIT_URL is None:
-        print("Built compute payload object in memory. Set SUBMIT_URL to submit it.")
+        print("Built compute request object in memory. Set SUBMIT_URL to submit it.")
         return 0
 
     # =========  SUBMIT TO COMPUTE ===================
-    submission_status: int = submit_compute_payload(
-        compute_object, SUBMIT_URL)
+    submission_status: int = submit_compute_request(
+        compute_request, SUBMIT_URL)
     return submission_status
 
 

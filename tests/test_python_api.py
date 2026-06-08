@@ -18,15 +18,17 @@ import sophios.apis.python.workflow as python_workflow
 import sophios.main as main_module
 import sophios.plugins
 import sophios.run_local as run_local
+import sophios.submit as submit_module
 from sophios import input_output as io
 from sophios import utils, utils_cwl
 from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.apis.python.workflow import InvalidLinkError, Step, Workflow
-from sophios.compute_payload import ComputeConfig, ComputeWorkflowPayload, OutputConfig
+from sophios.apis.python.workflow import CompiledWorkflow, InvalidLinkError, InvalidStepError, Step, Workflow
+from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest
 from sophios.python_cwl_adapter import import_python_file
 from sophios.schemas import wic_schema
+from sophios.submit import submit
 from sophios.utils_yaml import wic_loader
-from sophios.wic_types import Json, Tools
+from sophios.wic_types import Json, RawJson, Tools
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -130,7 +132,7 @@ def test_linear_python_workflow_reuses_compiler_edge_inference() -> None:
     assert "file" not in workflow_yaml["steps"][1]["in"]
     assert "file" not in workflow_yaml["steps"][2]["in"]
 
-    compiled = workflow.get_cwl_workflow()
+    compiled = workflow.compile_to_cwl().to_dict()
 
     assert compiled["steps"][1]["in"]["file"] == "wf__step__1__touch/file"
     assert compiled["steps"][2]["in"]["file"] == "wf__step__2__append/file"
@@ -154,12 +156,12 @@ def test_in_memory_cwl_step_compiles_through_workflow_api() -> None:
     step = Step.from_cwl(tool.to_dict(), process_name="say_hello")
     step.inputs.message = "hello"
 
-    compiled = Workflow([step], "wf").get_cwl_workflow()
+    compiled = Workflow([step], "wf").compile_to_cwl()
 
-    assert compiled["class"] == "Workflow"
-    assert compiled["steps"][0]["id"].endswith("say_hello")
-    assert compiled["steps"][0]["run"]["class"] == "CommandLineTool"
-    assert compiled["steps"][0]["run"]["baseCommand"] == "echo"
+    assert compiled.cwl_workflow["class"] == "Workflow"
+    assert compiled.cwl_workflow["steps"][0]["id"].endswith("say_hello")
+    assert compiled.cwl_workflow["steps"][0]["run"]["class"] == "CommandLineTool"
+    assert compiled.cwl_workflow["steps"][0]["run"]["baseCommand"] == "echo"
 
 
 @pytest.mark.fast
@@ -170,22 +172,22 @@ def test_step_constructor_accepts_tool_builder_command_line_tool() -> None:
     renamed_step = Step(tool, step_name="say_hello")
     renamed_step.inputs.message = "hello"
 
-    compiled = Workflow([renamed_step], "wf").get_cwl_workflow()
+    compiled = Workflow([renamed_step], "wf").compile_to_cwl()
 
     assert default_step.process_name == "emit_text"
     assert default_step.clt_path.name == "emit_text.cwl"
     assert renamed_step.process_name == "say_hello"
     assert renamed_step.clt_path.name == "say_hello.cwl"
     assert renamed_step.yaml["class"] == "CommandLineTool"
-    assert compiled["steps"][0]["id"].endswith("say_hello")
-    assert compiled["steps"][0]["run"]["class"] == "CommandLineTool"
-    assert compiled["steps"][0]["run"]["baseCommand"] == "echo"
+    assert compiled.cwl_workflow["steps"][0]["id"].endswith("say_hello")
+    assert compiled.cwl_workflow["steps"][0]["run"]["class"] == "CommandLineTool"
+    assert compiled.cwl_workflow["steps"][0]["run"]["baseCommand"] == "echo"
 
 
 @pytest.mark.fast
 def test_step_constructor_rejects_config_path_for_in_memory_tool() -> None:
     with pytest.raises(TypeError, match="config_path is only supported"):
-        Step(_emit_text_tool(), "config.yml")
+        Step(_emit_text_tool(), "config.yml")  # type: ignore[call-overload]
 
 
 @pytest.mark.fast
@@ -194,45 +196,127 @@ def test_tool_builder_step_bridge_supports_multistep_workflow() -> None:
     read_step = Step(_adapter("cat"))
 
     workflow = Workflow([emit_step, read_step], "builder_and_pyapi_demo")
-    workflow.add_input("message", cwl.string)
-    emit_step.inputs.message = workflow.inputs.message
+    emit_step.inputs.message = workflow.inputs.message.as_type(cwl.string)
     read_step.inputs.file = emit_step.outputs.file
     workflow.outputs.result = read_step.outputs.output
 
-    compiled = workflow.get_cwl_workflow()
+    compiled = workflow.compile_to_cwl()
 
-    assert compiled["class"] == "Workflow"
-    step_ids = [step["id"] for step in compiled["steps"]]
+    assert compiled.cwl_workflow["class"] == "Workflow"
+    step_ids = [step["id"] for step in compiled.cwl_workflow["steps"]]
     assert step_ids[0].endswith("emit_text")
     assert step_ids[1].endswith("cat")
-    assert compiled["outputs"]["result"]["outputSource"] == f"{step_ids[1]}/output"
+    assert compiled.cwl_workflow["outputs"]["result"]["outputSource"] == f"{step_ids[1]}/output"
 
 
 @pytest.mark.fast
-def test_compute_payload_accepts_compiled_python_workflow() -> None:
+def test_port_namespaces_do_not_accept_string_indexing() -> None:
+    step = Step(_emit_text_tool())
+
+    with pytest.raises(TypeError, match="integer indexing only"):
+        step.inputs["message"]  # type: ignore[index]
+
+    with pytest.raises(TypeError, match="integer indexing only"):
+        step.outputs["file"]  # type: ignore[index]
+
+
+@pytest.mark.fast
+def test_compute_request_accepts_compiled_python_workflow() -> None:
     emit_step = Step(_emit_text_tool(), step_name="emit_text")
     emit_step.inputs.message = "hello from compute"
 
-    workflow = Workflow([emit_step], "compute_payload_workflow_demo")
-    compiled = workflow.get_cwl_workflow()
-    payload = ComputeWorkflowPayload(
-        workflow_id="compute_payload_workflow_demo",
-        cwl_workflow={
-            key: value
-            for key, value in compiled.items()
-            if key not in {"name", "yaml_inputs"}
-        },
-        cwl_job_inputs=dict(compiled["yaml_inputs"]),
-        compute_config=ComputeConfig(output=OutputConfig.workflow_declared()),
-    ).get_compute_payload()
+    workflow = Workflow([emit_step], "compute_request_workflow_demo")
+    compiled = workflow.compile_to_cwl()
+    request = ComputeRequest.from_compiled(
+        compiled,
+        workflow_id="compute_request_workflow_demo",
+        compute_config=ComputeExecutionConfig(output=ComputeOutputConfig.workflow_declared()),
+    )
+    request_mapping = request.to_mapping()
+    request_json = request.to_json()
 
-    assert payload["id"] == "compute_payload_workflow_demo"
-    assert payload["cwlWorkflow"]["class"] == "Workflow"
-    assert payload["cwlWorkflow"]["steps"][0]["run"]["class"] == "CommandLineTool"
-    assert payload["computeConfig"]["outputConfig"]["mode"] == "workflowDeclared"
-    input_key = next(iter(payload["cwlJobInputs"]))
+    assert isinstance(request_json, str)
+    assert json.loads(request_json) == request_mapping
+    assert request_mapping["id"] == "compute_request_workflow_demo"
+    assert request_mapping["cwlWorkflow"]["class"] == "Workflow"
+    assert request_mapping["cwlWorkflow"]["steps"][0]["run"]["class"] == "CommandLineTool"
+    assert request_mapping["computeConfig"]["outputConfig"]["mode"] == "workflowDeclared"
+    input_key = next(iter(request_mapping["cwlJobInputs"]))
     assert input_key.endswith("emit_text___message")
-    assert payload["cwlJobInputs"][input_key] == "hello from compute"
+    assert request_mapping["cwlJobInputs"][input_key] == "hello from compute"
+
+
+@pytest.mark.fast
+def test_submit_is_low_level_raw_json_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    posted: dict[str, Any] = {}
+
+    class FakeResponse:
+        ok = True
+        status_code = 200
+        text = ""
+
+        def __init__(self, body: Json) -> None:
+            self._body = body
+
+        def json(self) -> Json:
+            return self._body
+
+    class FakeSession:
+        def __enter__(self) -> "FakeSession":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def post(
+            self,
+            url: str,
+            *,
+            data: str,
+            headers: dict[str, str],
+            timeout: tuple[int, int],
+        ) -> FakeResponse:
+            posted.update(
+                {
+                    "url": url,
+                    "data": data,
+                    "headers": headers,
+                    "timeout": timeout,
+                }
+            )
+            return FakeResponse({"ok": True})
+
+        def get(self, url: str, *, timeout: tuple[int, int]) -> FakeResponse:
+            del timeout
+            posted.setdefault("get_urls", []).append(url)
+            return FakeResponse({"status": "COMPLETED"})
+
+    monkeypatch.setattr(submit_module.requests, "Session", FakeSession)
+
+    request_json: RawJson = '{"id": "workflow-1", "value": true}'
+
+    assert submit(request_json, "http://example.test/compute", poll_interval_seconds=0) == 0
+    assert posted["url"] == "http://example.test/compute/"
+    assert posted["data"] == request_json
+    assert posted["headers"] == {"Content-Type": "application/json"}
+    assert posted["get_urls"] == ["http://example.test/compute/workflow-1/status/"]
+
+    with pytest.raises(TypeError, match="serialized JSON text"):
+        submit({"id": "workflow-1"}, "http://example.test/compute")  # type: ignore[arg-type]
+
+
+@pytest.mark.fast
+def test_workflow_compile_boundary_hides_compiler_info() -> None:
+    emit_step = Step(_emit_text_tool(), step_name="emit_text")
+    emit_step.inputs.message = "hello"
+    workflow = Workflow([emit_step], "compile_boundary_demo")
+
+    compiled = workflow.compile()
+    compiler_info = workflow._compile()  # pylint: disable=protected-access
+
+    assert isinstance(compiled, CompiledWorkflow)
+    assert compiled.cwl_workflow["class"] == "Workflow"
+    assert hasattr(compiler_info, "rose")
 
 
 @pytest.mark.fast
@@ -317,6 +401,32 @@ def test_incompatible_step_link_raises_invalid_link_error() -> None:
 
 
 @pytest.mark.fast
+def test_explicit_links_must_point_to_prior_steps_in_workflow_list() -> None:
+    touch = Step(_adapter("touch"))
+    touch.inputs.filename = "empty.txt"
+
+    append = Step(_adapter("append"))
+    append.inputs.file = touch.outputs.file
+    append.inputs.str = "Hello"
+
+    with pytest.raises(InvalidStepError, match="must appear earlier"):
+        Workflow([append, touch], "wf").compile_to_cwl()
+
+
+@pytest.mark.fast
+def test_explicit_links_must_point_to_workflow_children() -> None:
+    external_touch = Step(_adapter("touch"))
+    external_touch.inputs.filename = "empty.txt"
+
+    append = Step(_adapter("append"))
+    append.inputs.file = external_touch.outputs.file
+    append.inputs.str = "Hello"
+
+    with pytest.raises(InvalidStepError, match="not a child"):
+        Workflow([append], "wf").compile_to_cwl()
+
+
+@pytest.mark.fast
 def test_explicit_python_api_bindings_accept_cwl_any() -> None:
     array_indices = Step(_adapter("array_indices"))
     array_indices.inputs.input_array = ["hello world", "not", "what world?"]
@@ -342,21 +452,21 @@ def test_workflow_write_artifacts_delegates_to_disk_compilation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = Workflow([], "wf")
-    sentinel = SimpleNamespace()
+    sentinel = CompiledWorkflow("wf", {"class": "Workflow"}, {})
     calls: dict[str, Any] = {}
 
-    def fake_compile_workflow(
+    def fake_compiled_workflow(
         workflow_arg: Workflow,
         *,
         write_to_disk: bool,
         tool_registry: Tools | None,
-    ) -> SimpleNamespace:
+    ) -> CompiledWorkflow:
         calls["workflow"] = workflow_arg
         calls["write_to_disk"] = write_to_disk
         calls["tool_registry"] = tool_registry
         return sentinel
 
-    monkeypatch.setattr(python_workflow, "_compile_workflow", fake_compile_workflow)
+    monkeypatch.setattr(python_workflow, "_compiled_workflow", fake_compiled_workflow)
 
     registry: Tools = {}
     result = workflow.write_artifacts(tool_registry=registry)
@@ -506,11 +616,20 @@ def test_scatter_rejects_unbound_foreign_or_scalar_inputs() -> None:
 
 
 @pytest.mark.fast
-def test_top_level_python_api_exports_only_user_facing_names() -> None:
+def test_top_level_python_api_exposes_concrete_modules_only() -> None:
+    assert hasattr(python_api_package, "workflow")
+    assert hasattr(python_api_package, "tool_builder")
+    assert not hasattr(python_api_package, "Step")
+    assert not hasattr(python_api_package, "CommandLineTool")
     assert not hasattr(python_api_package, "CWL" + "BuilderValidationError")
     assert not hasattr(python_api_package, "WorkflowInputReference")
     assert not hasattr(python_api_package, "set_input_Step_Workflow")
     assert not hasattr(python_api_package, "extract_tools_paths_NONPORTABLE")
+
+
+@pytest.mark.fast
+def test_workflow_requires_steps_in_constructor() -> None:
+    assert "append" not in Workflow.__dict__
 
 
 @pytest.mark.fast
@@ -581,6 +700,40 @@ def test_run_local_python_api_restores_environment_after_run(monkeypatch: pytest
     assert retval == 0
     assert seen_inside["value"] == "inside"
     assert sentinel_key not in os.environ
+
+
+@pytest.mark.fast
+def test_run_compute_does_not_apply_local_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    submitted: dict[str, Any] = {}
+
+    def fake_submit_compute_request(
+        request: ComputeRequest,
+        submit_url: str,
+        *,
+        log_path: Path,
+    ) -> int:
+        submitted["request"] = request
+        submitted["submit_url"] = submit_url
+        submitted["log_path"] = log_path
+        return 0
+
+    def fail_temporary_env(user_env: dict[str, str]) -> Iterator[dict[str, str]]:
+        del user_env
+        raise AssertionError("run_compute must not apply local environment variables")
+
+    monkeypatch.setattr(run_local, "temporary_env", fail_temporary_env)
+    monkeypatch.setattr(run_local.utils, "is_valid_url", lambda _url: True)
+    monkeypatch.setattr(run_local, "submit_compute_request", fake_submit_compute_request)
+
+    workflow: Json = {"class": "Workflow", "inputs": {}, "outputs": [], "steps": []}
+    workflow_inputs: Json = {}
+
+    assert run_local.run_compute("wf", workflow, workflow_inputs, "http://compute.test") == 0
+
+    assert submitted["request"].cwl_workflow == workflow
+    assert submitted["request"].cwl_job_inputs == workflow_inputs
+    assert submitted["submit_url"] == "http://compute.test"
+    assert str(submitted["log_path"]).startswith("compute_logs_wf__")
 
 
 @pytest.mark.fast
@@ -699,7 +852,7 @@ def test_compile_python_workflows() -> None:
                 module = import_python_file(path_stem, path)
                 retval: workflow.Workflow = module.workflow()
 
-            retval.compile()
+            retval.compile_to_cwl()
             retval.write_wic(path.parent, inline_subworkflows=False)
             generated_workflows.extend(
                 path.parent / f"{wf.process_name}.wic" for wf in retval.flatten_subworkflows())

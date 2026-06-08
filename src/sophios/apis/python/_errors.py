@@ -5,10 +5,6 @@ class InvalidInputValueError(Exception):
     pass
 
 
-class MissingRequiredValueError(Exception):
-    pass
-
-
 class InvalidStepError(Exception):
     pass
 

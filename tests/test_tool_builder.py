@@ -5,10 +5,12 @@ import pytest
 import yaml
 
 import sophios.apis.python._tool_builder_support as tool_builder_support
+import sophios.apis.python.tool_builder as tool_builder_module
 from sophios.apis.python.tool_builder import (
     CommandLineTool,
     Dirent,
     Field,
+    Fields,
     Input,
     Inputs,
     Output,
@@ -25,14 +27,27 @@ def test_old_tool_builder_module_name_is_not_available() -> None:
         importlib.import_module("sophios.apis.python." + "cwl" + "_builder")
 
 
+@pytest.mark.fast
+def test_tool_builder_does_not_export_duplicate_aliases() -> None:
+    for removed_name in (
+        "array_type",
+        "enum_type",
+        "record_type",
+        "record_field",
+        "step_from_command_line_tool",
+    ):
+        assert not hasattr(tool_builder_module, removed_name)
+        assert removed_name not in tool_builder_module.__all__
+
+
 def _rich_tool() -> CommandLineTool:
     mode_type = cwl.enum("fast", "accurate", name="Mode")
     settings_type = cwl.record(
-        {
-            "threads": Field(cwl.int),
-            "preset": Field(mode_type),
-            "tags": Field.array(cwl.string),
-        },
+        Fields(
+            threads=Field(cwl.int),
+            preset=Field(mode_type),
+            tags=Field.array(cwl.string),
+        ),
         name="Settings",
     )
     inputs = Inputs(
@@ -71,6 +86,29 @@ def _rich_tool() -> CommandLineTool:
 def test_tool_builder_requires_structural_core() -> None:
     with pytest.raises(TypeError):
         CommandLineTool("missing-inputs")  # type: ignore[call-arg]
+
+
+@pytest.mark.fast
+def test_tool_builder_names_are_python_identifiers() -> None:
+    with pytest.raises(ValueError, match="valid Python identifier"):
+        Inputs(**{"input-file": Input(cwl.file)})
+
+    with pytest.raises(ValueError, match="valid Python identifier"):
+        Fields(**{"class": Field(cwl.string)})
+
+
+@pytest.mark.fast
+def test_structured_port_references_do_not_accept_raw_strings() -> None:
+    with pytest.raises(TypeError, match="named Input/Output object"):
+        Output(cwl.file, from_input="output")
+
+    tool = CommandLineTool(
+        "demo",
+        Inputs(input=Input(cwl.file)),
+        Outputs(output=Output(cwl.file, glob="out.txt")),
+    )
+    with pytest.raises(TypeError, match="named Input/Output object"):
+        tool.stage("input")
 
 
 @pytest.mark.fast

@@ -32,7 +32,7 @@ If you only need to build a single standalone CLT, start with [tool_builder_sam3
 
 If you already have checked-in `.cwl` tools and only need to compose them, start with the [Python Workflow API](userguide.md).
 
-If your next step is compute submission rather than local execution, continue with [ichnaea_compact_compute](ichnaea_compact_compute.md) for the larger end-to-end example or [compute_payload_workflow](compute_payload_workflow.md) for the lower-level compute payload API.
+If your next step is compute submission rather than local execution, continue with [ichnaea_compact_compute](ichnaea_compact_compute.md) for the larger end-to-end example or [compute_request_workflow](compute_request_workflow.md) for the lower-level compute request API.
 
 ## Mental model
 
@@ -280,7 +280,7 @@ That tells you:
 
 ### 2. Workflow compilation
 
-`workflow.compile(...)` checks that the generated step can participate in the normal Sophios compilation path.
+`workflow.compile_to_cwl()` checks that the generated step can participate in the normal Sophios compilation path.
 
 That tells you:
 
@@ -299,7 +299,7 @@ For day-to-day development, this sequence tends to work well:
 2. call `tool.validate()`
 3. build the step with `Step(tool, step_name=...)`
 4. wire it into a `Workflow(...)`
-5. call `workflow.compile(...)`
+5. call `workflow.compile_to_cwl()`
 6. only then move on to full execution
 
 That keeps failures close to the layer that caused them.

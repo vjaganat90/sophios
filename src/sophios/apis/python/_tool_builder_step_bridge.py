@@ -23,7 +23,7 @@ class _CommandLineToolLike(Protocol):  # pylint: disable=too-few-public-methods
         """Render the CLT to a plain CWL document."""
 
 
-def step_from_command_line_tool(
+def _command_line_tool_to_step(
     tool: _CommandLineToolLike,
     *,
     step_name: str | None = None,

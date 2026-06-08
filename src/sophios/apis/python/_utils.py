@@ -1,5 +1,6 @@
 """Internal helpers for the Python API."""
 
+import keyword
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,13 @@ from ._types import CWLAtomicType
 def normalize_parameter_name(cwl_id: str) -> str:
     """Return the local parameter name from a CWL id."""
     return cwl_id.split("#")[-1]
+
+
+def validate_python_identifier_name(name: str, *, context: str = "parameter name") -> str:
+    """Validate that an API-facing name is a Python identifier."""
+    if not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name):
+        raise ValueError(f"{context} {name!r} must be a valid Python identifier")
+    return name
 
 
 def normalize_parameter_type(parameter_type: Any) -> tuple[Any, bool]:

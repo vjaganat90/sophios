@@ -36,7 +36,7 @@ def absolute_paths(config: Json, cachedir_path: Path) -> Json:
     """
     new_json: Json = {}
     for key, val in config.items():
-        if isinstance(val, Dict):
+        if isinstance(val, dict):
             new_val = absolute_paths(val, cachedir_path)
         else:
             new_val = val

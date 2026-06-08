@@ -24,7 +24,7 @@ The mental model is:
   inputs.
 - **Execution artifacts** are the generated CWL workflow, generated job inputs,
   exported `.wic` source documents, local runner outputs, optional debug
-  artifacts, and optional submission payloads.
+  artifacts, and optional submission requests.
 
 The typical Python-first path is:
 
@@ -156,7 +156,7 @@ turn into boilerplate:
 - exporting Python-authored workflows as `.wic` source files,
 - writing generated workflow artifacts to disk,
 - running workflows locally through a CWL runner,
-- preparing schema-validated payloads from compiled CWL for remote execution.
+- preparing schema-validated requests from compiled CWL for remote execution.
 
 The generated artifacts remain visible. Sophios is not a black-box execution
 wrapper; it is an authoring and compilation layer that keeps the compiled
@@ -245,10 +245,10 @@ workflow.run()
 For service integration or remote execution, keep the compiled result in memory:
 
 ```python
-compiled = workflow.get_cwl_workflow()
+compiled = workflow.compile_to_cwl()
 ```
 
-That in-memory compiled object is the bridge to submission payload construction.
+That in-memory compiled object is the bridge to submission request construction.
 
 ## What Sophios Produces
 
@@ -265,7 +265,7 @@ Depending on how you compile or run, you may see:
 - Graphviz sources and diagrams,
 - local runner output summaries,
 - provenance files,
-- remote execution payload JSON.
+- remote execution request JSON.
 
 These artifacts make the workflow debuggable and reviewable. They let you ask
 concrete questions:
@@ -295,10 +295,10 @@ Python lets teams build workflows incrementally:
 4. Compile.
 5. Add a second step.
 6. Name workflow outputs when downstream code needs stable result names.
-7. Prepare remote execution payloads only after the workflow is clear.
+7. Prepare remote execution requests only after the workflow is clear.
 
 That progression keeps responsibilities separated. Tool contracts, workflow
-edges, runtime inputs, compiled CWL, and submission payloads can each be
+edges, runtime inputs, compiled CWL, and submission requests can each be
 inspected at the point where they become relevant.
 
 Python is the authoring layer. CWL is the portable execution target. YAML is the
@@ -364,7 +364,7 @@ execution on remote, HPC, or cloud resources.
 
 That boundary is intentionally separate from workflow authoring. A workflow
 should be understandable before it becomes a remote job. The service-specific
-payload shape belongs in the execution integration layer, not in the conceptual
+request shape belongs in the execution integration layer, not in the conceptual
 workflow definition.
 
 ## What Makes Sophios Different
@@ -424,7 +424,7 @@ For a new project or integration, use this order:
 5. Compile and inspect generated CWL.
 6. Author a new `CommandLineTool` in Python.
 7. Convert the generated tool into a workflow step.
-8. Build a submission payload only after the workflow is clear.
+8. Build a submission request only after the workflow is clear.
 9. Use `.wic` YAML for advanced standalone, CI, or audit-focused workflows.
 
 Each stage introduces one responsibility and one artifact boundary. Keep those
@@ -436,5 +436,5 @@ boundaries explicit in the workflow definition and generated artifacts.
 - [Python Workflow API](userguide.md): use `Step`, `Workflow`, bindings, compile, and run.
 - [Building Tool Contracts in Python](tool_builder_sam3.md): define CWL `CommandLineTool` contracts.
 - [Using Tool Builder and the Workflow Python API Together](tool_builder_workflow.md): compose generated tools in memory.
-- [From Python Workflow to Compute Payload](compute_payload_workflow.md): package compiled workflows for validated remote execution payloads.
+- [From Python Workflow to Compute Request](compute_request_workflow.md): package compiled workflows for validated remote execution requests.
 - [Advanced YAML and Operations](advanced.md): use `.wic` files for auditability, CI, debugging, and advanced compiler features.

@@ -27,7 +27,7 @@ This page covers:
 - what compilation produces,
 - how to compile and inspect workflow artifacts,
 - when to run locally,
-- when to keep compiled CWL in memory for submission payload construction.
+- when to keep compiled CWL in memory for submission request construction.
 
 It does not cover every CWL feature. Advanced YAML controls, static dispatch,
 and program synthesis are documented separately in
@@ -341,29 +341,30 @@ Use this when you want to inspect generated files. Typical artifacts include:
 This is the best path when generated artifacts need to be reviewed, committed to
 a test fixture, or inspected during debugging.
 
-`workflow.compile(write_to_disk=True)` is still available. `write_artifacts()`
-is the clearer public method for the common "compile and inspect files" path.
+`workflow.compile(write_to_disk=True)` is still available as a compatibility
+alias that returns the public compiled-workflow boundary. `write_artifacts()` is
+the clearer public method for the common "compile and inspect files" path.
 Neither method writes intermediate `.wic` compiler trees by default. Use
 `workflow.write_wic(...)` when you want a source `.wic` file.
 
 ### Keep Compiled CWL in Memory
 
 ```python
-compiled = workflow.get_cwl_workflow()
+compiled = workflow.compile_to_cwl()
 ```
 
 Use this when the next step is another Python operation, such as packaging a
-submission payload.
+submission request.
 
 The returned object contains:
 
-- the compiled CWL workflow fields,
-- the workflow name,
-- generated `yaml_inputs`.
+- `compiled.name`,
+- `compiled.cwl_workflow`,
+- `compiled.cwl_job_inputs`.
 
-Submission payloads commonly expect the CWL workflow document and job inputs as
-separate pieces. The compute payload guide shows one concrete service-oriented
-payload shape in detail.
+Submission requests commonly expect the CWL workflow document and job inputs as
+separate pieces. The compute request guide shows one concrete service-oriented
+request shape in detail.
 
 ## Running Locally
 
@@ -511,7 +512,7 @@ The following examples are intended to be quick to read and quick to run:
 - `examples/scripts/scatter_pyapi.py`: scatter over array-valued bindings.
 - `examples/scripts/when_pyapi.py`: conditional execution.
 - `examples/scripts/tool_builder_workflow.py`: generated CLTs composed in memory.
-- `examples/scripts/compute_payload_workflow.py`: Python workflow to validated compute payload.
+- `examples/scripts/compute_request_workflow.py`: Python workflow to validated compute request.
 
 The Ichnaea and SAM3 walkthroughs are larger, production-oriented examples with
 heavier runtime assumptions.
@@ -522,5 +523,5 @@ Continue with:
 
 - [Building Tool Contracts in Python](tool_builder_sam3.md) to author tools.
 - [Using Tool Builder and the Workflow Python API Together](tool_builder_workflow.md) to build tools in memory and compose them immediately.
-- [From Python Workflow to Compute Payload](compute_payload_workflow.md) to prepare validated submission payloads from compiled workflows.
+- [From Python Workflow to Compute Request](compute_request_workflow.md) to prepare validated submission requests from compiled workflows.
 - [Advanced YAML and Operations](advanced.md) when you need `.wic` files, schema validation, inference controls, or audit-friendly artifacts.

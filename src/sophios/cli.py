@@ -1,7 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
+from typing import Any
 from unittest.mock import patch
 
 from . import _version
@@ -131,33 +131,33 @@ parser.add_argument('--passthrough_flags', type=str, default='no', required=Fals
                     If set to 'no' (default) passthrough flags won't be sent to the cwl_runner backend.''')
 
 
-def get_args(yaml_path: str = '', suppliedargs: list[str] = []) -> argparse.Namespace:
+def get_args(yaml_path: str = '', suppliedargs: list[str] | None = None) -> argparse.Namespace:
     """This is used to get mock command line arguments, default + suppled args
 
     Returns:
         argparse.Namespace: The mocked command line arguments
     """
     defaultargs = ['sophios', '--yaml', yaml_path]  # ignore --yaml
-    testargs = defaultargs + suppliedargs
+    testargs = defaultargs + (suppliedargs or [])
     with patch.object(sys, 'argv', testargs):
         args = parser.parse_args()
     return args
 
 
-def get_known_and_unknown_args(yaml_path: str = '', suppliedargs: list[str] = []) -> Tuple[argparse.Namespace, List[str]]:
+def get_known_and_unknown_args(yaml_path: str = '', suppliedargs: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
     """This is used to get mock command line arguments, default + suppled args
 
     Returns:
         argparse.Namespace: The mocked command line arguments
     """
     defaultargs = ['sophios', '--yaml', yaml_path]  # ignore --yaml
-    testargs = defaultargs + suppliedargs
+    testargs = defaultargs + (suppliedargs or [])
     with patch.object(sys, 'argv', testargs):
         known_args, unknown_args = parser.parse_known_args()
     return known_args, unknown_args
 
 
-def get_dicts_for_compilation() -> Tuple[Dict[str, bool], Dict[str, Any], Dict[str, str]]:
+def get_dicts_for_compilation() -> tuple[dict[str, bool], dict[str, Any], dict[str, str]]:
     """This is used to get default command line arguments for compilation
     as a tuple of three dictionaries
 
@@ -166,7 +166,7 @@ def get_dicts_for_compilation() -> Tuple[Dict[str, bool], Dict[str, Any], Dict[s
     """
     args = get_args()
     # core compiler options for transformation into CWL
-    compiler_options: Dict[str, bool] = {}
+    compiler_options: dict[str, bool] = {}
     compiler_options['partial_failure_enable'] = args.partial_failure_enable
     compiler_options['inference_use_naming_conventions'] = args.inference_use_naming_conventions
     compiler_options['insert_steps_automatically'] = args.insert_steps_automatically
@@ -174,7 +174,7 @@ def get_dicts_for_compilation() -> Tuple[Dict[str, bool], Dict[str, Any], Dict[s
     compiler_options['allow_raw_cwl'] = args.allow_raw_cwl
 
     # to be given to graph util functions
-    graph_settings: Dict[str, Any] = {}
+    graph_settings: dict[str, Any] = {}
     graph_settings['graph_dark_theme'] = args.graph_dark_theme
     graph_settings['graph_inline_depth'] = args.graph_inline_depth
     graph_settings['graph_label_edges'] = args.graph_label_edges
@@ -183,7 +183,7 @@ def get_dicts_for_compilation() -> Tuple[Dict[str, bool], Dict[str, Any], Dict[s
     graph_settings['graph_show_inputs'] = args.graph_show_inputs
 
     # to be given to io absolute_yaml_tags function
-    yaml_tag_paths: Dict[str, str] = {}
+    yaml_tag_paths: dict[str, str] = {}
     yaml_tag_paths['cachedir'] = args.cachedir
     yaml_tag_paths['yaml'] = args.yaml
     yaml_tag_paths['homedir'] = args.homedir

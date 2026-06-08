@@ -1,43 +1,21 @@
 from pathlib import Path
 import copy
-import yaml
 
 
 import uvicorn
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from sophios import __version__, compiler
+from sophios import compiler
 from sophios import input_output
 from sophios.utils_graphs import get_graph_reps
-from sophios.utils_yaml import wic_loader
 from sophios import utils_cwl
 from sophios.post_compile import cwl_inline_runtag
 from sophios.cli import get_args, get_dicts_for_compilation
-from sophios.wic_types import CompilerInfo, Json, Tool, Tools, StepId, YamlTree, Cwl, NodeData
+from sophios.wic_types import CompilerInfo, Json, Tool, Tools, StepId, YamlTree, NodeData
 from sophios.apis.utils import converter
 import sophios.plugins as plugins
 # from .auth.auth import authenticate
-
-
-# helper functions
-
-
-def remove_dot_dollar(tree: Cwl) -> Cwl:
-    """Removes . and $ from dictionary keys, e.g. $namespaces and $schemas. Otherwise, you will get
-    {'error': {'statusCode': 500, 'message': 'Internal Server Error'}}
-    This is due to MongoDB:
-    See https://www.mongodb.com/docs/manual/reference/limits/#Restrictions-on-Field-Names
-    Args:
-        tree (Cwl): A Cwl document
-    Returns:
-        Cwl: A Cwl document with . and $ removed from $namespaces and $schemas
-    """
-    tree_str = str(yaml.dump(tree, sort_keys=False, line_break='\n', indent=2))
-    tree_str_no_dd = tree_str.replace('$namespaces', 'namespaces').replace(
-        '$schemas', 'schemas').replace('.wic', '_wic')
-    tree_no_dd: Cwl = yaml.load(tree_str_no_dd, Loader=wic_loader())  # This effectively copies tree
-    return tree_no_dd
 
 
 app = FastAPI()
@@ -138,8 +116,7 @@ async def compile_wf(request: Request) -> Json:
 
     cwl_tree_run.pop('steps', None)
     cwl_tree_run['steps'] = cwl_tree_run.pop('steps_dict', None)
-    compute_workflow: Json = {}
-    compute_workflow = {
+    compute_workflow: Json = {
         "name": yaml_stem,
         "cwlJobInputs": yaml_inputs,
         **cwl_tree_run

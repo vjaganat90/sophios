@@ -12,8 +12,7 @@ import traceback
 from datetime import datetime
 from typing import Iterator, List, Optional, Dict
 from sophios.wic_types import Json
-from .compute_payload import ComputeWorkflowPayload
-from .compute_submit import submit_compute_payload
+from .compute_request import ComputeRequest, submit_compute_request
 
 try:
     import cwltool.main
@@ -273,7 +272,7 @@ def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
 
 
 def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
-                submit_url: str, user_env_vars: Dict[str, str] = {}) -> Optional[int]:
+                submit_url: str) -> Optional[int]:
     """Submit a compiled workflow to compute-slurm.
 
     Args:
@@ -281,15 +280,13 @@ def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
         workflow (Json): The compiled CWL workflow.
         workflow_inputs (Json): The inputs for compiled CWL workflow.
         submit_url (str): URL of Compute where the job is to be submitted.
-        user_env_vars (Dict[str, str]): User supplied environment variables.
-
     Returns:
         Optional[int]: The return value indicating if submission succeeded (`0`) or not.
     """
     now = datetime.now()
     date_time = now.strftime("%Y_%m_%d_%H.%M.%S")
     jobid = workflow_name + '__' + str(date_time) + '__'
-    compute_workflow = ComputeWorkflowPayload(
+    compute_request = ComputeRequest(
         cwl_workflow=workflow,
         cwl_job_inputs=workflow_inputs,
         workflow_id=jobid,
@@ -300,12 +297,11 @@ def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
         print("Ill-formed URL string detected! Please provide a valid URL")
         return 1
 
-    with temporary_env(user_env_vars):
-        return submit_compute_payload(
-            compute_workflow,
-            submit_url,
-            log_path=Path(f'compute_logs_{jobid}.txt'),
-        )
+    return submit_compute_request(
+        compute_request,
+        submit_url,
+        log_path=Path(f'compute_logs_{jobid}.txt'),
+    )
 
 
 def copy_output_files(yaml_stem: str, basepath: str = '') -> None:

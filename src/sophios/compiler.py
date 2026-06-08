@@ -410,7 +410,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                                                             # Check for optional arguments using both the '?' syntactic sugar, as well as the
                                                             # canonical null representation. See canonicalize_type in cwl_utils.py
                                                             (isinstance(in_tool[arg]['type'], str) and in_tool[arg]['type'][-1] == '?') or
-                                                            (isinstance(in_tool[arg]['type'], List) and 'null' in in_tool[arg]['type']))]
+                                                            (isinstance(in_tool[arg]['type'], list) and 'null' in in_tool[arg]['type']))]
         elif tool_i.cwl['class'] == 'Workflow':
             args_required = list(in_tool)
 
@@ -478,14 +478,14 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
         utils_cwl.validate_out_tag(steps[i]['out'])
         for j in range(len(steps[i]['out'])):
             out_val = steps[i]['out'][j]
-            if isinstance(out_val, Dict):
+            if isinstance(out_val, dict):
                 keys = list(out_val.keys())
                 if len(keys) != 1 or not isinstance(keys[0], str) or keys[0] == '':
                     raise Exception(
                         'Error! There should only be one non-empty string anchor per out: list entry!')
                 out_key = keys[0]
                 out_val = out_val[out_key]
-                if isinstance(out_val, Dict) and 'wic_anchor' in out_val:
+                if isinstance(out_val, dict) and 'wic_anchor' in out_val:
                     edgedef = out_val['wic_anchor']
 
                     # NOTE: There can only be one definition, but multiple call sites.
@@ -514,7 +514,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
             # Convert native YAML to a JSON-encoded string for specific tags.
             tags = ['config']
-            if arg_key in tags and isinstance(arg_val, Dict) and ('wic_inline_input' in arg_val):
+            if arg_key in tags and isinstance(arg_val, dict) and ('wic_inline_input' in arg_val):
                 arg_val = {'wic_inline_input': json.dumps(
                     arg_val['wic_inline_input'])}
 
@@ -533,7 +533,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
             in_dict = utils_cwl.copy_cwl_input_output_dict(
                 in_tool[arg_key], True)
 
-            if isinstance(arg_val, Dict) and 'wic_alias' in arg_val:
+            if isinstance(arg_val, dict) and 'wic_alias' in arg_val:
                 arg_val = arg_val['wic_alias']
                 if not explicit_edge_defs_copy.get(arg_val):
                     if is_root and not testing:
@@ -650,7 +650,7 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
                         utils_graphs.add_graph_edge(
                             graph_settings, graph_init, nss_def, nss_call, label, color='blue')
-            elif isinstance(arg_val, Dict) and 'wic_inline_input' in arg_val:
+            elif isinstance(arg_val, dict) and 'wic_inline_input' in arg_val:
                 arg_val = arg_val['wic_inline_input']
 
                 if arg_key in steps[i].get('scatter', []):

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://polusai.github.io/compute/compute-slurm/workflow-request.schema.json",
   "title": "Slurm Driver Workflow Request",
-  "description": "Payload accepted by the compute-slurm create-workflow endpoint. The service requires cwlWorkflow, cwlJobInputs, and jobs. The CWL objects are passed through to cwl-docker-extract and toil-cwl-runner, so this schema intentionally treats them as opaque objects.",
+  "description": "Request accepted by the compute-slurm create-workflow endpoint. The service requires cwlWorkflow, cwlJobInputs, and jobs. The CWL objects are passed through to cwl-docker-extract and toil-cwl-runner, so this schema intentionally treats them as opaque objects.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -22,7 +22,7 @@
     },
     "cwlJobInputs": {
       "type": "object",
-      "description": "CWL job inputs/yaml_inputs payload passed through to the workflow runner.",
+      "description": "CWL job inputs/yaml_inputs request body section passed through to the workflow runner.",
       "additionalProperties": true
     },
     "computeConfig": {

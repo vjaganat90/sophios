@@ -16,12 +16,13 @@ Everything else is optional and chainable.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from sophios.wic_types import Tools
 
-from ._tool_builder_namespaces import Field, Input, Inputs, Output, Outputs, cwl
+from ._tool_builder_step_bridge import _command_line_tool_to_step
+from ._tool_builder_namespaces import Field, Fields, Input, Inputs, Output, Outputs, cwl
 from ._tool_builder_specs import (
     CommandArgument,
     CommandLineBinding,
@@ -205,7 +206,7 @@ class CommandLineTool:
             case str() as literal:
                 self._arguments.append(literal)
             case CommandArgument() as structured:
-                self._arguments.append(structured.to_yaml())
+                self._arguments.append(structured.to_cwl())
             case dict() as raw:
                 _warn_raw_escape_hatch("add_argument()")
                 self._arguments.append(
@@ -462,7 +463,7 @@ class CommandLineTool:
         Returns:
             Step: A workflow step backed by this CLT without writing to disk.
         """
-        return step_from_command_line_tool(
+        return _command_line_tool_to_step(
             self,
             step_name=step_name,
             run_path=run_path,
@@ -535,63 +536,6 @@ class CommandLineTool:
         return validate_cwl_document(self.build(), filename=f"{self.name}.cwl", skip_schemas=skip_schemas)
 
 
-def array_type(items: Any) -> dict[str, Any]:
-    """Return a CWL array type expression."""
-    return cwl.array(items)
-
-
-def enum_type(*symbols: str, name: str | None = None) -> dict[str, Any]:
-    """Return a CWL enum type expression."""
-    return cwl.enum(*symbols, name=name)
-
-
-def record_type(
-    fields: Mapping[str, FieldSpec] | list[FieldSpec | dict[str, Any]],
-    *,
-    name: str | None = None,
-) -> dict[str, Any]:
-    """Return a CWL record type expression."""
-    return cwl.record(fields, name=name)
-
-
-def record_field(type_: Any, **kwargs: Any) -> FieldSpec:
-    """Return a named CWL record field helper."""
-    return Field(type_, **kwargs)
-
-
-def step_from_command_line_tool(
-    tool: CommandLineTool,
-    *,
-    step_name: str | None = None,
-    run_path: str | Path | None = None,
-    config: dict[str, Any] | None = None,
-    tool_registry: Tools | None = None,
-) -> "Step":
-    """Convert a built CLT into a workflow `Step` entirely in memory.
-
-    Args:
-        tool (CommandLineTool): Built CLT to wrap as a workflow step.
-        step_name (str | None): Optional workflow step name override.
-        run_path (str | Path | None): Optional virtual `.cwl` path for compiler bookkeeping.
-        config (dict[str, Any] | None): Optional input values to pre-bind.
-        tool_registry (Tools | None): Optional tool registry retained on the step.
-
-    Returns:
-        Step: A workflow step backed by the CLT without touching disk.
-    """
-    from ._tool_builder_step_bridge import (  # pylint: disable=import-outside-toplevel
-        step_from_command_line_tool as _step_from_command_line_tool,
-    )
-
-    return _step_from_command_line_tool(
-        tool,
-        step_name=step_name,
-        run_path=run_path,
-        config=config,
-        tool_registry=tool_registry,
-    )
-
-
 __all__ = [
     "ToolBuilderValidationError",
     "CommandArgument",
@@ -603,6 +547,7 @@ __all__ = [
     "EnvironmentDef",
     "EnvVarRequirement",
     "Field",
+    "Fields",
     "FieldSpec",
     "InitialWorkDirRequirement",
     "InlineJavascriptRequirement",
@@ -624,12 +569,7 @@ __all__ = [
     "ToolTimeLimit",
     "ValidationResult",
     "WorkReuse",
-    "array_type",
     "cwl",
-    "enum_type",
-    "record_field",
-    "record_type",
     "secondary_file",
-    "step_from_command_line_tool",
     "validate_cwl_document",
 ]

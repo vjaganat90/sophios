@@ -51,7 +51,19 @@ for _yml_namespaces in search_paths_wic_tag:
 # need to manually exclude large workflows.
 # See https://en.wikipedia.org/wiki/Graph_isomorphism_problem
 large_workflows: List[str] = config_ci.get("large_workflows", [])
-yml_paths_tuples_not_large = [(s, p) for (s, p) in yml_paths_tuples if s not in large_workflows]
+
+
+def _is_workflow_document(yml_path: Path) -> bool:
+    with open(yml_path, mode='r', encoding='utf-8') as y:
+        yml = yaml.load(y.read(), Loader=wic_loader())
+    wic = yml.get('wic', {}) if isinstance(yml, dict) else {}
+    return isinstance(yml, dict) and ('steps' in yml or 'implementations' in wic)
+
+
+yml_paths_tuples_not_large = [
+    (s, p) for (s, p) in yml_paths_tuples
+    if s not in large_workflows and _is_workflow_document(p)
+]
 
 # NOTE: Most of the workflows in this list have free variables because they are subworkflows
 # i.e. if you try to run them, you will get "Missing required input parameter"

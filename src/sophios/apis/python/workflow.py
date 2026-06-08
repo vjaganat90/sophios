@@ -5,13 +5,14 @@ import logging
 import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, overload
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
 from sophios.inference import types_match
 from sophios.wic_types import CompilerInfo, Json, Tools
 
+from ._compiled import CompiledWorkflow
 from ._errors import (
     InvalidLinkError,
     InvalidStepError,
@@ -37,6 +38,7 @@ from ._types import ScatterMethod
 from ._workflow_runtime import (
     coerce_path as _coerce_path,
     compile_workflow as _compile_workflow,
+    compiled_workflow as _compiled_workflow,
     load_clt_document as _load_clt_document,
     load_clt as _load_clt,
     lookup_parameter as _lookup_parameter,
@@ -45,7 +47,6 @@ from ._workflow_runtime import (
     run_workflow as _run_workflow,
     validate_step_assignment as _validate_step_assignment,
     workflow_document as _workflow_document,
-    compiled_cwl_json as _compiled_cwl_json,
     workflow_wic_text as _workflow_wic_text,
     write_workflow_ast_to_disk as _write_workflow_ast_to_disk,
     write_workflow_wic as _write_workflow_wic,
@@ -156,7 +157,7 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
                 context=f"{process_self.process_name}.{input_name}",
             )
             anchor_name = output.ensure_anchor(f"{input_name}{process_self.process_name}")
-            input_port._set_binding(_AliasBinding(anchor_name))
+            input_port._set_binding(_AliasBinding(anchor_name, output))
             input_port.set_bound_parameter_type(output.parameter_type)
         case _:
             input_port._set_binding(_InlineBinding(value))
@@ -172,7 +173,7 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
                 source.parameter_type,
                 context=f"{workflow.process_name}.outputs.{output_name}",
             )
-            output_parameter.bind_source(OutputSourceBinding(process_name, name))
+            output_parameter.bind_source(OutputSourceBinding(process_name, name), source_parameter=source)
             source.linked = True
         case WorkflowInputReference(workflow=source_workflow, name=name) if source_workflow is workflow:
             input_parameter = workflow._ensure_input(name)
@@ -181,7 +182,7 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
                 input_parameter.parameter_type,
                 context=f"{workflow.process_name}.outputs.{output_name}",
             )
-            output_parameter.bind_source(OutputSourceBinding(None, name))
+            output_parameter.bind_source(OutputSourceBinding(None, name), source_parameter=input_parameter)
         case _:
             raise InvalidLinkError(
                 "workflow outputs must be bound to a step output or a workflow input reference"
@@ -191,10 +192,9 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
 class Step:
     """A workflow step backed by a CWL ``CommandLineTool``.
 
-    Attribute writes like ``step.message = "hi"`` bind named step inputs.
-    Attribute reads like ``step.output_file`` resolve named step outputs. The
-    same ports are also available through the explicit ``step.inputs.*`` and
-    ``step.outputs.*`` namespaces.
+    The canonical binding surface is explicit: values enter through
+    ``step.inputs.*`` and leave through ``step.outputs.*``. Older shorthand
+    attribute reads/writes remain available for compatibility.
     """
 
     _SYSTEM_ATTRS: ClassVar[set[str]] = {
@@ -229,18 +229,40 @@ class Step:
     scatterMethod: str
     when: str
 
+    @overload
     def __init__(
         self,
-        clt_path: Any,
+        source: StrPath,
         config_path: StrPath | None = None,
         *,
         step_name: str | None = None,
         tool_registry: Tools | None = None,
-    ):
+    ) -> None:
+        ...
+
+    @overload
+    def __init__(
+        self,
+        source: Any,
+        config_path: None = None,
+        *,
+        step_name: str | None = None,
+        tool_registry: Tools | None = None,
+    ) -> None:
+        ...
+
+    def __init__(
+        self,
+        source: Any,
+        config_path: StrPath | None = None,
+        *,
+        step_name: str | None = None,
+        tool_registry: Tools | None = None,
+    ) -> None:
         """Create a ``Step`` from a CWL file or CommandLineTool-like object.
 
         Args:
-            clt_path (Any): Path to a CWL tool definition, or an object with
+            source (Any): Path to a CWL tool definition, or an object with
                 ``name`` and ``to_dict()`` such as
                 ``tool_builder.CommandLineTool``.
             config_path (StrPath | None): Optional YAML config used to pre-bind
@@ -257,7 +279,7 @@ class Step:
         """
         resolved_registry = {} if tool_registry is None else tool_registry
 
-        match clt_path:
+        match source:
             case str() | Path() as path:
                 clt_path_ = _coerce_path(path, field_name="clt_path")
                 config_path_ = _coerce_path(config_path, field_name="config_path", allow_none=True)
@@ -273,12 +295,12 @@ class Step:
                     tool_registry=resolved_registry,
                     process_name=step_name,
                 )
-            case _ if (tool_name := _tool_builder_source_name(clt_path)) is not None:
+            case _ if (tool_name := _tool_builder_source_name(source)) is not None:
                 if config_path is not None:
                     raise TypeError("config_path is only supported when Step is created from a CWL file path")
                 resolved_name = step_name or tool_name
                 run_path = Path(f"{resolved_name}.cwl")
-                match clt_path.to_dict():
+                match source.to_dict():
                     case Mapping() as document:
                         clt, yaml_file = _load_clt_document(document, run_path=run_path)
                     case _:
@@ -725,25 +747,51 @@ class Workflow:
         """
         return self._ensure_input(name)
 
-    def append(self, step_: Any) -> None:
-        """Append a step or nested workflow to this workflow.
+    def _validate_graph_shape(self) -> None:
+        names: set[str] = set()
+        for child in self.steps:
+            if child.process_name in names:
+                raise InvalidStepError(
+                    f"{self.process_name} has duplicate step name {child.process_name!r}; "
+                    "pass step_name=... when reusing the same tool in one workflow"
+                )
+            names.add(child.process_name)
 
-        Args:
-            step_ (Any): The ``Step`` or ``Workflow`` to append.
+        prior_children: set[Step | Workflow] = set()
+        children = set(self.steps)
+        for child in self.steps:
+            for input_parameter in child._inputs:
+                match input_parameter._binding:
+                    case _AliasBinding(source=OutputParameter(parent_obj=source_parent) as source_parameter):
+                        source_name = getattr(source_parameter, "name", "<unknown>")
+                        source_process = getattr(source_parent, "process_name", "<unknown>")
+                        if source_parent not in children:
+                            raise InvalidStepError(
+                                f"{child.process_name}.{input_parameter.name} is linked to "
+                                f"{source_process}.{source_name}, "
+                                f"but {source_process!r} is not a child of {self.process_name!r}"
+                            )
+                        if source_parent not in prior_children:
+                            raise InvalidStepError(
+                                f"{child.process_name}.{input_parameter.name} is linked to "
+                                f"{source_process!r}, which must appear earlier in the workflow step list"
+                            )
+                    case _:
+                        pass
+            prior_children.add(child)
 
-        Raises:
-            TypeError: If ``step_`` is neither a ``Step`` nor a ``Workflow``.
-
-        Returns:
-            None: The workflow is mutated in place.
-        """
-        match step_:
-            case Step() | Workflow():
-                self.steps.append(step_)
-            case _:
-                raise TypeError("step must be either a Step or a Workflow")
+        for output_parameter in self._outputs:
+            match output_parameter._source_parameter:
+                case OutputParameter(parent_obj=source_parent) if source_parent not in children:
+                    raise InvalidStepError(
+                        f"{self.process_name}.outputs.{output_parameter.name} is linked to "
+                        f"{source_parent.process_name!r}, which is not a child of {self.process_name!r}"
+                    )
+                case _:
+                    pass
 
     def _validate(self) -> None:
+        self._validate_graph_shape()
         for output_parameter in self._outputs:
             if not output_parameter.has_source():
                 raise InvalidStepError(f"{self.process_name} has unbound output {output_parameter.name!r}")
@@ -826,39 +874,67 @@ class Workflow:
         """
         return [self, *[workflow for child in self.steps for workflow in child.flatten_subworkflows()]]
 
-    def compile(self, write_to_disk: bool = False, *, tool_registry: Tools | None = None) -> CompilerInfo:
-        """Compile this workflow into CWL.
+    def _compile(self, write_to_disk: bool = False, *, tool_registry: Tools | None = None) -> CompilerInfo:
+        """Compile this workflow through the internal compiler path.
 
         Args:
             write_to_disk (bool): Whether to also write generated CWL to ``autogenerated/``.
             tool_registry (Tools | None): Optional tool registry override.
 
         Returns:
-            CompilerInfo: The compiler result tree for this workflow.
+            CompilerInfo: Internal compiler result tree for this workflow.
         """
         return _compile_workflow(self, write_to_disk=write_to_disk, tool_registry=tool_registry)
 
-    def write_artifacts(self, *, tool_registry: Tools | None = None) -> CompilerInfo:
+    def compile_to_cwl(self, *, tool_registry: Tools | None = None) -> CompiledWorkflow:
+        """Compile this workflow into CWL and generated job inputs.
+
+        Args:
+            tool_registry (Tools | None): Optional tool registry override.
+
+        Returns:
+            CompiledWorkflow: Public compiled workflow boundary object.
+        """
+        return _compiled_workflow(self, tool_registry=tool_registry)
+
+    def compile(
+        self,
+        write_to_disk: bool = False,
+        *,
+        tool_registry: Tools | None = None,
+    ) -> CompiledWorkflow:
+        """Compatibility alias for compiling to the public CWL boundary.
+
+        New code should prefer :meth:`compile_to_cwl`. The old ``CompilerInfo``
+        result remains available only through the internal :meth:`_compile`.
+        """
+        return _compiled_workflow(
+            self,
+            write_to_disk=write_to_disk,
+            tool_registry=tool_registry,
+        )
+
+    def write_artifacts(self, *, tool_registry: Tools | None = None) -> CompiledWorkflow:
         """Compile this workflow and write generated CWL artifacts to disk.
 
         Args:
             tool_registry (Tools | None): Optional tool registry override.
 
         Returns:
-            CompilerInfo: The compiler result tree for this workflow.
+            CompiledWorkflow: Public compiled workflow boundary object.
         """
         return self.compile(write_to_disk=True, tool_registry=tool_registry)
 
     def get_cwl_workflow(self, *, tool_registry: Tools | None = None) -> Json:
-        """Return the compiled CWL workflow JSON and generated input object.
+        """Return the legacy compiled CWL workflow mapping.
 
         Args:
             tool_registry (Tools | None): Optional tool registry override.
 
         Returns:
-            Json: A JSON-serializable representation of the compiled CWL workflow.
+            Json: Legacy mapping with ``name``, ``yaml_inputs``, and CWL fields.
         """
-        return _compiled_cwl_json(self, tool_registry=tool_registry)
+        return self.compile_to_cwl(tool_registry=tool_registry).to_dict()
 
     def run(
         self,

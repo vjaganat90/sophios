@@ -11,7 +11,12 @@ The builder surface is intentionally small:
 from typing import Any, Iterator, Mapping, TypeVar
 
 from ._tool_builder_specs import FieldSpec, InputSpec, OutputSpec
-from ._tool_builder_support import _canonicalize_type, _merge_if_set, _record_type_payload
+from ._tool_builder_support import (
+    _canonicalize_type,
+    _merge_if_set,
+    _record_type_payload,
+    _validate_api_name,
+)
 
 
 class _CWLNamespace:
@@ -68,14 +73,17 @@ Input = InputSpec
 Output = OutputSpec
 
 
-SpecT = TypeVar("SpecT", InputSpec, OutputSpec)
+SpecT = TypeVar("SpecT", FieldSpec, InputSpec, OutputSpec)
 
 
 class _NamedCollection(Mapping[str, SpecT]):
     _items: dict[str, SpecT]
 
     def __init__(self, **specs: SpecT) -> None:
-        self._items = {name: spec.named(name) for name, spec in specs.items()}
+        self._items = {
+            _validate_api_name(name, context="API name"): spec.named(name)
+            for name, spec in specs.items()
+        }
 
     def __getitem__(self, key: str) -> SpecT:
         return self._items[key]
@@ -103,3 +111,11 @@ class Inputs(_NamedCollection[InputSpec]):
 
 class Outputs(_NamedCollection[OutputSpec]):
     """Named CLT outputs. Names come from Python keyword arguments."""
+
+
+class Fields(_NamedCollection[FieldSpec]):
+    """Named CWL record fields. Names come from Python keyword arguments."""
+
+    def to_list(self) -> list[dict[str, Any]]:
+        """Render record fields in CWL's list-of-fields shape."""
+        return [spec.to_dict() for spec in self._items.values()]

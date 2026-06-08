@@ -16,6 +16,8 @@ from typing import Any
 
 import yaml
 
+from ._utils import validate_python_identifier_name
+
 
 @dataclass(frozen=True, slots=True)
 class _BuilderRules:
@@ -116,11 +118,14 @@ def _record_type_payload(
     name: str | None = None,
 ) -> dict[str, Any]:
     """Build a CWL record schema payload from named or positional field specs."""
-    match fields:
-        case dict() as mapping:
-            field_defs = [spec.named(field_name).to_dict() for field_name, spec in mapping.items()]
-        case _:
-            field_defs = [_render(field_spec) for field_spec in fields]
+    if hasattr(fields, "to_list") and callable(fields.to_list):
+        field_defs = fields.to_list()
+    else:
+        match fields:
+            case dict() as mapping:
+                field_defs = [spec.named(field_name).to_dict() for field_name, spec in mapping.items()]
+            case _:
+                field_defs = [_render(field_spec) for field_spec in fields]
     payload: dict[str, Any] = {"type": "record", "fields": field_defs}
     _merge_if_set(payload, "name", name)
     return payload
@@ -228,12 +233,14 @@ def _is_non_empty_string(value: Any) -> bool:
 
 def _named_parameter(reference: Any, *, kind: str) -> str:
     match reference:
-        case str() as name:
-            return name
         case _ if _is_non_empty_string(getattr(reference, "name", None)):
             return str(reference.name)
         case _:
-            raise TypeError(f"{kind} reference must be a named Input/Output or a string")
+            raise TypeError(f"{kind} reference must be a named Input/Output object")
+
+
+def _validate_api_name(name: str, *, context: str) -> str:
+    return validate_python_identifier_name(name, context=context)
 
 
 def _optional_binding(binding: Any) -> Any:

@@ -1,136 +1,30 @@
-"""Python workflow and Tool Builder API exports."""
+"""Concrete Python API modules for workflow and tool authoring.
+
+Import user-facing symbols from the concrete modules so the API boundaries stay
+visible:
+
+``sophios.apis.python.workflow``
+    Graph construction with ``Step`` and ``Workflow``.
+
+``sophios.apis.python.tool_builder``
+    CWL ``CommandLineTool`` authoring helpers.
+"""
 
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from types import ModuleType
 
 
-_API_EXPORTS = {
-    "InvalidLinkError",
-    "InvalidStepError",
-    "MissingRequiredValueError",
-    "Step",
-    "Workflow",
-}
-
-_ERROR_EXPORTS = {
-    "InvalidCLTError",
-    "InvalidInputValueError",
-    "InvalidLinkError",
-    "InvalidStepError",
-    "MissingRequiredValueError",
-}
-
-_TOOL_BUILDER_EXPORTS = {
-    "ToolBuilderValidationError",
-    "CommandArgument",
-    "CommandLineBinding",
-    "CommandLineTool",
-    "CommandOutputBinding",
-    "Dirent",
-    "DockerRequirement",
-    "EnvironmentDef",
-    "EnvVarRequirement",
-    "Field",
-    "FieldSpec",
-    "InitialWorkDirRequirement",
-    "InlineJavascriptRequirement",
-    "InplaceUpdateRequirement",
-    "Input",
-    "InputSpec",
-    "Inputs",
-    "LoadListingRequirement",
-    "NetworkAccess",
-    "Output",
-    "OutputSpec",
-    "Outputs",
-    "ResourceRequirement",
-    "SchemaDefRequirement",
-    "SecondaryFile",
-    "ShellCommandRequirement",
-    "SoftwarePackage",
-    "SoftwareRequirement",
-    "ToolTimeLimit",
-    "ValidationResult",
-    "WorkReuse",
-    "array_type",
-    "cwl",
-    "enum_type",
-    "record_field",
-    "record_type",
-    "secondary_file",
-    "step_from_command_line_tool",
-    "validate_cwl_document",
-}
-
-__all__ = sorted(_API_EXPORTS | _ERROR_EXPORTS | _TOOL_BUILDER_EXPORTS)
+__all__ = ["tool_builder", "workflow"]
 
 
-if TYPE_CHECKING:
-    from ._errors import (
-        InvalidCLTError,
-        InvalidInputValueError,
-        InvalidLinkError,
-        InvalidStepError,
-        MissingRequiredValueError,
+def __getattr__(name: str) -> ModuleType:
+    if name in __all__:
+        return import_module(f".{name}", __name__)
+    raise AttributeError(
+        f"module {__name__!r} exposes concrete modules only; "
+        "import symbols from sophios.apis.python.workflow or "
+        "sophios.apis.python.tool_builder"
     )
-    from .workflow import (
-        Step,
-        Workflow,
-    )
-    from .tool_builder import (
-        ToolBuilderValidationError,
-        CommandArgument,
-        CommandLineBinding,
-        CommandLineTool,
-        CommandOutputBinding,
-        Dirent,
-        DockerRequirement,
-        EnvironmentDef,
-        EnvVarRequirement,
-        Field,
-        FieldSpec,
-        InitialWorkDirRequirement,
-        InlineJavascriptRequirement,
-        InplaceUpdateRequirement,
-        Input,
-        InputSpec,
-        Inputs,
-        LoadListingRequirement,
-        NetworkAccess,
-        Output,
-        OutputSpec,
-        Outputs,
-        ResourceRequirement,
-        SchemaDefRequirement,
-        SecondaryFile,
-        ShellCommandRequirement,
-        SoftwarePackage,
-        SoftwareRequirement,
-        ToolTimeLimit,
-        ValidationResult,
-        WorkReuse,
-        array_type,
-        cwl,
-        enum_type,
-        record_field,
-        record_type,
-        secondary_file,
-        step_from_command_line_tool,
-        validate_cwl_document,
-    )
-
-
-def __getattr__(name: str) -> Any:
-    if name in _ERROR_EXPORTS:
-        module = import_module("._errors", __name__)
-        return getattr(module, name)
-    if name in _API_EXPORTS:
-        module = import_module(".workflow", __name__)
-        return getattr(module, name)
-    if name in _TOOL_BUILDER_EXPORTS:
-        module = import_module(".tool_builder", __name__)
-        return getattr(module, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def __dir__() -> list[str]:

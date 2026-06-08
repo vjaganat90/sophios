@@ -2,10 +2,10 @@ Python API Reference
 ====================
 
 This reference documents the public Python surfaces that are intended for user
-workflows, tool authoring, compute payload construction, and compute submission.
+workflows, tool authoring, compute request construction, and compute submission.
 
 For guided learning, start with :doc:`userguide`, :doc:`tool_builder_sam3`, and
-:doc:`compute_payload_workflow`. Use this page when you need signatures and
+:doc:`compute_request_workflow`. Use this page when you need signatures and
 member-level detail.
 
 sophios.apis.python.workflow and sophios.apis.python.tool_builder
@@ -35,14 +35,14 @@ sophios.apis.python.tool_builder
 .. automodule:: sophios.apis.python.tool_builder
    :members:
 
-sophios.compute_payload
+sophios.compute_request
 -----------------------
 
-.. automodule:: sophios.compute_payload
+.. automodule:: sophios.compute_request
    :members:
 
-sophios.compute_submit
-----------------------
+sophios.submit
+--------------
 
-.. automodule:: sophios.compute_submit
+.. automodule:: sophios.submit
    :members:

@@ -36,7 +36,7 @@ resources. Sophios gives that work a clear structure:
 * a ``Step`` places that tool inside a workflow,
 * a ``Workflow`` owns the graph and named outputs,
 * compilation emits CWL and job inputs you can inspect,
-* submission-oriented helpers validate payloads before remote execution.
+* submission-oriented helpers validate requests before remote execution.
 
 The goal is not to hide the workflow. The goal is to make the workflow easier to
 author while keeping the compiled CWL and execution artifacts concrete enough to
@@ -57,7 +57,7 @@ understand, debug, and review.
    multistep_runner.md
    tool_builder_sam3.md
    tool_builder_workflow.md
-   compute_payload_workflow.md
+   compute_request_workflow.md
    ichnaea_compact_compute.md
    python_api_reference.rst
 

@@ -11,7 +11,7 @@ import yaml
 
 import sophios.post_compile as pc
 from sophios.apis.rest import api
-from sophios.wic_types import Json, List
+from sophios.wic_types import Json
 
 try:
     import cwltool.main
@@ -46,7 +46,7 @@ def run_cwl_local(workflow_name: str, cwl_runner: str, docker_cmd: str, use_subp
     quiet = ["--quiet"]
     skip_schemas = ["--skip-schemas"]
     provenance = ["--provenance", f"provenance/{workflow_name}"]
-    docker_cmd_: List[str] = []
+    docker_cmd_: list[str] = []
     if docker_cmd == "docker":
         docker_cmd_ = []
     elif docker_cmd == "singularity":

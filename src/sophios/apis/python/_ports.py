@@ -9,7 +9,8 @@ from ._utils import (contains_any_type,
                      is_array_type,
                      normalize_parameter_name,
                      normalize_parameter_type,
-                     serialize_value)
+                     serialize_value,
+                     validate_python_identifier_name)
 
 if TYPE_CHECKING:
     from .workflow import Workflow
@@ -31,6 +32,7 @@ class AliasBinding:
     """Reference to an upstream step output anchor."""
 
     alias: Any
+    source: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +100,8 @@ class ParameterStore(Generic[ParameterT]):
         return len(self.parameters)
 
     def __getitem__(self, index: int) -> ParameterT:
+        if not isinstance(index, int):
+            raise TypeError("parameter collections support integer indexing only; use attribute access for names")
         return tuple(self.parameters.values())[index]
 
     def __repr__(self) -> str:
@@ -116,7 +120,10 @@ class _ParameterBase:
 
     def __post_init__(self) -> None:
         self.set_parameter_type(self.parameter_type)
-        self.name = normalize_parameter_name(self.name)
+        self.name = validate_python_identifier_name(
+            normalize_parameter_name(self.name),
+            context="CWL parameter name",
+        )
 
     def set_parameter_type(self, value: Any) -> None:
         """Normalize and assign a parameter type expression."""
@@ -135,6 +142,11 @@ class _ParameterBase:
                 return ["null", *serialize_value(options)]
             case _:
                 return ["null", serialize_value(self.parameter_type)]
+
+    def as_type(self, parameter_type: Any) -> "_ParameterBase":
+        """Assign a CWL type to this parameter and return it."""
+        self.set_parameter_type(parameter_type)
+        return self
 
 
 @dataclass(slots=True)
@@ -215,6 +227,7 @@ class OutputParameter(_ParameterBase):
 
     _anchor_name: str | None = field(default=None, init=False, repr=False)
     _source: OutputSourceBinding | None = field(default=None, init=False, repr=False)
+    _source_parameter: Any = field(default=None, init=False, repr=False)
 
     @property
     def value(self) -> Any:
@@ -226,8 +239,9 @@ class OutputParameter(_ParameterBase):
         self.linked = True
         return self._anchor_name
 
-    def bind_source(self, source: OutputSourceBinding) -> None:
+    def bind_source(self, source: OutputSourceBinding, source_parameter: Any = None) -> None:
         self._source = source
+        self._source_parameter = source_parameter
         self.linked = True
 
     def has_source(self) -> bool:
@@ -279,6 +293,11 @@ class WorkflowInputReference:
     name: str
     implicit: bool = False
 
+    def as_type(self, parameter_type: Any) -> "WorkflowInputReference":
+        """Declare this workflow input's type and return the reference."""
+        self.workflow.add_input(self.name, parameter_type)
+        return self
+
 
 class ParameterNamespace(Generic[ParameterT, ViewT]):
     """List-like attribute namespace for input and output parameters.
@@ -313,6 +332,8 @@ class ParameterNamespace(Generic[ParameterT, ViewT]):
         return len(self._store)
 
     def __getitem__(self, index: int) -> ParameterT:
+        if not isinstance(index, int):
+            raise TypeError("port namespaces support integer indexing only; use attribute access for names")
         return self._store[index]
 
     def __getattr__(self, name: str) -> ViewT:

@@ -90,7 +90,7 @@ class UIBase(BaseModel):
     )
     condition: Optional[ConditionalStatement] = Field(
         None,
-        json_schema_extra={"pattern": "^(inputs|outputs)\.\w+(==|!=|<|>|<=|>=|&&)\w+$"},
+        json_schema_extra={"pattern": r"^(inputs|outputs)\.\w+(==|!=|<|>|<=|>=|&&)\w+$"},
         description="Conditional statement that resolves to a boolean value based on UI configuration and selected value, "
         + "used to dictate relationship between parameters.",
         examples=["inputs.thresholdtype=='Manual'"],

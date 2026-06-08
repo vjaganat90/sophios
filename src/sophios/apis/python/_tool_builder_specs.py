@@ -22,6 +22,7 @@ from ._tool_builder_support import (
     _record_type_payload,
     _render,
     _render_doc,
+    _validate_api_name,
 )
 
 
@@ -159,7 +160,7 @@ class CommandArgument:
     binding: CommandLineBinding | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_yaml(self) -> str | dict[str, Any]:
+    def to_cwl(self) -> str | dict[str, Any]:
         binding_dict = {} if self.binding is None else self.binding.to_dict()
         if self.value is None and not binding_dict and not self.extra:
             return ""
@@ -438,7 +439,11 @@ class FieldSpec:
         extra: dict[str, Any] | None = None,
     ) -> None:
         object.__setattr__(self, "type_", type_)
-        object.__setattr__(self, "name", name)
+        object.__setattr__(
+            self,
+            "name",
+            None if name is None else _validate_api_name(name, context="record field name"),
+        )
         object.__setattr__(self, "label_text", label)
         object.__setattr__(self, "doc_text", doc)
         object.__setattr__(self, "default_value", default)
@@ -465,7 +470,7 @@ class FieldSpec:
         return cls(_record_type_payload(fields, name=name), **kwargs)
 
     def named(self, name: str) -> "FieldSpec":
-        return _replace_frozen(self, name=name)
+        return _replace_frozen(self, name=_validate_api_name(name, context="record field name"))
 
     def label(self, text: str) -> "FieldSpec":
         return _replace_frozen(self, label_text=text)
@@ -552,7 +557,11 @@ class InputSpec:
         object.__setattr__(self, "default_value", default)
         object.__setattr__(self, "binding_extra", dict(binding_extra or {}))
         object.__setattr__(self, "extra", dict(extra or {}))
-        object.__setattr__(self, "name", name)
+        object.__setattr__(
+            self,
+            "name",
+            None if name is None else _validate_api_name(name, context="input name"),
+        )
 
     @classmethod
     def array(cls, items: Any, **kwargs: Any) -> "InputSpec":
@@ -575,7 +584,7 @@ class InputSpec:
         return cls(_record_type_payload(fields, name=name), **kwargs)
 
     def named(self, name: str) -> "InputSpec":
-        return _replace_frozen(self, name=name)
+        return _replace_frozen(self, name=_validate_api_name(name, context="input name"))
 
     def label(self, text: str) -> "InputSpec":
         return _replace_frozen(self, label_text=text)
@@ -689,7 +698,11 @@ class OutputSpec:
         object.__setattr__(self, "load_listing_value", load_listing)
         object.__setattr__(self, "binding_extra", dict(binding_extra or {}))
         object.__setattr__(self, "extra", dict(extra or {}))
-        object.__setattr__(self, "name", name)
+        object.__setattr__(
+            self,
+            "name",
+            None if name is None else _validate_api_name(name, context="output name"),
+        )
 
     @classmethod
     def array(cls, items: Any, **kwargs: Any) -> "OutputSpec":
@@ -720,7 +733,7 @@ class OutputSpec:
         return cls("stderr", **kwargs)
 
     def named(self, name: str) -> "OutputSpec":
-        return _replace_frozen(self, name=name)
+        return _replace_frozen(self, name=_validate_api_name(name, context="output name"))
 
     def label(self, text: str) -> "OutputSpec":
         return _replace_frozen(self, label_text=text)

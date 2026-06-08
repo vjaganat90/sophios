@@ -43,16 +43,17 @@ The generated schema powers editor validation for `.wic` files.
 Because the schema is based on discovered tools and workflows, it can become
 stale. Regenerate it when you add, remove, or rename tools.
 
-### Compute Payload Validation
+### Compute Request Validation
 
-`ComputeWorkflowPayload` validates compute submission requests against the
-checked-in payload schema before submission:
+`ComputeRequest` validates compute submission requests against the checked-in
+schema before submission:
 
 ```python
-compute_json = payload.get_compute_payload()
+request_mapping = request.to_mapping()
+request_json = request.to_json()
 ```
 
-That makes the submission boundary explicit: build the payload, validate it,
+That makes the submission boundary explicit: build the request, validate it,
 then submit.
 
 ## Strictness
@@ -79,7 +80,7 @@ For Python workflows:
 2. Validate generated `CommandLineTool` objects when authoring new tools.
 3. Compile the workflow before running it.
 4. Inspect generated artifacts when behavior matters.
-5. Validate compute payloads before submission.
+5. Validate compute requests before submission.
 
 For YAML workflows:
 
