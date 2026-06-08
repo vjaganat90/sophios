@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import importlib
 import json
 import os
 from pathlib import Path
@@ -513,12 +514,9 @@ def test_top_level_python_api_exports_only_user_facing_names() -> None:
 
 
 @pytest.mark.fast
-def test_legacy_python_api_module_reexports_workflow_surface() -> None:
-    import sophios.apis.python.api as legacy_api  # pylint: disable=import-outside-toplevel
-
-    assert legacy_api.Step is Step
-    assert legacy_api.Workflow is Workflow
-    assert legacy_api.InvalidLinkError is InvalidLinkError
+def test_legacy_python_api_module_is_not_available() -> None:
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("sophios.apis.python.api")
 
 
 @pytest.mark.fast

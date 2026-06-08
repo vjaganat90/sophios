@@ -1,7 +1,5 @@
 """Build a unified PDF from the Sphinx documentation source."""
 
-from __future__ import annotations
-
 import os
 import signal
 import shutil

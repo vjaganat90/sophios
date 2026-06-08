@@ -14,8 +14,6 @@ Everything else is optional and chainable.
 # pylint: disable=missing-function-docstring
 # The fluent builder intentionally exposes many small self-descriptive methods.
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
@@ -120,7 +118,7 @@ class CommandLineTool:
                 self._namespaces[prefix] = _SUPPORT.known_namespaces[prefix]
         bucket[class_name] = payload
 
-    def _apply_spec(self, spec: Any, *, as_hint: bool) -> CommandLineTool:
+    def _apply_spec(self, spec: Any, *, as_hint: bool) -> "CommandLineTool":
         self._store_requirement(self._hints if as_hint else self._requirements, spec, None)
         return self
 
@@ -131,7 +129,7 @@ class CommandLineTool:
         item: Any,
         *,
         as_hint: bool = False,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         target = self._hints if as_hint else self._requirements
         payload = target.setdefault(class_name, {list_key: []})
         listing = payload.setdefault(list_key, [])
@@ -146,22 +144,22 @@ class CommandLineTool:
         self,
         label: str | None = None,
         doc: str | list[str] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         if label is not None:
             self.label_text = label
         if doc is not None:
             self.doc_text = doc
         return self
 
-    def label(self, text: str) -> CommandLineTool:
+    def label(self, text: str) -> "CommandLineTool":
         self.label_text = text
         return self
 
-    def doc(self, text: str | list[str]) -> CommandLineTool:
+    def doc(self, text: str | list[str]) -> "CommandLineTool":
         self.doc_text = text
         return self
 
-    def namespace(self, prefix: str, iri: str | None = None) -> CommandLineTool:
+    def namespace(self, prefix: str, iri: str | None = None) -> "CommandLineTool":
         namespace_iri = iri if iri is not None else _SUPPORT.known_namespaces.get(prefix)
         if namespace_iri is None:
             raise ValueError(
@@ -170,39 +168,39 @@ class CommandLineTool:
         self._namespaces[prefix] = namespace_iri
         return self
 
-    def schema(self, iri: str) -> CommandLineTool:
+    def schema(self, iri: str) -> "CommandLineTool":
         schema_iri = _SUPPORT.known_schemas.get(iri, iri)
         if schema_iri not in self._schemas:
             self._schemas.append(schema_iri)
         return self
 
-    def edam(self) -> CommandLineTool:
+    def edam(self) -> "CommandLineTool":
         return self.namespace("edam").schema("edam")
 
-    def intent(self, *identifiers: str) -> CommandLineTool:
+    def intent(self, *identifiers: str) -> "CommandLineTool":
         self._intent.extend(identifiers)
         return self
 
-    def base_command(self, *parts: str) -> CommandLineTool:
+    def base_command(self, *parts: str) -> "CommandLineTool":
         self._base_command = list(parts)
         return self
 
-    def stdin(self, value: str) -> CommandLineTool:
+    def stdin(self, value: str) -> "CommandLineTool":
         self._stdin = value
         return self
 
-    def stdout(self, value: str) -> CommandLineTool:
+    def stdout(self, value: str) -> "CommandLineTool":
         self._stdout = value
         return self
 
-    def stderr(self, value: str) -> CommandLineTool:
+    def stderr(self, value: str) -> "CommandLineTool":
         self._stderr = value
         return self
 
     def add_argument(
         self,
         argument: str | CommandArgument | dict[str, Any],
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         match argument:
             case str() as literal:
                 self._arguments.append(literal)
@@ -217,7 +215,7 @@ class CommandLineTool:
                 raise TypeError("argument must be a string, CommandArgument, or raw dict")
         return self
 
-    def argument(self, value: Any = None, **kwargs: Any) -> CommandLineTool:
+    def argument(self, value: Any = None, **kwargs: Any) -> "CommandLineTool":
         binding_extra = dict(kwargs.pop("binding_extra", {}) or {})
         argument_extra = dict(kwargs.pop("extra", {}) or {})
         binding = CommandLineBinding(extra=binding_extra, **kwargs)
@@ -225,11 +223,11 @@ class CommandLineTool:
             CommandArgument(value=value, binding=binding, extra=argument_extra)
         )
 
-    def requirement(self, requirement: Any, value: dict[str, Any] | None = None) -> CommandLineTool:
+    def requirement(self, requirement: Any, value: dict[str, Any] | None = None) -> "CommandLineTool":
         self._store_requirement(self._requirements, requirement, value)
         return self
 
-    def hint(self, requirement: Any, value: dict[str, Any] | None = None) -> CommandLineTool:
+    def hint(self, requirement: Any, value: dict[str, Any] | None = None) -> "CommandLineTool":
         self._store_requirement(self._hints, requirement, value)
         return self
 
@@ -239,7 +237,7 @@ class CommandLineTool:
         *,
         as_hint: bool = False,
         **kwargs: Any,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(
             DockerRequirement(
                 docker_pull=kwargs.pop("docker_pull", None) or image,
@@ -254,7 +252,7 @@ class CommandLineTool:
         *expression_lib: str,
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(
             InlineJavascriptRequirement(list(expression_lib) or None, dict(extra or {})),
             as_hint=as_hint,
@@ -265,7 +263,7 @@ class CommandLineTool:
         *types: Any,
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(
             SchemaDefRequirement(list(types), dict(extra or {})),
             as_hint=as_hint,
@@ -277,7 +275,7 @@ class CommandLineTool:
         *,
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(LoadListingRequirement(value, dict(extra or {})), as_hint=as_hint)
 
     def shell_command(
@@ -285,7 +283,7 @@ class CommandLineTool:
         *,
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(ShellCommandRequirement(dict(extra or {})), as_hint=as_hint)
 
     def software(
@@ -294,7 +292,7 @@ class CommandLineTool:
         *,
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(SoftwareRequirement(packages, dict(extra or {})), as_hint=as_hint)
 
     def initial_workdir(
@@ -303,7 +301,7 @@ class CommandLineTool:
         *,
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(InitialWorkDirRequirement(listing, dict(extra or {})), as_hint=as_hint)
 
     # This helper deliberately bundles the common staging knobs into one call.
@@ -316,7 +314,7 @@ class CommandLineTool:
         entryname: str | None = None,
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._append_requirement_entry(
             "InitialWorkDirRequirement",
             "listing",
@@ -329,7 +327,7 @@ class CommandLineTool:
             as_hint=as_hint,
         )
 
-    def env_var(self, name: str, value: str, *, as_hint: bool = False) -> CommandLineTool:
+    def env_var(self, name: str, value: str, *, as_hint: bool = False) -> "CommandLineTool":
         return self._append_requirement_entry(
             "EnvVarRequirement",
             "envDef",
@@ -343,7 +341,7 @@ class CommandLineTool:
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         cores_min = kwargs.pop("cores_min", None)
         cores = kwargs.pop("cores", None)
         ram_min = kwargs.pop("ram_min", None)
@@ -373,7 +371,7 @@ class CommandLineTool:
         device_count_min: int | str | None = None,
         as_hint: bool = True,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         payload: dict[str, Any] = {}
         _merge_if_set(payload, "cudaVersionMin", cuda_version_min)
         _merge_if_set(payload, "cudaComputeCapability", compute_capability)
@@ -389,7 +387,7 @@ class CommandLineTool:
         *,
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(WorkReuse(enable, dict(extra or {})), as_hint=as_hint)
 
     def network_access(
@@ -398,7 +396,7 @@ class CommandLineTool:
         *,
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(NetworkAccess(enable, dict(extra or {})), as_hint=as_hint)
 
     def inplace_update(
@@ -407,7 +405,7 @@ class CommandLineTool:
         *,
         as_hint: bool = True,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(
             InplaceUpdateRequirement(enable, dict(extra or {})),
             as_hint=as_hint,
@@ -419,22 +417,22 @@ class CommandLineTool:
         *,
         as_hint: bool = False,
         extra: dict[str, Any] | None = None,
-    ) -> CommandLineTool:
+    ) -> "CommandLineTool":
         return self._apply_spec(ToolTimeLimit(seconds, dict(extra or {})), as_hint=as_hint)
 
-    def success_codes(self, *codes: int) -> CommandLineTool:
+    def success_codes(self, *codes: int) -> "CommandLineTool":
         self._success_codes = list(codes)
         return self
 
-    def temporary_fail_codes(self, *codes: int) -> CommandLineTool:
+    def temporary_fail_codes(self, *codes: int) -> "CommandLineTool":
         self._temporary_fail_codes = list(codes)
         return self
 
-    def permanent_fail_codes(self, *codes: int) -> CommandLineTool:
+    def permanent_fail_codes(self, *codes: int) -> "CommandLineTool":
         self._permanent_fail_codes = list(codes)
         return self
 
-    def extra(self, **values: Any) -> CommandLineTool:
+    def extra(self, **values: Any) -> "CommandLineTool":
         _warn_raw_escape_hatch("extra()")
         self._extra.update(
             _sanitize_raw_mapping(
@@ -452,7 +450,7 @@ class CommandLineTool:
         run_path: str | Path | None = None,
         config: dict[str, Any] | None = None,
         tool_registry: Tools | None = None,
-    ) -> Step:
+    ) -> "Step":
         """Convert this built CLT into an in-memory workflow `Step`.
 
         Args:
@@ -568,7 +566,7 @@ def step_from_command_line_tool(
     run_path: str | Path | None = None,
     config: dict[str, Any] | None = None,
     tool_registry: Tools | None = None,
-) -> Step:
+) -> "Step":
     """Convert a built CLT into a workflow `Step` entirely in memory.
 
     Args:

@@ -19,6 +19,8 @@ modules:
    from sophios.apis.python.workflow import Step, Workflow
    from sophios.apis.python.tool_builder import CommandLineTool, Input, Output
 
+The supported workflow import path is ``sophios.apis.python.workflow``.
+
 The detailed member documentation lives in the concrete modules below.
 
 sophios.apis.python.workflow

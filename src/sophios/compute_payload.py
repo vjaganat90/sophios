@@ -1,7 +1,5 @@
 """Schema-backed compute-slurm payload objects."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from functools import lru_cache
 import json
@@ -56,7 +54,7 @@ class OutputConfig:
     output_dir: str | Path | None = None
 
     @classmethod
-    def service_default(cls) -> OutputConfig:
+    def service_default(cls) -> "OutputConfig":
         """Use the service-managed output directory.
 
         Returns:
@@ -65,7 +63,7 @@ class OutputConfig:
         return cls(mode="serviceDefault")
 
     @classmethod
-    def workflow_declared(cls) -> OutputConfig:
+    def workflow_declared(cls) -> "OutputConfig":
         """Preserve the workflow's own output behavior.
 
         Returns:
@@ -74,7 +72,7 @@ class OutputConfig:
         return cls(mode="workflowDeclared")
 
     @classmethod
-    def user_specified(cls, output_dir: str | Path) -> OutputConfig:
+    def user_specified(cls, output_dir: str | Path) -> "OutputConfig":
         """Use a caller-provided output directory.
 
         Args:
@@ -91,7 +89,7 @@ class OutputConfig:
         *,
         mode: str | None = None,
         outputDir: str | Path | None = None,
-    ) -> OutputConfig:
+    ) -> "OutputConfig":
         """Construct from schema-shaped JSON field names.
 
         Args:

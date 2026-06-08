@@ -5,8 +5,6 @@ Keeping the bridge narrow lets the builder and workflow API evolve mostly
 independently while still supporting an in-memory handoff.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -32,7 +30,7 @@ def step_from_command_line_tool(
     run_path: str | Path | None = None,
     config: dict[str, Any] | None = None,
     tool_registry: Tools | None = None,
-) -> Step:
+) -> "Step":
     """Convert a built CLT into a workflow `Step` without touching disk.
 
     Args:

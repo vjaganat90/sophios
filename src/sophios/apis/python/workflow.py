@@ -1,8 +1,6 @@
 # pylint: disable=logging-fstring-interpolation,too-many-lines,protected-access
 """Python API for building Sophios workflows that compile to CWL."""
 
-from __future__ import annotations
-
 import logging
 import warnings
 from collections.abc import Mapping, Sequence
@@ -121,7 +119,7 @@ def _resolve_parameter_type(
         )
 
 
-def _warn_implicit_workflow_parameter(workflow: Workflow, name: str, kind: str) -> None:
+def _warn_implicit_workflow_parameter(workflow: "Workflow", name: str, kind: str) -> None:
     """Warn when compatibility syntax implicitly declares workflow interface."""
     warnings.warn(
         (
@@ -165,7 +163,7 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
             input_port.set_bound_parameter_type(_infer_literal_parameter_type(value))
 
 
-def _bind_workflow_output(workflow: Workflow, output_name: str, value: Any) -> None:
+def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) -> None:
     output_parameter = workflow.add_output(output_name, implicit=True)
     match value:
         case OutputParameter(parent_obj=Step(process_name=process_name), name=name) as source:
@@ -306,7 +304,7 @@ class Step:
         run_path: StrPath | None = None,
         config: Mapping[str, Any] | None = None,
         tool_registry: Tools | None = None,
-    ) -> Step:
+    ) -> "Step":
         # pylint: disable=too-many-arguments
         """Create a ``Step`` from an in-memory CWL CommandLineTool document.
 
@@ -453,7 +451,7 @@ class Step:
         self,
         *inputs: InputParameter,
         method: str | ScatterMethod = ScatterMethod.dotproduct.value,
-    ) -> Step:
+    ) -> "Step":
         """Scatter this step over one or more already-bound input parameters.
 
         Args:
@@ -509,11 +507,11 @@ class Step:
         """
         return None
 
-    def flatten_steps(self) -> list[Step]:
+    def flatten_steps(self) -> "list[Step]":
         """Return this step as a single-item list for recursive traversal."""
         return [self]
 
-    def flatten_subworkflows(self) -> list[Workflow]:
+    def flatten_subworkflows(self) -> "list[Workflow]":
         """Return an empty subworkflow list because steps do not nest workflows."""
         return []
 
@@ -553,7 +551,7 @@ class Workflow:
         "yml_path",
     }
 
-    steps: list[Step | Workflow]
+    steps: "list[Step | Workflow]"
     process_name: str
     _inputs: ParameterStore[InputParameter]
     _outputs: ParameterStore[OutputParameter]
@@ -561,7 +559,7 @@ class Workflow:
     outputs: ParameterNamespace[OutputParameter, OutputParameter]
     yml_path: Path | None
 
-    def __init__(self, steps: Sequence[Step | Workflow], workflow_name: str):
+    def __init__(self, steps: "Sequence[Step | Workflow]", workflow_name: str):
         """Create a workflow from steps and/or nested subworkflows.
 
         Args:
@@ -820,7 +818,7 @@ class Workflow:
         """
         return [step for child in self.steps for step in child.flatten_steps()]
 
-    def flatten_subworkflows(self) -> list[Workflow]:
+    def flatten_subworkflows(self) -> "list[Workflow]":
         """Return this workflow and all nested subworkflows.
 
         Returns:

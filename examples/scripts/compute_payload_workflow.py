@@ -1,7 +1,5 @@
 """Build a workflow in Python and turn it into a validated compute payload."""
 
-from __future__ import annotations
-
 from datetime import datetime
 import json
 from pathlib import Path

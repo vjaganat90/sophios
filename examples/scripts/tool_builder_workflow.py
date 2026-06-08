@@ -1,7 +1,5 @@
 """Build and compose in-memory CWL tools with the Sophios workflow Python API."""
 
-from __future__ import annotations
-
 from pathlib import Path
 import sys
 

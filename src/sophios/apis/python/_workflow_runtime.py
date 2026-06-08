@@ -5,8 +5,6 @@ of the public workflow module so `Step` and `Workflow` stay focused on
 Python-facing workflow authoring.
 """
 
-from __future__ import annotations
-
 # pylint: disable=protected-access
 # This module is the private adapter layer between the workflow objects and the
 # legacy compiler/runtime internals, so reaching internal state is intentional.
@@ -275,7 +273,7 @@ def load_clt_document(
 
 
 def workflow_document(
-    workflow: Workflow,
+    workflow: "Workflow",
     *,
     inline_subtrees: bool,
     directory: Path | None = None,
@@ -335,7 +333,7 @@ def workflow_document(
     return document
 
 
-def write_workflow_ast_to_disk(workflow: Workflow, directory: Path) -> None:
+def write_workflow_ast_to_disk(workflow: "Workflow", directory: Path) -> None:
     """Write a workflow tree to disk as sibling `.wic` files.
 
     Args:
@@ -348,7 +346,7 @@ def write_workflow_ast_to_disk(workflow: Workflow, directory: Path) -> None:
     write_workflow_wic(workflow, directory, inline_subworkflows=False)
 
 
-def _wic_output_path(workflow: Workflow, path: str | Path | None) -> Path:
+def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:
     """Resolve user-provided `.wic` output destinations."""
     if path is None:
         return Path(f"{workflow.process_name}.wic")
@@ -361,7 +359,7 @@ def _wic_output_path(workflow: Workflow, path: str | Path | None) -> Path:
     return output_path / f"{workflow.process_name}.wic"
 
 
-def workflow_wic_text(workflow: Workflow, *, inline_subworkflows: bool = True) -> str:
+def workflow_wic_text(workflow: "Workflow", *, inline_subworkflows: bool = True) -> str:
     """Render a workflow as `.wic` YAML text.
 
     Args:
@@ -392,7 +390,7 @@ def workflow_wic_text(workflow: Workflow, *, inline_subworkflows: bool = True) -
 
 
 def write_workflow_wic(
-    workflow: Workflow,
+    workflow: "Workflow",
     path: str | Path | None = None,
     *,
     inline_subworkflows: bool = True,
@@ -431,7 +429,7 @@ def write_workflow_wic(
     return output_path
 
 
-def _extract_tools_paths_nonportable(steps: list[Step]) -> Tools:
+def _extract_tools_paths_nonportable(steps: list["Step"]) -> Tools:
     """Extract concrete tool definitions from instantiated steps.
 
     Args:
@@ -443,14 +441,14 @@ def _extract_tools_paths_nonportable(steps: list[Step]) -> Tools:
     return {StepId(step.process_name, "global"): Tool(str(step.clt_path), step.yaml) for step in steps}
 
 
-def _step_registries(steps: list[Step]) -> Tools:
+def _step_registries(steps: list["Step"]) -> Tools:
     merged_tools: Tools = {}
     for step in steps:
         merged_tools.update(step._tool_registry)
     return merged_tools
 
 
-def _merged_known_tools(steps: list[Step], tool_registry: Tools | None = None) -> Tools:
+def _merged_known_tools(steps: list["Step"], tool_registry: Tools | None = None) -> Tools:
     merged_tools = dict(_extract_tools_paths_nonportable(steps))
     merged_tools.update(_step_registries(steps))
     if tool_registry is not None:
@@ -459,7 +457,7 @@ def _merged_known_tools(steps: list[Step], tool_registry: Tools | None = None) -
 
 
 def compile_workflow(
-    workflow: Workflow,
+    workflow: "Workflow",
     *,
     write_to_disk: bool = False,
     tool_registry: Tools | None = None,
@@ -506,7 +504,7 @@ def compile_workflow(
     return compiler_info
 
 
-def runtime_rose_tree(workflow: Workflow, *, tool_registry: Tools | None = None) -> RoseTree:
+def runtime_rose_tree(workflow: "Workflow", *, tool_registry: Tools | None = None) -> RoseTree:
     """Compile a workflow and inline runtime tags for local execution.
 
     Args:
@@ -519,7 +517,7 @@ def runtime_rose_tree(workflow: Workflow, *, tool_registry: Tools | None = None)
     return pc.cwl_inline_runtag(compile_workflow(workflow, tool_registry=tool_registry).rose)
 
 
-def compiled_cwl_json(workflow: Workflow, *, tool_registry: Tools | None = None) -> Json:
+def compiled_cwl_json(workflow: "Workflow", *, tool_registry: Tools | None = None) -> Json:
     """Return the compiled CWL workflow document plus generated inputs.
 
     Args:
@@ -559,7 +557,7 @@ def _run_arg_enabled(value: Any) -> bool:
 
 
 def run_workflow(
-    workflow: Workflow,
+    workflow: "Workflow",
     *,
     run_args_dict: dict[str, str] | None = None,
     user_env_vars: dict[str, str] | None = None,

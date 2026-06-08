@@ -1,7 +1,5 @@
 """Private dataclasses for the Tool Builder."""
 
-from __future__ import annotations
-
 # pylint: disable=missing-function-docstring,too-few-public-methods
 # pylint: disable=too-many-instance-attributes,too-many-arguments
 # pylint: disable=too-many-locals,redefined-builtin,too-many-lines
@@ -61,7 +59,7 @@ class SecondaryFile:
         return payload
 
 
-def secondary_file(pattern: Any, *, required: bool | str | None = None, **extra: Any) -> SecondaryFile:
+def secondary_file(pattern: Any, *, required: bool | str | None = None, **extra: Any) -> "SecondaryFile":
     """Create a secondary file specification."""
     return SecondaryFile(pattern=pattern, required=required, extra=dict(extra))
 
@@ -90,7 +88,7 @@ class Dirent:
         writable: bool = False,
         entryname: str | None = None,
         extra: dict[str, Any] | None = None,
-    ) -> Dirent:
+    ) -> "Dirent":
         name = _named_parameter(reference, kind="input")
         return cls(
             entry=_input_expression(name),
@@ -447,11 +445,11 @@ class FieldSpec:
         object.__setattr__(self, "extra", dict(extra or {}))
 
     @classmethod
-    def array(cls, items: Any, **kwargs: Any) -> FieldSpec:
+    def array(cls, items: Any, **kwargs: Any) -> "FieldSpec":
         return cls({"type": "array", "items": _canonicalize_type(items)}, **kwargs)
 
     @classmethod
-    def enum(cls, *symbols: str, name: str | None = None, **kwargs: Any) -> FieldSpec:
+    def enum(cls, *symbols: str, name: str | None = None, **kwargs: Any) -> "FieldSpec":
         payload: dict[str, Any] = {"type": "enum", "symbols": list(symbols)}
         _merge_if_set(payload, "name", name)
         return cls(payload, **kwargs)
@@ -459,23 +457,23 @@ class FieldSpec:
     @classmethod
     def record(
         cls,
-        fields: Mapping[str, FieldSpec] | list[Any],
+        fields: Mapping[str, "FieldSpec"] | list[Any],
         *,
         name: str | None = None,
         **kwargs: Any,
-    ) -> FieldSpec:
+    ) -> "FieldSpec":
         return cls(_record_type_payload(fields, name=name), **kwargs)
 
-    def named(self, name: str) -> FieldSpec:
+    def named(self, name: str) -> "FieldSpec":
         return _replace_frozen(self, name=name)
 
-    def label(self, text: str) -> FieldSpec:
+    def label(self, text: str) -> "FieldSpec":
         return _replace_frozen(self, label_text=text)
 
-    def doc(self, text: str | list[str]) -> FieldSpec:
+    def doc(self, text: str | list[str]) -> "FieldSpec":
         return _replace_frozen(self, doc_text=text)
 
-    def default(self, value: Any) -> FieldSpec:
+    def default(self, value: Any) -> "FieldSpec":
         return _replace_frozen(self, default_value=value)
 
     def to_dict(self) -> dict[str, Any]:
@@ -557,11 +555,11 @@ class InputSpec:
         object.__setattr__(self, "name", name)
 
     @classmethod
-    def array(cls, items: Any, **kwargs: Any) -> InputSpec:
+    def array(cls, items: Any, **kwargs: Any) -> "InputSpec":
         return cls({"type": "array", "items": _canonicalize_type(items)}, **kwargs)
 
     @classmethod
-    def enum(cls, *symbols: str, name: str | None = None, **kwargs: Any) -> InputSpec:
+    def enum(cls, *symbols: str, name: str | None = None, **kwargs: Any) -> "InputSpec":
         payload: dict[str, Any] = {"type": "enum", "symbols": list(symbols)}
         _merge_if_set(payload, "name", name)
         return cls(payload, **kwargs)
@@ -573,37 +571,37 @@ class InputSpec:
         *,
         name: str | None = None,
         **kwargs: Any,
-    ) -> InputSpec:
+    ) -> "InputSpec":
         return cls(_record_type_payload(fields, name=name), **kwargs)
 
-    def named(self, name: str) -> InputSpec:
+    def named(self, name: str) -> "InputSpec":
         return _replace_frozen(self, name=name)
 
-    def label(self, text: str) -> InputSpec:
+    def label(self, text: str) -> "InputSpec":
         return _replace_frozen(self, label_text=text)
 
-    def doc(self, text: str | list[str]) -> InputSpec:
+    def doc(self, text: str | list[str]) -> "InputSpec":
         return _replace_frozen(self, doc_text=text)
 
-    def default(self, value: Any) -> InputSpec:
+    def default(self, value: Any) -> "InputSpec":
         return _replace_frozen(self, default_value=value)
 
-    def format(self, value: Any) -> InputSpec:
+    def format(self, value: Any) -> "InputSpec":
         return _replace_frozen(self, format_value=value)
 
-    def secondary_files(self, *values: Any) -> InputSpec:
+    def secondary_files(self, *values: Any) -> "InputSpec":
         return _replace_frozen(self, secondary_files_value=list(values))
 
-    def streamable(self, value: bool) -> InputSpec:
+    def streamable(self, value: bool) -> "InputSpec":
         return _replace_frozen(self, streamable_value=value)
 
-    def load_contents(self, value: bool) -> InputSpec:
+    def load_contents(self, value: bool) -> "InputSpec":
         return _replace_frozen(self, load_contents_value=value)
 
-    def load_listing(self, value: str) -> InputSpec:
+    def load_listing(self, value: str) -> "InputSpec":
         return _replace_frozen(self, load_listing_value=value)
 
-    def value_from(self, expression: Any) -> InputSpec:
+    def value_from(self, expression: Any) -> "InputSpec":
         return _replace_frozen(self, binding_value_from=expression)
 
     def to_dict(self) -> dict[str, Any]:
@@ -694,11 +692,11 @@ class OutputSpec:
         object.__setattr__(self, "name", name)
 
     @classmethod
-    def array(cls, items: Any, **kwargs: Any) -> OutputSpec:
+    def array(cls, items: Any, **kwargs: Any) -> "OutputSpec":
         return cls({"type": "array", "items": _canonicalize_type(items)}, **kwargs)
 
     @classmethod
-    def enum(cls, *symbols: str, name: str | None = None, **kwargs: Any) -> OutputSpec:
+    def enum(cls, *symbols: str, name: str | None = None, **kwargs: Any) -> "OutputSpec":
         payload: dict[str, Any] = {"type": "enum", "symbols": list(symbols)}
         _merge_if_set(payload, "name", name)
         return cls(payload, **kwargs)
@@ -710,39 +708,39 @@ class OutputSpec:
         *,
         name: str | None = None,
         **kwargs: Any,
-    ) -> OutputSpec:
+    ) -> "OutputSpec":
         return cls(_record_type_payload(fields, name=name), **kwargs)
 
     @classmethod
-    def stdout(cls, **kwargs: Any) -> OutputSpec:
+    def stdout(cls, **kwargs: Any) -> "OutputSpec":
         return cls("stdout", **kwargs)
 
     @classmethod
-    def stderr(cls, **kwargs: Any) -> OutputSpec:
+    def stderr(cls, **kwargs: Any) -> "OutputSpec":
         return cls("stderr", **kwargs)
 
-    def named(self, name: str) -> OutputSpec:
+    def named(self, name: str) -> "OutputSpec":
         return _replace_frozen(self, name=name)
 
-    def label(self, text: str) -> OutputSpec:
+    def label(self, text: str) -> "OutputSpec":
         return _replace_frozen(self, label_text=text)
 
-    def doc(self, text: str | list[str]) -> OutputSpec:
+    def doc(self, text: str | list[str]) -> "OutputSpec":
         return _replace_frozen(self, doc_text=text)
 
-    def format(self, value: Any) -> OutputSpec:
+    def format(self, value: Any) -> "OutputSpec":
         return _replace_frozen(self, format_value=value)
 
-    def secondary_files(self, *values: Any) -> OutputSpec:
+    def secondary_files(self, *values: Any) -> "OutputSpec":
         return _replace_frozen(self, secondary_files_value=list(values))
 
-    def streamable(self, value: bool) -> OutputSpec:
+    def streamable(self, value: bool) -> "OutputSpec":
         return _replace_frozen(self, streamable_value=value)
 
-    def load_listing(self, value: str) -> OutputSpec:
+    def load_listing(self, value: str) -> "OutputSpec":
         return _replace_frozen(self, load_listing_value=value)
 
-    def load_contents(self, value: bool) -> OutputSpec:
+    def load_contents(self, value: bool) -> "OutputSpec":
         return _replace_frozen(self, load_contents_value=value)
 
     def to_dict(self) -> dict[str, Any]:

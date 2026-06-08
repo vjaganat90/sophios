@@ -1,7 +1,5 @@
 """Parameter and namespace helpers for the Python workflow API."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Generic, Iterator, TypeVar
@@ -277,7 +275,7 @@ class OutputParameter(_ParameterBase):
 class WorkflowInputReference:
     """Symbolic reference to a workflow input variable."""
 
-    workflow: Workflow
+    workflow: "Workflow"
     name: str
     implicit: bool = False
 
