@@ -480,6 +480,17 @@ def test_workflow_write_artifacts_delegates_to_disk_compilation(
 
 
 @pytest.mark.fast
+def test_workflow_port_names_reject_namespace_collisions() -> None:
+    workflow = Workflow([], "wf")
+
+    with pytest.raises(ValueError, match="reserved by port namespaces"):
+        workflow.add_input("_store")
+
+    with pytest.raises(ValueError, match="reserved by port namespaces"):
+        workflow.add_output("_getter")
+
+
+@pytest.mark.fast
 def test_workflow_write_wic_exports_source_workflow_with_inferred_edges(tmp_path: Path) -> None:
     touch = Step(_adapter("touch"))
     touch.inputs.filename = "empty.txt"
@@ -630,6 +641,12 @@ def test_top_level_python_api_exposes_concrete_modules_only() -> None:
 @pytest.mark.fast
 def test_workflow_requires_steps_in_constructor() -> None:
     assert "append" not in Workflow.__dict__
+    assert "get_cwl_workflow" not in Workflow.__dict__
+    assert "write_ast_to_disk" not in Workflow.__dict__
+    assert "flatten_steps" not in Workflow.__dict__
+    assert "flatten_subworkflows" not in Workflow.__dict__
+    assert "get_inp_attr" not in Workflow.__dict__
+    assert "get_inp_attr" not in Step.__dict__
 
 
 @pytest.mark.fast
@@ -855,7 +872,7 @@ def test_compile_python_workflows() -> None:
             retval.compile_to_cwl()
             retval.write_wic(path.parent, inline_subworkflows=False)
             generated_workflows.extend(
-                path.parent / f"{wf.process_name}.wic" for wf in retval.flatten_subworkflows())
+                path.parent / f"{wf.process_name}.wic" for wf in retval._flatten_subworkflows())
 
             config_ci = path.parent / "config_ci.json"
             json_contents = {}
@@ -863,7 +880,7 @@ def test_compile_python_workflows() -> None:
                 with open(config_ci, mode="r", encoding="utf-8") as r:
                     json_contents = json.load(r)
             run_blacklist: list[str] = json_contents.get("run_blacklist", [])
-            subworkflows: list[workflow.Workflow] = retval.flatten_subworkflows()[
+            subworkflows: list[workflow.Workflow] = retval._flatten_subworkflows()[
                 1:]
             run_blacklist += [wf.process_name for wf in subworkflows]
             json_contents["run_blacklist"] = run_blacklist

@@ -7,7 +7,7 @@
 # constructors and small fluent helpers are intentional rather than accidental.
 
 from dataclasses import dataclass, field, fields as dataclass_fields
-from typing import Any, ClassVar, Mapping, TypeVar, cast
+from typing import Any, Callable, ClassVar, Mapping, NamedTuple, TypeVar, cast
 
 from ._tool_builder_support import (
     _SUPPORT,
@@ -15,7 +15,6 @@ from ._tool_builder_support import (
     _basename_expression,
     _canonicalize_type,
     _input_expression,
-    _merge_if_present,
     _merge_if_set,
     _named_parameter,
     _optional_binding,
@@ -27,6 +26,35 @@ from ._tool_builder_support import (
 
 
 FrozenSpecT = TypeVar("FrozenSpecT")
+
+
+class _CWLField(NamedTuple):
+    name: str
+    cwl_name: str
+    default: Any = _SUPPORT.unset
+    render: Callable[[Any], Any] = _render
+    omit_empty: bool = False
+
+
+def _render_sequence(values: list[Any]) -> list[Any]:
+    return [_render(value) for value in values]
+
+
+def _canonicalize_sequence(values: list[Any]) -> list[Any]:
+    return [_canonicalize_type(value) for value in values]
+
+
+def _render_dataclass_cwl(obj: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for item in dataclass_fields(cast(Any, obj)):
+        cwl_key = item.metadata.get("cwl")
+        value = getattr(obj, item.name)
+        if cwl_key is None or value is None or value is _SUPPORT.unset:
+            continue
+        payload[str(cwl_key)] = item.metadata.get("render", _render)(value)
+    if extra := getattr(obj, "extra", None):
+        payload.update(_render(extra))
+    return payload
 
 
 def _replace_frozen(obj: FrozenSpecT, **changes: Any) -> FrozenSpecT:
@@ -42,22 +70,64 @@ def _replace_frozen(obj: FrozenSpecT, **changes: Any) -> FrozenSpecT:
     return clone
 
 
-@dataclass(frozen=True, slots=True)
-class SecondaryFile:
+def _set_frozen_attrs(obj: Any, **values: Any) -> None:
+    for name, value in values.items():
+        object.__setattr__(obj, name, value)
+
+
+class _CWLObject:
+    _fields: ClassVar[tuple[_CWLField, ...]] = ()
+
+    def __init__(self, *args: Any, extra: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        values = list(args)
+        if len(values) > len(self._fields):
+            if len(values) == len(self._fields) + 1 and extra is None:
+                extra = values.pop()
+            else:
+                raise TypeError(f"{type(self).__name__} accepts at most {len(self._fields)} positional arguments")
+
+        for item, value in zip(self._fields, values):
+            if item.name in kwargs:
+                raise TypeError(f"{type(self).__name__} got multiple values for {item.name!r}")
+            setattr(self, item.name, value)
+        for item in self._fields[len(values):]:
+            value = kwargs.pop(item.name, item.default)
+            if value is _SUPPORT.unset:
+                raise TypeError(f"{type(self).__name__} missing required argument: {item.name!r}")
+            setattr(self, item.name, value)
+        if kwargs:
+            unknown = next(iter(kwargs))
+            raise TypeError(f"{type(self).__name__} got an unexpected keyword argument {unknown!r}")
+        self.extra = dict(extra or {})
+
+    def _render_cwl(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for item in self._fields:
+            value = getattr(self, item.name)
+            if value is None or value is _SUPPORT.unset or (item.omit_empty and not value):
+                continue
+            payload[item.cwl_name] = item.render(value)
+        if self.extra:
+            payload.update(_render(self.extra))
+        return payload
+
+    def to_dict(self) -> Any:
+        return self._render_cwl()
+
+
+class SecondaryFile(_CWLObject):
     """A CWL secondary file pattern."""
 
-    pattern: Any
-    required: bool | str | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
+    _fields = (
+        _CWLField("pattern", "pattern"),
+        _CWLField("required", "required", None),
+    )
 
     def to_dict(self) -> str | dict[str, Any]:
-        match self.pattern, self.required, self.extra:
+        match getattr(self, "pattern"), getattr(self, "required"), self.extra:
             case str() as pattern, None, extra if not extra:
                 return pattern
-        payload = {"pattern": _render(self.pattern)}
-        _merge_if_set(payload, "required", self.required)
-        payload.update(_render(self.extra))
-        return payload
+        return self._render_cwl()
 
 
 def secondary_file(pattern: Any, *, required: bool | str | None = None, **extra: Any) -> "SecondaryFile":
@@ -65,21 +135,14 @@ def secondary_file(pattern: Any, *, required: bool | str | None = None, **extra:
     return SecondaryFile(pattern=pattern, required=required, extra=dict(extra))
 
 
-@dataclass(frozen=True, slots=True)
-class Dirent:
+class Dirent(_CWLObject):
     """A CWL InitialWorkDirRequirement listing entry."""
 
-    entry: Any
-    entryname: str | None = None
-    writable: bool | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        payload = {"entry": _render(self.entry)}
-        _merge_if_set(payload, "entryname", self.entryname)
-        _merge_if_set(payload, "writable", self.writable)
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (
+        _CWLField("entry", "entry"),
+        _CWLField("entryname", "entryname", None),
+        _CWLField("writable", "writable", None),
+    )
 
     @classmethod
     def from_input(
@@ -99,57 +162,39 @@ class Dirent:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class EnvironmentDef:
+class EnvironmentDef(_CWLObject):
     """An EnvVarRequirement entry."""
 
-    env_name: str
-    env_value: str
+    _fields = (
+        _CWLField("env_name", "envName"),
+        _CWLField("env_value", "envValue"),
+    )
 
     def to_dict(self) -> dict[str, str]:
-        return {"envName": self.env_name, "envValue": self.env_value}
+        return cast(dict[str, str], self._render_cwl())
 
 
-@dataclass(frozen=True, slots=True)
-class CommandLineBinding:
+class CommandLineBinding(_CWLObject):
     """A CWL input binding or argument binding."""
 
-    position: int | float | None = None
-    prefix: str | None = None
-    separate: bool | None = None
-    item_separator: str | None = None
-    value_from: Any = None
-    shell_quote: bool | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        _merge_if_set(payload, "position", self.position)
-        _merge_if_set(payload, "prefix", self.prefix)
-        _merge_if_set(payload, "separate", self.separate)
-        _merge_if_set(payload, "itemSeparator", self.item_separator)
-        _merge_if_set(payload, "valueFrom", self.value_from)
-        _merge_if_set(payload, "shellQuote", self.shell_quote)
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (
+        _CWLField("position", "position", None),
+        _CWLField("prefix", "prefix", None),
+        _CWLField("separate", "separate", None),
+        _CWLField("item_separator", "itemSeparator", None),
+        _CWLField("value_from", "valueFrom", None),
+        _CWLField("shell_quote", "shellQuote", None),
+    )
 
 
-@dataclass(frozen=True, slots=True)
-class CommandOutputBinding:
+class CommandOutputBinding(_CWLObject):
     """A CWL output binding."""
 
-    glob: Any = None
-    load_contents: bool | None = None
-    output_eval: str | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        _merge_if_set(payload, "glob", self.glob)
-        _merge_if_set(payload, "loadContents", self.load_contents)
-        _merge_if_set(payload, "outputEval", self.output_eval)
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (
+        _CWLField("glob", "glob", None),
+        _CWLField("load_contents", "loadContents", None),
+        _CWLField("output_eval", "outputEval", None),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,259 +218,185 @@ class CommandArgument:
         return payload
 
 
-class _RequirementSpec:
+class _RequirementSpec(_CWLObject):
     class_name: ClassVar[str]
 
+    def __init_subclass__(cls) -> None:
+        super().__init_subclass__()
+        cls.class_name = cls.__name__
+
     def to_fields(self) -> dict[str, Any]:
-        raise NotImplementedError
+        return self._render_cwl()
 
 
-@dataclass(frozen=True, slots=True)
 class DockerRequirement(_RequirementSpec):
     """DockerRequirement helper."""
 
-    docker_pull: str | None = None
-    docker_load: str | None = None
-    docker_file: str | dict[str, Any] | None = None
-    docker_import: str | None = None
-    docker_image_id: str | None = None
-    docker_output_directory: str | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "DockerRequirement"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        _merge_if_set(payload, "dockerPull", self.docker_pull)
-        _merge_if_set(payload, "dockerLoad", self.docker_load)
-        _merge_if_set(payload, "dockerFile", self.docker_file)
-        _merge_if_set(payload, "dockerImport", self.docker_import)
-        _merge_if_set(payload, "dockerImageId", self.docker_image_id)
-        _merge_if_set(payload, "dockerOutputDirectory", self.docker_output_directory)
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (
+        _CWLField("docker_pull", "dockerPull", None),
+        _CWLField("docker_load", "dockerLoad", None),
+        _CWLField("docker_file", "dockerFile", None),
+        _CWLField("docker_import", "dockerImport", None),
+        _CWLField("docker_image_id", "dockerImageId", None),
+        _CWLField("docker_output_directory", "dockerOutputDirectory", None),
+    )
 
 
-@dataclass(frozen=True, slots=True)
 class InlineJavascriptRequirement(_RequirementSpec):
     """InlineJavascriptRequirement helper."""
 
-    expression_lib: list[str] | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "InlineJavascriptRequirement"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        if self.expression_lib:
-            payload["expressionLib"] = list(self.expression_lib)
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (_CWLField("expression_lib", "expressionLib", None, _render_sequence, True),)
 
 
-@dataclass(frozen=True, slots=True)
 class SchemaDefRequirement(_RequirementSpec):
     """SchemaDefRequirement helper."""
 
-    types: list[Any]
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "SchemaDefRequirement"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload = {"types": [_canonicalize_type(type_) for type_ in self.types]}
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (_CWLField("types", "types", _SUPPORT.unset, _canonicalize_sequence),)
 
 
-@dataclass(frozen=True, slots=True)
 class LoadListingRequirement(_RequirementSpec):
     """LoadListingRequirement helper."""
 
-    load_listing: str
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "LoadListingRequirement"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload = {"loadListing": self.load_listing}
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (_CWLField("load_listing", "loadListing"),)
 
 
-@dataclass(frozen=True, slots=True)
 class ShellCommandRequirement(_RequirementSpec):
     """ShellCommandRequirement helper."""
 
-    extra: dict[str, Any] = field(default_factory=dict)
 
-    class_name: ClassVar[str] = "ShellCommandRequirement"
-
-    def to_fields(self) -> dict[str, Any]:
-        return {key: _render(value) for key, value in self.extra.items()}
-
-
-@dataclass(frozen=True, slots=True)
-class SoftwarePackage:
+class SoftwarePackage(_CWLObject):
     """A SoftwareRequirement package entry."""
 
-    package: str
-    version: list[str] | None = None
-    specs: list[str] | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        payload = {"package": self.package}
-        _merge_if_set(payload, "version", self.version)
-        _merge_if_set(payload, "specs", self.specs)
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (
+        _CWLField("package", "package"),
+        _CWLField("version", "version", None),
+        _CWLField("specs", "specs", None),
+    )
 
 
-@dataclass(frozen=True, slots=True)
 class SoftwareRequirement(_RequirementSpec):
     """SoftwareRequirement helper."""
 
-    packages: list[SoftwarePackage | dict[str, Any]]
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "SoftwareRequirement"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload = {"packages": [_render(package) for package in self.packages]}
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (_CWLField("packages", "packages", _SUPPORT.unset, _render_sequence),)
 
 
-@dataclass(frozen=True, slots=True)
 class InitialWorkDirRequirement(_RequirementSpec):
     """InitialWorkDirRequirement helper."""
 
-    listing: Any
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "InitialWorkDirRequirement"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload = {"listing": _render(self.listing)}
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (_CWLField("listing", "listing"),)
 
 
-@dataclass(frozen=True, slots=True)
 class EnvVarRequirement(_RequirementSpec):
     """EnvVarRequirement helper."""
 
-    env_def: list[EnvironmentDef | dict[str, Any]]
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "EnvVarRequirement"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload = {"envDef": [_render(item) for item in self.env_def]}
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (_CWLField("env_def", "envDef", _SUPPORT.unset, _render_sequence),)
 
 
-@dataclass(frozen=True, slots=True)
 class ResourceRequirement(_RequirementSpec):
     """ResourceRequirement helper."""
 
-    cores_min: int | float | str | None = None
-    cores_max: int | float | str | None = None
-    ram_min: int | float | str | None = None
-    ram_max: int | float | str | None = None
-    tmpdir_min: int | float | str | None = None
-    tmpdir_max: int | float | str | None = None
-    outdir_min: int | float | str | None = None
-    outdir_max: int | float | str | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "ResourceRequirement"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        _merge_if_set(payload, "coresMin", self.cores_min)
-        _merge_if_set(payload, "coresMax", self.cores_max)
-        _merge_if_set(payload, "ramMin", self.ram_min)
-        _merge_if_set(payload, "ramMax", self.ram_max)
-        _merge_if_set(payload, "tmpdirMin", self.tmpdir_min)
-        _merge_if_set(payload, "tmpdirMax", self.tmpdir_max)
-        _merge_if_set(payload, "outdirMin", self.outdir_min)
-        _merge_if_set(payload, "outdirMax", self.outdir_max)
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (
+        _CWLField("cores_min", "coresMin", None),
+        _CWLField("cores_max", "coresMax", None),
+        _CWLField("ram_min", "ramMin", None),
+        _CWLField("ram_max", "ramMax", None),
+        _CWLField("tmpdir_min", "tmpdirMin", None),
+        _CWLField("tmpdir_max", "tmpdirMax", None),
+        _CWLField("outdir_min", "outdirMin", None),
+        _CWLField("outdir_max", "outdirMax", None),
+    )
 
 
-@dataclass(frozen=True, slots=True)
 class NetworkAccess(_RequirementSpec):
     """NetworkAccess helper."""
 
-    network_access: bool | str
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "NetworkAccess"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload = {"networkAccess": self.network_access}
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (_CWLField("network_access", "networkAccess"),)
 
 
-@dataclass(frozen=True, slots=True)
 class WorkReuse(_RequirementSpec):
     """WorkReuse helper."""
 
-    enable_reuse: bool | str
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "WorkReuse"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload = {"enableReuse": self.enable_reuse}
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (_CWLField("enable_reuse", "enableReuse"),)
 
 
-@dataclass(frozen=True, slots=True)
 class InplaceUpdateRequirement(_RequirementSpec):
     """InplaceUpdateRequirement helper."""
 
-    inplace_update: bool = True
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    class_name: ClassVar[str] = "InplaceUpdateRequirement"
-
-    def to_fields(self) -> dict[str, Any]:
-        payload = {"inplaceUpdate": self.inplace_update}
-        payload.update(_render(self.extra))
-        return payload
+    _fields = (_CWLField("inplace_update", "inplaceUpdate", True),)
 
 
-@dataclass(frozen=True, slots=True)
 class ToolTimeLimit(_RequirementSpec):
     """ToolTimeLimit helper."""
 
-    timelimit: int | str
-    extra: dict[str, Any] = field(default_factory=dict)
+    _fields = (_CWLField("timelimit", "timelimit"),)
 
-    class_name: ClassVar[str] = "ToolTimeLimit"
 
-    def to_fields(self) -> dict[str, Any]:
-        payload = {"timelimit": self.timelimit}
-        payload.update(_render(self.extra))
-        return payload
+class _CommonSpecMixin:
+    _name_context: ClassVar[str]
+
+    @classmethod
+    def array(cls: Any, items: Any, **kwargs: Any) -> Any:
+        return cls({"type": "array", "items": _canonicalize_type(items)}, **kwargs)
+
+    @classmethod
+    def enum(cls: Any, *symbols: str, name: str | None = None, **kwargs: Any) -> Any:
+        payload: dict[str, Any] = {"type": "enum", "symbols": list(symbols)}
+        _merge_if_set(payload, "name", name)
+        return cls(payload, **kwargs)
+
+    @classmethod
+    def record(
+        cls: Any,
+        fields: Mapping[str, "FieldSpec"] | list[Any],
+        *,
+        name: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        return cls(_record_type_payload(fields, name=name), **kwargs)
+
+    def named(self, name: str) -> Any:
+        return _replace_frozen(self, name=_validate_api_name(name, context=self._name_context))
+
+    def label(self, text: str) -> Any:
+        return _replace_frozen(self, label_text=text)
+
+    def doc(self, text: str | list[str]) -> Any:
+        return _replace_frozen(self, doc_text=text)
+
+
+class _DefaultSpecMixin:
+    def default(self, value: Any) -> Any:
+        return _replace_frozen(self, default_value=value)
+
+
+class _IOFacetMixin:
+    def format(self, value: Any) -> Any:
+        return _replace_frozen(self, format_value=value)
+
+    def secondary_files(self, *values: Any) -> Any:
+        return _replace_frozen(self, secondary_files_value=list(values))
+
+    def streamable(self, value: bool) -> Any:
+        return _replace_frozen(self, streamable_value=value)
+
+    def load_contents(self, value: bool) -> Any:
+        return _replace_frozen(self, load_contents_value=value)
+
+    def load_listing(self, value: str) -> Any:
+        return _replace_frozen(self, load_listing_value=value)
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class FieldSpec:
+class FieldSpec(_CommonSpecMixin, _DefaultSpecMixin):
     """A record field definition."""
+
+    _name_context: ClassVar[str] = "record field name"
 
     type_: Any
     name: str | None = None
-    label_text: str | None = None
-    doc_text: str | list[str] | None = None
-    default_value: Any = _SUPPORT.unset
+    label_text: str | None = field(default=None, metadata={"cwl": "label"})
+    doc_text: str | list[str] | None = field(default=None, metadata={"cwl": "doc", "render": _render_doc})
+    default_value: Any = field(default=_SUPPORT.unset, metadata={"cwl": "default", "present": True})
     extra: dict[str, Any] = field(default_factory=dict)
 
     def __init__(
@@ -438,63 +409,29 @@ class FieldSpec:
         default: Any = _SUPPORT.unset,
         extra: dict[str, Any] | None = None,
     ) -> None:
-        object.__setattr__(self, "type_", type_)
-        object.__setattr__(
+        _set_frozen_attrs(
             self,
-            "name",
-            None if name is None else _validate_api_name(name, context="record field name"),
+            type_=type_,
+            name=None if name is None else _validate_api_name(name, context="record field name"),
+            label_text=label,
+            doc_text=doc,
+            default_value=default,
+            extra=dict(extra or {}),
         )
-        object.__setattr__(self, "label_text", label)
-        object.__setattr__(self, "doc_text", doc)
-        object.__setattr__(self, "default_value", default)
-        object.__setattr__(self, "extra", dict(extra or {}))
-
-    @classmethod
-    def array(cls, items: Any, **kwargs: Any) -> "FieldSpec":
-        return cls({"type": "array", "items": _canonicalize_type(items)}, **kwargs)
-
-    @classmethod
-    def enum(cls, *symbols: str, name: str | None = None, **kwargs: Any) -> "FieldSpec":
-        payload: dict[str, Any] = {"type": "enum", "symbols": list(symbols)}
-        _merge_if_set(payload, "name", name)
-        return cls(payload, **kwargs)
-
-    @classmethod
-    def record(
-        cls,
-        fields: Mapping[str, "FieldSpec"] | list[Any],
-        *,
-        name: str | None = None,
-        **kwargs: Any,
-    ) -> "FieldSpec":
-        return cls(_record_type_payload(fields, name=name), **kwargs)
-
-    def named(self, name: str) -> "FieldSpec":
-        return _replace_frozen(self, name=_validate_api_name(name, context="record field name"))
-
-    def label(self, text: str) -> "FieldSpec":
-        return _replace_frozen(self, label_text=text)
-
-    def doc(self, text: str | list[str]) -> "FieldSpec":
-        return _replace_frozen(self, doc_text=text)
-
-    def default(self, value: Any) -> "FieldSpec":
-        return _replace_frozen(self, default_value=value)
 
     def to_dict(self) -> dict[str, Any]:
         if self.name is None:
             raise ValueError("Record fields must have a name before serialization")
         payload = {"name": self.name, "type": _canonicalize_type(self.type_)}
-        _merge_if_set(payload, "label", self.label_text)
-        _merge_if_set(payload, "doc", _render_doc(self.doc_text))
-        _merge_if_present(payload, "default", self.default_value)
-        payload.update(_render(self.extra))
+        payload.update(_render_dataclass_cwl(self))
         return payload
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class InputSpec:
+class InputSpec(_CommonSpecMixin, _DefaultSpecMixin, _IOFacetMixin):
     """A CWL CommandLineTool input."""
+
+    _name_context: ClassVar[str] = "input name"
 
     type_: Any
     position: int | float | None = None
@@ -504,14 +441,14 @@ class InputSpec:
     item_separator: str | None = None
     binding_value_from: Any = None
     shell_quote: bool | None = None
-    label_text: str | None = None
-    doc_text: str | list[str] | None = None
-    format_value: Any = None
-    secondary_files_value: Any = None
-    streamable_value: bool | None = None
-    load_contents_value: bool | None = None
-    load_listing_value: str | None = None
-    default_value: Any = _SUPPORT.unset
+    label_text: str | None = field(default=None, metadata={"cwl": "label"})
+    doc_text: str | list[str] | None = field(default=None, metadata={"cwl": "doc", "render": _render_doc})
+    format_value: Any = field(default=None, metadata={"cwl": "format"})
+    secondary_files_value: Any = field(default=None, metadata={"cwl": "secondaryFiles"})
+    streamable_value: bool | None = field(default=None, metadata={"cwl": "streamable"})
+    load_contents_value: bool | None = field(default=None, metadata={"cwl": "loadContents"})
+    load_listing_value: str | None = field(default=None, metadata={"cwl": "loadListing"})
+    default_value: Any = field(default=_SUPPORT.unset, metadata={"cwl": "default", "present": True})
     binding_extra: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     name: str | None = None
@@ -539,76 +476,28 @@ class InputSpec:
         extra: dict[str, Any] | None = None,
         name: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_", type_)
-        object.__setattr__(self, "position", position)
-        object.__setattr__(self, "flag", flag)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "separate", separate)
-        object.__setattr__(self, "item_separator", item_separator)
-        object.__setattr__(self, "binding_value_from", value_from)
-        object.__setattr__(self, "shell_quote", shell_quote)
-        object.__setattr__(self, "label_text", label)
-        object.__setattr__(self, "doc_text", doc)
-        object.__setattr__(self, "format_value", format)
-        object.__setattr__(self, "secondary_files_value", secondary_files)
-        object.__setattr__(self, "streamable_value", streamable)
-        object.__setattr__(self, "load_contents_value", load_contents)
-        object.__setattr__(self, "load_listing_value", load_listing)
-        object.__setattr__(self, "default_value", default)
-        object.__setattr__(self, "binding_extra", dict(binding_extra or {}))
-        object.__setattr__(self, "extra", dict(extra or {}))
-        object.__setattr__(
+        _set_frozen_attrs(
             self,
-            "name",
-            None if name is None else _validate_api_name(name, context="input name"),
+            type_=type_,
+            position=position,
+            flag=flag,
+            required=required,
+            separate=separate,
+            item_separator=item_separator,
+            binding_value_from=value_from,
+            shell_quote=shell_quote,
+            label_text=label,
+            doc_text=doc,
+            format_value=format,
+            secondary_files_value=secondary_files,
+            streamable_value=streamable,
+            load_contents_value=load_contents,
+            load_listing_value=load_listing,
+            default_value=default,
+            binding_extra=dict(binding_extra or {}),
+            extra=dict(extra or {}),
+            name=None if name is None else _validate_api_name(name, context="input name"),
         )
-
-    @classmethod
-    def array(cls, items: Any, **kwargs: Any) -> "InputSpec":
-        return cls({"type": "array", "items": _canonicalize_type(items)}, **kwargs)
-
-    @classmethod
-    def enum(cls, *symbols: str, name: str | None = None, **kwargs: Any) -> "InputSpec":
-        payload: dict[str, Any] = {"type": "enum", "symbols": list(symbols)}
-        _merge_if_set(payload, "name", name)
-        return cls(payload, **kwargs)
-
-    @classmethod
-    def record(
-        cls,
-        fields: Mapping[str, FieldSpec] | list[Any],
-        *,
-        name: str | None = None,
-        **kwargs: Any,
-    ) -> "InputSpec":
-        return cls(_record_type_payload(fields, name=name), **kwargs)
-
-    def named(self, name: str) -> "InputSpec":
-        return _replace_frozen(self, name=_validate_api_name(name, context="input name"))
-
-    def label(self, text: str) -> "InputSpec":
-        return _replace_frozen(self, label_text=text)
-
-    def doc(self, text: str | list[str]) -> "InputSpec":
-        return _replace_frozen(self, doc_text=text)
-
-    def default(self, value: Any) -> "InputSpec":
-        return _replace_frozen(self, default_value=value)
-
-    def format(self, value: Any) -> "InputSpec":
-        return _replace_frozen(self, format_value=value)
-
-    def secondary_files(self, *values: Any) -> "InputSpec":
-        return _replace_frozen(self, secondary_files_value=list(values))
-
-    def streamable(self, value: bool) -> "InputSpec":
-        return _replace_frozen(self, streamable_value=value)
-
-    def load_contents(self, value: bool) -> "InputSpec":
-        return _replace_frozen(self, load_contents_value=value)
-
-    def load_listing(self, value: str) -> "InputSpec":
-        return _replace_frozen(self, load_listing_value=value)
 
     def value_from(self, expression: Any) -> "InputSpec":
         return _replace_frozen(self, binding_value_from=expression)
@@ -628,33 +517,27 @@ class InputSpec:
         )
         if binding is not None:
             payload["inputBinding"] = binding.to_dict()
-        _merge_if_set(payload, "label", self.label_text)
-        _merge_if_set(payload, "doc", _render_doc(self.doc_text))
-        _merge_if_set(payload, "format", self.format_value)
-        _merge_if_set(payload, "secondaryFiles", self.secondary_files_value)
-        _merge_if_set(payload, "streamable", self.streamable_value)
-        _merge_if_set(payload, "loadContents", self.load_contents_value)
-        _merge_if_set(payload, "loadListing", self.load_listing_value)
-        _merge_if_present(payload, "default", self.default_value)
-        payload.update(_render(self.extra))
+        payload.update(_render_dataclass_cwl(self))
         return payload
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class OutputSpec:
+class OutputSpec(_CommonSpecMixin, _IOFacetMixin):
     """A CWL CommandLineTool output."""
+
+    _name_context: ClassVar[str] = "output name"
 
     type_: Any
     required: bool = True
     glob: Any = None
     load_contents_value: bool | None = None
     output_eval: str | None = None
-    label_text: str | None = None
-    doc_text: str | list[str] | None = None
-    format_value: Any = None
-    secondary_files_value: Any = None
-    streamable_value: bool | None = None
-    load_listing_value: str | None = None
+    label_text: str | None = field(default=None, metadata={"cwl": "label"})
+    doc_text: str | list[str] | None = field(default=None, metadata={"cwl": "doc", "render": _render_doc})
+    format_value: Any = field(default=None, metadata={"cwl": "format"})
+    secondary_files_value: Any = field(default=None, metadata={"cwl": "secondaryFiles"})
+    streamable_value: bool | None = field(default=None, metadata={"cwl": "streamable"})
+    load_listing_value: str | None = field(default=None, metadata={"cwl": "loadListing"})
     binding_extra: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     name: str | None = None
@@ -685,44 +568,23 @@ class OutputSpec:
             if from_input is not None
             else glob
         )
-        object.__setattr__(self, "type_", type_)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "glob", glob_value)
-        object.__setattr__(self, "load_contents_value", load_contents)
-        object.__setattr__(self, "output_eval", output_eval)
-        object.__setattr__(self, "label_text", label)
-        object.__setattr__(self, "doc_text", doc)
-        object.__setattr__(self, "format_value", format)
-        object.__setattr__(self, "secondary_files_value", secondary_files)
-        object.__setattr__(self, "streamable_value", streamable)
-        object.__setattr__(self, "load_listing_value", load_listing)
-        object.__setattr__(self, "binding_extra", dict(binding_extra or {}))
-        object.__setattr__(self, "extra", dict(extra or {}))
-        object.__setattr__(
+        _set_frozen_attrs(
             self,
-            "name",
-            None if name is None else _validate_api_name(name, context="output name"),
+            type_=type_,
+            required=required,
+            glob=glob_value,
+            load_contents_value=load_contents,
+            output_eval=output_eval,
+            label_text=label,
+            doc_text=doc,
+            format_value=format,
+            secondary_files_value=secondary_files,
+            streamable_value=streamable,
+            load_listing_value=load_listing,
+            binding_extra=dict(binding_extra or {}),
+            extra=dict(extra or {}),
+            name=None if name is None else _validate_api_name(name, context="output name"),
         )
-
-    @classmethod
-    def array(cls, items: Any, **kwargs: Any) -> "OutputSpec":
-        return cls({"type": "array", "items": _canonicalize_type(items)}, **kwargs)
-
-    @classmethod
-    def enum(cls, *symbols: str, name: str | None = None, **kwargs: Any) -> "OutputSpec":
-        payload: dict[str, Any] = {"type": "enum", "symbols": list(symbols)}
-        _merge_if_set(payload, "name", name)
-        return cls(payload, **kwargs)
-
-    @classmethod
-    def record(
-        cls,
-        fields: Mapping[str, FieldSpec] | list[Any],
-        *,
-        name: str | None = None,
-        **kwargs: Any,
-    ) -> "OutputSpec":
-        return cls(_record_type_payload(fields, name=name), **kwargs)
 
     @classmethod
     def stdout(cls, **kwargs: Any) -> "OutputSpec":
@@ -731,30 +593,6 @@ class OutputSpec:
     @classmethod
     def stderr(cls, **kwargs: Any) -> "OutputSpec":
         return cls("stderr", **kwargs)
-
-    def named(self, name: str) -> "OutputSpec":
-        return _replace_frozen(self, name=_validate_api_name(name, context="output name"))
-
-    def label(self, text: str) -> "OutputSpec":
-        return _replace_frozen(self, label_text=text)
-
-    def doc(self, text: str | list[str]) -> "OutputSpec":
-        return _replace_frozen(self, doc_text=text)
-
-    def format(self, value: Any) -> "OutputSpec":
-        return _replace_frozen(self, format_value=value)
-
-    def secondary_files(self, *values: Any) -> "OutputSpec":
-        return _replace_frozen(self, secondary_files_value=list(values))
-
-    def streamable(self, value: bool) -> "OutputSpec":
-        return _replace_frozen(self, streamable_value=value)
-
-    def load_listing(self, value: str) -> "OutputSpec":
-        return _replace_frozen(self, load_listing_value=value)
-
-    def load_contents(self, value: bool) -> "OutputSpec":
-        return _replace_frozen(self, load_contents_value=value)
 
     def to_dict(self) -> dict[str, Any]:
         payload = {"type": _apply_required(self.type_, self.required)}
@@ -768,11 +606,5 @@ class OutputSpec:
         )
         if binding is not None:
             payload["outputBinding"] = binding.to_dict()
-        _merge_if_set(payload, "label", self.label_text)
-        _merge_if_set(payload, "doc", _render_doc(self.doc_text))
-        _merge_if_set(payload, "format", self.format_value)
-        _merge_if_set(payload, "secondaryFiles", self.secondary_files_value)
-        _merge_if_set(payload, "streamable", self.streamable_value)
-        _merge_if_set(payload, "loadListing", self.load_listing_value)
-        payload.update(_render(self.extra))
+        payload.update(_render_dataclass_cwl(self))
         return payload

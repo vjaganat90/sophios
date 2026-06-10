@@ -1,4 +1,5 @@
 import importlib
+import inspect
 from pathlib import Path
 
 import pytest
@@ -89,12 +90,35 @@ def test_tool_builder_requires_structural_core() -> None:
 
 
 @pytest.mark.fast
+def test_command_line_tool_constructor_hides_internal_fields() -> None:
+    signature = inspect.signature(CommandLineTool)
+
+    assert list(signature.parameters) == ["name", "inputs", "outputs", "cwl_version"]
+    assert signature.parameters["cwl_version"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+@pytest.mark.fast
 def test_tool_builder_names_are_python_identifiers() -> None:
     with pytest.raises(ValueError, match="valid Python identifier"):
         Inputs(**{"input-file": Input(cwl.file)})
 
     with pytest.raises(ValueError, match="valid Python identifier"):
         Fields(**{"class": Field(cwl.string)})
+
+
+@pytest.mark.fast
+def test_tool_builder_names_reject_namespace_collisions() -> None:
+    with pytest.raises(ValueError, match="reserved"):
+        Inputs(items=Input(cwl.file))
+
+    with pytest.raises(ValueError, match="reserved"):
+        Outputs(to_dict=Output(cwl.file, glob="out.txt"))
+
+    with pytest.raises(ValueError, match="reserved"):
+        Fields(to_list=Field(cwl.string))
+
+    with pytest.raises(ValueError, match="reserved"):
+        Inputs(_items=Input(cwl.file))
 
 
 @pytest.mark.fast

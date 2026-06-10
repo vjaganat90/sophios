@@ -1,10 +1,10 @@
 """Schema-backed compute request objects."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dataclass_fields
 from functools import lru_cache
 import json
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, cast
 
 from jsonschema import Draft202012Validator
 
@@ -35,32 +35,45 @@ class CompiledWorkflowLike(Protocol):
         ...
 
 
-def _compact(mapping: Mapping[str, Any]) -> Json:
-    """Drop `None` values and stringify paths."""
-    return {
-        key: str(value) if isinstance(value, Path) else value
-        for key, value in mapping.items()
-        if value is not None
-    }
+def _json_value(value: Any) -> Any:
+    return str(value) if isinstance(value, Path) else value
+
+
+def _nested_mapping(value: Any) -> Json:
+    return cast(Json, value.to_mapping())
+
+
+def _config_mapping(config: Any) -> Json:
+    request: Json = {}
+    for item in dataclass_fields(config):
+        json_key = item.metadata.get("json")
+        if json_key is None:
+            continue
+        value = getattr(config, item.name)
+        if value is None:
+            continue
+        renderer = item.metadata.get("render", _json_value)
+        request[str(json_key)] = renderer(value)
+    return request
 
 
 @dataclass(frozen=True, slots=True)
 class ToilRuntimeConfig:
     """Schema mirror for `computeConfig.toilConfig`."""
 
-    log_level: str | None = None
+    log_level: str | None = field(default=None, metadata={"json": "logLevel"})
 
     def to_mapping(self) -> Json:
         """Render the toil configuration."""
-        return _compact({"logLevel": self.log_level})
+        return _config_mapping(self)
 
 
 @dataclass(frozen=True, slots=True)
 class ComputeOutputConfig:
     """Schema mirror for `computeConfig.outputConfig`."""
 
-    mode: str | None = None
-    output_dir: str | Path | None = None
+    mode: str | None = field(default=None, metadata={"json": "mode"})
+    output_dir: str | Path | None = field(default=None, metadata={"json": "outputDir"})
 
     @classmethod
     def service_default(cls) -> "ComputeOutputConfig":
@@ -89,7 +102,7 @@ class ComputeOutputConfig:
 
     def to_mapping(self) -> Json:
         """Render the output configuration."""
-        request = _compact({"mode": self.mode, "outputDir": self.output_dir})
+        request = _config_mapping(self)
         if request.get("mode") == "userSpecified" and "outputDir" not in request:
             raise ValueError("userSpecified output mode requires output_dir")
         return request
@@ -99,52 +112,34 @@ class ComputeOutputConfig:
 class SlurmJobConfig:  # pylint: disable=too-many-instance-attributes
     """Schema mirror for `computeConfig.slurmConfig`."""
 
-    job_name: str | None = None
-    partition: str | None = None
-    slurm_job_gpu_count: int | None = None
-    cpus_per_task: int | None = None
-    nodes: int | None = None
-    tasks_per_node: int | None = None
-    output: str | None = None
-    error: str | None = None
-    time_limit: str | None = None
-    memory: str | None = None
+    job_name: str | None = field(default=None, metadata={"json": "jobName"})
+    partition: str | None = field(default=None, metadata={"json": "partition"})
+    slurm_job_gpu_count: int | None = field(default=None, metadata={"json": "slurmJobGpuCount"})
+    cpus_per_task: int | None = field(default=None, metadata={"json": "cpusPerTask"})
+    nodes: int | None = field(default=None, metadata={"json": "nodes"})
+    tasks_per_node: int | None = field(default=None, metadata={"json": "tasksPerNode"})
+    output: str | None = field(default=None, metadata={"json": "output"})
+    error: str | None = field(default=None, metadata={"json": "error"})
+    time_limit: str | None = field(default=None, metadata={"json": "time"})
+    memory: str | None = field(default=None, metadata={"json": "memory"})
 
     def to_mapping(self) -> Json:
         """Render the SLURM configuration."""
-        return _compact(
-            {
-                "jobName": self.job_name,
-                "partition": self.partition,
-                "slurmJobGpuCount": self.slurm_job_gpu_count,
-                "cpusPerTask": self.cpus_per_task,
-                "nodes": self.nodes,
-                "tasksPerNode": self.tasks_per_node,
-                "output": self.output,
-                "error": self.error,
-                "time": self.time_limit,
-                "memory": self.memory,
-            }
-        )
+        return _config_mapping(self)
 
 
 @dataclass(frozen=True, slots=True)
 class ComputeExecutionConfig:
     """Schema mirror for `computeConfig`."""
 
-    toil: ToilRuntimeConfig | None = None
-    output: ComputeOutputConfig | None = None
-    slurm: SlurmJobConfig | None = None
+    toil: ToilRuntimeConfig | None = field(default=None, metadata={"json": "toilConfig", "render": _nested_mapping})
+    output: ComputeOutputConfig | None = field(
+        default=None, metadata={"json": "outputConfig", "render": _nested_mapping})
+    slurm: SlurmJobConfig | None = field(default=None, metadata={"json": "slurmConfig", "render": _nested_mapping})
 
     def to_mapping(self) -> Json:
         """Render nested compute configuration."""
-        return _compact(
-            {
-                "toilConfig": self.toil.to_mapping() if self.toil is not None else None,
-                "outputConfig": self.output.to_mapping() if self.output is not None else None,
-                "slurmConfig": self.slurm.to_mapping() if self.slurm is not None else None,
-            }
-        )
+        return _config_mapping(self)
 
 
 @dataclass(slots=True)

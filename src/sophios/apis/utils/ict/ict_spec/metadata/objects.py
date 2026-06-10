@@ -3,7 +3,7 @@
 import re
 from functools import singledispatchmethod
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Annotated, Any, Optional, Union
 
 from pydantic import (
     AnyHttpUrl,
@@ -15,7 +15,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import Annotated
 
 
 class Author(RootModel):

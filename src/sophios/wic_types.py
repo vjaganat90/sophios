@@ -1,4 +1,4 @@
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, TypeAlias
 
 import networkx as nx
 
@@ -11,11 +11,11 @@ import networkx as nx
 # However, I can't seem to get it to work.
 # TODO: Consider removing all type aliases in favor of classes.
 
-KV = dict[str, Any]
-Cwl = KV
-Json = KV
-RawJson = str
-Yaml = KV
+KV: TypeAlias = dict[str, Any]
+Cwl: TypeAlias = KV
+Json: TypeAlias = KV
+RawJson: TypeAlias = str
+Yaml: TypeAlias = KV
 
 # In python there are unfortunately an enormous number of ways to represent the humble struct.
 # See https://stackoverflow.com/questions/53409117/what-are-the-main-differences-of-namedtuple-and-typeddict-in-python-mypy
@@ -33,22 +33,22 @@ class StepId(NamedTuple):
     plugin_ns: str  # left column of yml_paths.txt
 
 
-Tools = dict[StepId, Tool]
+Tools: TypeAlias = dict[StepId, Tool]
 
 # NOTE: Please read the Namespacing section of docs/devguide.md !!!
-Namespace = str
-Namespaces = list[Namespace]
+Namespace: TypeAlias = str
+Namespaces: TypeAlias = list[Namespace]
 
-WorkflowInputs = dict[str, Any]
-WorkflowInputsFile = dict[str, Any]
-WorkflowOutputs = list[Yaml]
-InternalOutputs = list[str]
-ExplicitEdgeDef = tuple[Namespaces, str]
-ExplicitEdgeDefs = dict[str, ExplicitEdgeDef]
-ExplicitEdgeCalls = dict[str, ExplicitEdgeDef]
-PluginID = int
-StepName1 = str
-DiGraph = Any  # graphviz.DiGraph
+WorkflowInputs: TypeAlias = dict[str, Any]
+WorkflowInputsFile: TypeAlias = dict[str, Any]
+WorkflowOutputs: TypeAlias = list[Yaml]
+InternalOutputs: TypeAlias = list[str]
+ExplicitEdgeDef: TypeAlias = tuple[Namespaces, str]
+ExplicitEdgeDefs: TypeAlias = dict[str, ExplicitEdgeDef]
+ExplicitEdgeCalls: TypeAlias = dict[str, ExplicitEdgeDef]
+PluginID: TypeAlias = int
+StepName1: TypeAlias = str
+DiGraph: TypeAlias = Any  # graphviz.DiGraph
 
 
 class GraphData():
@@ -76,7 +76,7 @@ class GraphReps(NamedTuple):
     graphdata: GraphData
 
 
-YamlDSLArgs = Yaml
+YamlDSLArgs: TypeAlias = Yaml
 
 # Since we cannot store extra tags in CWL files, we need a data structure
 # to store temporary compiler info that gets passed through the recursion.
@@ -84,7 +84,7 @@ YamlDSLArgs = Yaml
 # Rose Tree https://en.wikipedia.org/wiki/Rose_tree
 # Unfortunately, since mypy does not support Algebraic Data Types (ADTs)
 # we have to break the recursion by replacing the recursive instance of RoseTree with Any :(
-DataType = Any
+DataType: TypeAlias = Any
 
 
 class RoseTree(NamedTuple):

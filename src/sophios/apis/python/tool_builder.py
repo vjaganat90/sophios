@@ -68,7 +68,7 @@ if TYPE_CHECKING:
     from .workflow import Step
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, init=False)
 # pylint: disable=too-many-instance-attributes,too-many-public-methods
 class CommandLineTool:
     """Declarative CWL CommandLineTool authoring object."""
@@ -93,6 +93,36 @@ class CommandLineTool:
     _temporary_fail_codes: list[int] = field(default_factory=list)
     _permanent_fail_codes: list[int] = field(default_factory=list)
     _extra: dict[str, Any] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        name: str,
+        inputs: Inputs,
+        outputs: Outputs,
+        *,
+        cwl_version: str = "v1.2",
+    ) -> None:
+        self.name = name
+        self.inputs = inputs
+        self.outputs = outputs
+        self.cwl_version = cwl_version
+        self.label_text = None
+        self.doc_text = None
+        self._base_command = []
+        self._arguments = []
+        self._requirements = {}
+        self._hints = {}
+        self._stdin = None
+        self._stdout = None
+        self._stderr = None
+        self._intent = []
+        self._namespaces = {}
+        self._schemas = []
+        self._success_codes = []
+        self._temporary_fail_codes = []
+        self._permanent_fail_codes = []
+        self._extra = {}
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         match self.inputs:
@@ -522,7 +552,7 @@ class CommandLineTool:
         return self.build()
 
     def to_yaml(self) -> str:
-        return str(yaml.safe_dump(self.build(), sort_keys=False, line_break="\n"))
+        return yaml.safe_dump(self.build(), sort_keys=False, line_break="\n")
 
     def save(self, path: str | Path, *, validate: bool = False, skip_schemas: bool = False) -> Path:
         output_path = Path(path)

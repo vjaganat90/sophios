@@ -76,12 +76,21 @@ Output = OutputSpec
 SpecT = TypeVar("SpecT", FieldSpec, InputSpec, OutputSpec)
 
 
+def _validate_collection_name(name: str, *, owner: type[Any]) -> str:
+    valid_name = _validate_api_name(name, context="API name")
+    if valid_name.startswith("_") or valid_name in dir(owner):
+        raise ValueError(
+            f"API name {valid_name!r} is reserved by {owner.__name__}; choose a different name"
+        )
+    return valid_name
+
+
 class _NamedCollection(Mapping[str, SpecT]):
     _items: dict[str, SpecT]
 
     def __init__(self, **specs: SpecT) -> None:
         self._items = {
-            _validate_api_name(name, context="API name"): spec.named(name)
+            _validate_collection_name(name, owner=type(self)): spec.named(name)
             for name, spec in specs.items()
         }
 

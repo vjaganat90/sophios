@@ -21,28 +21,25 @@ ViewT = TypeVar("ViewT")
 
 
 @dataclass(frozen=True, slots=True)
-class InlineBinding:
-    """Inline literal bound to an input parameter."""
+class InputBinding:
+    """Bound input value, upstream alias, or workflow input reference."""
 
+    kind: str
     value: Any
-
-
-@dataclass(frozen=True, slots=True)
-class AliasBinding:
-    """Reference to an upstream step output anchor."""
-
-    alias: Any
     source: Any = None
 
+    @property
+    def linked(self) -> bool:
+        return self.kind != "inline"
 
-@dataclass(frozen=True, slots=True)
-class WorkflowBinding:
-    """Reference to a formal workflow input."""
+    def legacy_value(self) -> Any:
+        if self.kind == "alias":
+            return {"wic_alias": serialize_value(self.value)}
+        return self.value
 
-    name: str
-
-
-InputBinding = InlineBinding | AliasBinding | WorkflowBinding
+    def to_yaml_value(self) -> Any:
+        cwl_key = {"inline": "wic_inline_input", "alias": "wic_alias"}.get(self.kind)
+        return self.value if cwl_key is None else {cwl_key: serialize_value(self.value)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,8 +117,11 @@ class _ParameterBase:
 
     def __post_init__(self) -> None:
         self.set_parameter_type(self.parameter_type)
-        self.name = validate_python_identifier_name(
-            normalize_parameter_name(self.name),
+        self.name = _validate_namespace_name(
+            validate_python_identifier_name(
+                normalize_parameter_name(self.name),
+                context="CWL parameter name",
+            ),
             context="CWL parameter name",
         )
 
@@ -159,34 +159,30 @@ class InputParameter(_ParameterBase):
     @property
     def value(self) -> Any:
         """Return the bound value in the legacy compatibility shape."""
-        match self._binding:
-            case None:
-                return None
-            case InlineBinding(value=value):
-                return value
-            case AliasBinding(alias=alias):
-                return {"wic_alias": serialize_value(alias)}
-            case WorkflowBinding(name=name):
-                return name
+        return None if self._binding is None else self._binding.legacy_value()
 
     def _set_value(self, value: Any, linked: bool = False) -> None:
         """Translate legacy serialized values into the internal binding model."""
         match value:
             case {"wic_alias": alias} if linked:
-                self._set_binding(AliasBinding(alias))
+                self._set_binding(InputBinding("alias", alias))
             case {"wic_inline_input": inline_value}:
-                self._set_binding(InlineBinding(inline_value))
+                self._set_binding(InputBinding("inline", inline_value))
                 self.set_bound_parameter_type(infer_literal_parameter_type(inline_value))
             case str() as workflow_name if linked:
-                self._set_binding(WorkflowBinding(workflow_name))
+                self._set_binding(InputBinding("workflow", workflow_name))
             case _:
-                self._set_binding(InlineBinding(value))
+                self._set_binding(InputBinding("inline", value))
                 self.set_bound_parameter_type(infer_literal_parameter_type(value))
                 self.linked = linked
 
     def _set_binding(self, binding: InputBinding | None) -> None:
         self._binding = binding
-        self.linked = isinstance(binding, (AliasBinding, WorkflowBinding))
+        self.linked = False if binding is None else binding.linked
+
+    @property
+    def source_parameter(self) -> Any:
+        return None if self._binding is None or self._binding.kind != "alias" else self._binding.source
 
     def set_bound_parameter_type(self, value: Any) -> None:
         """Record the type of the bound value when it is known."""
@@ -195,30 +191,19 @@ class InputParameter(_ParameterBase):
 
     def is_scatterable(self) -> bool:
         """Return whether the current binding can be scattered safely."""
-        match self._binding:
-            case InlineBinding(value=list() | tuple()):
-                return True
-            case None:
-                return False
-            case _:
-                return (
-                    is_array_type(self._bound_parameter_type)
-                    or contains_any_type(self._bound_parameter_type)
-                )
+        if self._binding is None:
+            return False
+        return (
+            (self._binding.kind == "inline" and isinstance(self._binding.value, (list, tuple)))
+            or is_array_type(self._bound_parameter_type)
+            or contains_any_type(self._bound_parameter_type)
+        )
 
     def is_bound(self) -> bool:
         return self._binding is not None
 
     def to_yaml_value(self) -> Any:
-        match self._binding:
-            case None:
-                return None
-            case InlineBinding(value=value):
-                return {"wic_inline_input": serialize_value(value)}
-            case AliasBinding(alias=alias):
-                return {"wic_alias": serialize_value(alias)}
-            case WorkflowBinding(name=name):
-                return name
+        return None if self._binding is None else self._binding.to_yaml_value()
 
 
 @dataclass(slots=True)
@@ -349,3 +334,11 @@ class ParameterNamespace(Generic[ParameterT, ViewT]):
 
     def __repr__(self) -> str:
         return repr(self._store)
+
+
+def _validate_namespace_name(name: str, *, context: str) -> str:
+    if name.startswith("_") or name in dir(ParameterNamespace):
+        raise ValueError(
+            f"{context} {name!r} is reserved by port namespaces; choose a different name"
+        )
+    return name

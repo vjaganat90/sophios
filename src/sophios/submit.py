@@ -52,16 +52,7 @@ def _send_json_and_poll(
     log_path: str | Path | None,
 ) -> int:
     with requests.Session() as session:
-        print("Sending request to Compute")
-        response = session.post(
-            _url(submit_url),
-            data=request_json,
-            headers={"Content-Type": "application/json"},
-            timeout=timeout,
-        )
-        print(f"Post response code: {response.status_code}")
-        print(f"Submit response: {_json_or_text(response)}")
-        if not response.ok:
+        if not _post_json(session, request_json, submit_url, timeout=timeout):
             return 1
 
         phase = _wait_for_started(
@@ -84,6 +75,25 @@ def _send_json_and_poll(
                 f"Job reached {phase or 'an unknown state'} before RUNNING; skipping log fetch."
             )
         return 0 if phase in _SUCCESS else 1
+
+
+def _post_json(
+    session: requests.Session,
+    request_json: str,
+    submit_url: str,
+    *,
+    timeout: tuple[int, int],
+) -> bool:
+    print("Sending request to Compute")
+    response = session.post(
+        _url(submit_url),
+        data=request_json,
+        headers={"Content-Type": "application/json"},
+        timeout=timeout,
+    )
+    print(f"Post response code: {response.status_code}")
+    print(f"Submit response: {_json_or_text(response)}")
+    return response.ok
 
 
 def _wait_for_started(

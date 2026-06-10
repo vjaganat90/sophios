@@ -45,6 +45,11 @@ _RUN_ARG_BOOLEAN_FLAGS = {
 }
 
 
+def silence_autodiscovery_logging() -> None:
+    """Suppress noisy autodiscovery logs during Python API imports."""
+    logging.getLogger("wicautodiscovery").disabled = True
+
+
 class _CWLParameterDefinition(Protocol):  # pylint: disable=too-few-public-methods
     """Minimal structural type shared by parsed CWL input/output parameters."""
 
@@ -480,7 +485,7 @@ def compile_workflow(
         StepId(workflow.process_name, "global"),
         workflow_document(workflow, inline_subtrees=True, concrete_step_ids=True),
     )
-    merged_tools = _merged_known_tools(workflow.flatten_steps(), tool_registry)
+    merged_tools = _merged_known_tools(workflow._flatten_steps(), tool_registry)
 
     compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation()
     compiler_info = compiler.compile_workflow(

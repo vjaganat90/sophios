@@ -27,7 +27,7 @@ sophios.apis.python.workflow
 ----------------------------
 
 .. automodule:: sophios.apis.python.workflow
-   :members:
+   :members: Step, Workflow, CompiledWorkflow, InvalidLinkError, InvalidStepError
 
 sophios.apis.python.tool_builder
 --------------------------------

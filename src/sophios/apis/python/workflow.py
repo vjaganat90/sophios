@@ -18,14 +18,12 @@ from ._errors import (
     InvalidStepError,
 )
 from ._ports import (
-    AliasBinding as _AliasBinding,
     InputParameter,
-    InlineBinding as _InlineBinding,
+    InputBinding,
     OutputSourceBinding,
     OutputParameter,
     ParameterNamespace,
     ParameterStore,
-    WorkflowBinding as _WorkflowBinding,
     WorkflowInputReference,
 )
 from ._utils import (
@@ -45,6 +43,7 @@ from ._workflow_runtime import (
     normalize_workflow_name as _normalize_workflow_name,
     populate_parameters as _populate_parameters,
     run_workflow as _run_workflow,
+    silence_autodiscovery_logging as _silence_autodiscovery_logging,
     validate_step_assignment as _validate_step_assignment,
     workflow_document as _workflow_document,
     workflow_wic_text as _workflow_wic_text,
@@ -54,21 +53,17 @@ from ._workflow_runtime import (
 
 
 logger = logging.getLogger("Sophios Python API")
-
-
-class DisableEverythingFilter(logging.Filter):
-    # pylint:disable=too-few-public-methods
-    def filter(self, record: logging.LogRecord) -> bool:
-        return False
-
-
-# Based on user feedback,
-# disable any and all warnings coming from autodiscovery.
-logger_wicad = logging.getLogger("wicautodiscovery")
-logger_wicad.addFilter(DisableEverythingFilter())
+_silence_autodiscovery_logging()
 
 
 StrPath = str | Path
+__all__ = [
+    "CompiledWorkflow",
+    "InvalidLinkError",
+    "InvalidStepError",
+    "Step",
+    "Workflow",
+]
 
 
 def _tool_builder_source_name(value: Any) -> str | None:
@@ -134,7 +129,7 @@ def _warn_implicit_workflow_parameter(workflow: "Workflow", name: str, kind: str
 
 
 def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
-    input_port = process_self.get_inp_attr(input_name)
+    input_port = process_self._get_input(input_name)
 
     # This is the central compatibility switchboard for the Python API:
     # - workflow.input_name means "formal workflow parameter"
@@ -143,7 +138,7 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
     match value:
         case WorkflowInputReference(workflow=workflow, name=name, implicit=implicit):
             workflow_input = workflow._ensure_input(name, parameter_type=input_port.parameter_type, implicit=implicit)
-            input_port._set_binding(_WorkflowBinding(name))
+            input_port._set_binding(InputBinding("workflow", name))
             input_port.set_bound_parameter_type(workflow_input.parameter_type)
         case OutputParameter(parent_obj=Workflow(), name=name):
             raise InvalidLinkError(
@@ -157,10 +152,10 @@ def _bind_process_input(process_self: Any, input_name: str, value: Any) -> None:
                 context=f"{process_self.process_name}.{input_name}",
             )
             anchor_name = output.ensure_anchor(f"{input_name}{process_self.process_name}")
-            input_port._set_binding(_AliasBinding(anchor_name, output))
+            input_port._set_binding(InputBinding("alias", anchor_name, output))
             input_port.set_bound_parameter_type(output.parameter_type)
         case _:
-            input_port._set_binding(_InlineBinding(value))
+            input_port._set_binding(InputBinding("inline", value))
             input_port.set_bound_parameter_type(_infer_literal_parameter_type(value))
 
 
@@ -189,7 +184,18 @@ def _bind_workflow_output(workflow: "Workflow", output_name: str, value: Any) ->
             )
 
 
-class Step:
+class _ProcessBase:
+    process_name: str
+    _inputs: ParameterStore[InputParameter]
+
+    def _lookup_input(self, name: str) -> InputParameter:
+        return _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input")
+
+    def _bound_input_yaml(self) -> dict[str, Any]:
+        return {port.name: port.to_yaml_value() for port in self._inputs if port.is_bound()}
+
+
+class Step(_ProcessBase):
     """A workflow step backed by a CWL ``CommandLineTool``.
 
     The canonical binding surface is explicit: values enter through
@@ -403,7 +409,7 @@ class Step:
         object.__setattr__(
             self,
             "inputs",
-            _parameter_namespace(self._inputs, self.get_inp_attr, self.bind_input, read_only_error=""),
+            _parameter_namespace(self._inputs, self._get_input, self.bind_input, read_only_error=""),
         )
         object.__setattr__(
             self,
@@ -488,7 +494,7 @@ class Step:
         self.scatterMethod = scatter_method
         return self
 
-    def get_inp_attr(self, name: str) -> InputParameter:
+    def _get_input(self, name: str) -> InputParameter:
         """Return a named input parameter from this step.
 
         Args:
@@ -500,7 +506,7 @@ class Step:
         Returns:
             InputParameter: The requested step input parameter.
         """
-        return _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input")
+        return self._lookup_input(name)
 
     def get_output(self, name: str) -> OutputParameter:
         """Return a named output parameter from this step.
@@ -529,11 +535,11 @@ class Step:
         """
         return None
 
-    def flatten_steps(self) -> "list[Step]":
+    def _flatten_steps(self) -> "list[Step]":
         """Return this step as a single-item list for recursive traversal."""
         return [self]
 
-    def flatten_subworkflows(self) -> "list[Workflow]":
+    def _flatten_subworkflows(self) -> "list[Workflow]":
         """Return an empty subworkflow list because steps do not nest workflows."""
         return []
 
@@ -546,7 +552,7 @@ class Step:
         """Return the internal WIC step representation for this step."""
         step_yaml: dict[str, Any] = {
             "id": self.process_name,
-            "in": {port.name: port.to_yaml_value() for port in self._inputs if port.is_bound()},
+            "in": self._bound_input_yaml(),
             "out": [{port.name: port.value} for port in self._outputs if port.value is not None],
         }
 
@@ -560,7 +566,7 @@ class Step:
         return step_yaml
 
 
-class Workflow:
+class Workflow(_ProcessBase):
     """A Sophios workflow composed from ``Step`` objects and nested ``Workflow`` objects."""
 
     _SYSTEM_ATTRS: ClassVar[set[str]] = {
@@ -736,7 +742,7 @@ class Workflow:
         self.add_output(name, implicit=False)
         _bind_workflow_output(self, name, value)
 
-    def get_inp_attr(self, name: str) -> InputParameter:
+    def _get_input(self, name: str) -> InputParameter:
         """Return a named workflow input, creating it if needed.
 
         Args:
@@ -761,23 +767,22 @@ class Workflow:
         children = set(self.steps)
         for child in self.steps:
             for input_parameter in child._inputs:
-                match input_parameter._binding:
-                    case _AliasBinding(source=OutputParameter(parent_obj=source_parent) as source_parameter):
-                        source_name = getattr(source_parameter, "name", "<unknown>")
-                        source_process = getattr(source_parent, "process_name", "<unknown>")
-                        if source_parent not in children:
-                            raise InvalidStepError(
-                                f"{child.process_name}.{input_parameter.name} is linked to "
-                                f"{source_process}.{source_name}, "
-                                f"but {source_process!r} is not a child of {self.process_name!r}"
-                            )
-                        if source_parent not in prior_children:
-                            raise InvalidStepError(
-                                f"{child.process_name}.{input_parameter.name} is linked to "
-                                f"{source_process!r}, which must appear earlier in the workflow step list"
-                            )
-                    case _:
-                        pass
+                source_parameter = input_parameter.source_parameter
+                if not isinstance(source_parameter, OutputParameter):
+                    continue
+                source_parent = source_parameter.parent_obj
+                source_process = getattr(source_parent, "process_name", "<unknown>")
+                if source_parent not in children:
+                    raise InvalidStepError(
+                        f"{child.process_name}.{input_parameter.name} is linked to "
+                        f"{source_process}.{source_parameter.name}, "
+                        f"but {source_process!r} is not a child of {self.process_name!r}"
+                    )
+                if source_parent not in prior_children:
+                    raise InvalidStepError(
+                        f"{child.process_name}.{input_parameter.name} is linked to "
+                        f"{source_process!r}, which must appear earlier in the workflow step list"
+                    )
             prior_children.add(child)
 
         for output_parameter in self._outputs:
@@ -810,7 +815,7 @@ class Workflow:
         """
         return _workflow_document(self, inline_subtrees=True)
 
-    def write_ast_to_disk(self, directory: Path) -> None:
+    def _write_ast_to_disk(self, directory: Path) -> None:
         """Write this workflow tree to disk as sibling ``.wic`` files.
 
         This compatibility method is retained for existing callers. New code
@@ -858,21 +863,21 @@ class Workflow:
         """
         return _write_workflow_wic(self, path, inline_subworkflows=inline_subworkflows)
 
-    def flatten_steps(self) -> list[Step]:
+    def _flatten_steps(self) -> list[Step]:
         """Return every concrete step in this workflow tree.
 
         Returns:
             list[Step]: All ``Step`` instances reachable from this workflow.
         """
-        return [step for child in self.steps for step in child.flatten_steps()]
+        return [step for child in self.steps for step in child._flatten_steps()]
 
-    def flatten_subworkflows(self) -> "list[Workflow]":
+    def _flatten_subworkflows(self) -> "list[Workflow]":
         """Return this workflow and all nested subworkflows.
 
         Returns:
             list[Workflow]: This workflow followed by nested subworkflows.
         """
-        return [self, *[workflow for child in self.steps for workflow in child.flatten_subworkflows()]]
+        return [self, *[workflow for child in self.steps for workflow in child._flatten_subworkflows()]]
 
     def _compile(self, write_to_disk: bool = False, *, tool_registry: Tools | None = None) -> CompilerInfo:
         """Compile this workflow through the internal compiler path.
@@ -925,17 +930,6 @@ class Workflow:
         """
         return self.compile(write_to_disk=True, tool_registry=tool_registry)
 
-    def get_cwl_workflow(self, *, tool_registry: Tools | None = None) -> Json:
-        """Return the legacy compiled CWL workflow mapping.
-
-        Args:
-            tool_registry (Tools | None): Optional tool registry override.
-
-        Returns:
-            Json: Legacy mapping with ``name``, ``yaml_inputs``, and CWL fields.
-        """
-        return self.compile_to_cwl(tool_registry=tool_registry).to_dict()
-
     def run(
         self,
         run_args_dict: dict[str, str] | None = None,
@@ -966,11 +960,11 @@ class Workflow:
         # Nested workflows are serialized in one of two ways:
         # 1. inline during in-memory compilation (`subtree`)
         # 2. as sibling `.wic` files when writing an AST to disk
-        bound_inputs = {port.name: port.to_yaml_value() for port in self._inputs if port.is_bound()}
+        bound_inputs = self._bound_input_yaml()
         parentargs = {"in": bound_inputs} if bound_inputs else {}
         if inline_subtrees:
             return {"id": f"{self.process_name}.wic", "subtree": self.yaml, "parentargs": parentargs}
         if directory is None:
             raise ValueError("directory is required when serializing subworkflows to disk")
-        self.write_ast_to_disk(directory)
+        self._write_ast_to_disk(directory)
         return {"id": f"{self.process_name}.wic", **parentargs}
