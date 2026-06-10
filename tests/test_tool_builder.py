@@ -137,7 +137,7 @@ def test_structured_port_references_do_not_accept_raw_strings() -> None:
 
 @pytest.mark.fast
 def test_tool_builder_covers_common_clt_surface() -> None:
-    tool = _rich_tool().to_dict()
+    tool = _rich_tool().to_cwl_document()
 
     assert tool["$namespaces"] == {"edam": "https://edamontology.org/"}
     assert tool["$schemas"] == ["https://example.org/formats.rdf"]
@@ -179,7 +179,10 @@ def test_tool_builder_accepts_raw_extensions() -> None:
     )
 
     with pytest.warns(UserWarning, match="raw CWL injection"):
-        rendered = tool.time_limit(60).extra(sbol_intent="example:custom", customExtension={"enabled": True}).to_dict()
+        rendered = tool.time_limit(60).extra(
+            sbol_intent="example:custom",
+            customExtension={"enabled": True},
+        ).to_cwl_document()
 
     assert rendered["requirements"]["ToolTimeLimit"] == {"timelimit": 60}
     assert rendered["sbol_intent"] == "example:custom"
@@ -223,7 +226,7 @@ def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
         .stage(inputs.input)
         .resources(cores=4, ram=64000)
         .base_command("/backend/.venv/bin/python", "/backend/dagster_pipelines/jobs/autosegmentation/logic.py")
-        .to_dict()
+        .to_cwl_document()
     )
 
     assert tool["$namespaces"]["edam"] == "https://edamontology.org/"
@@ -260,14 +263,14 @@ def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
 
 
 @pytest.mark.fast
-def test_tool_builder_save_round_trips_yaml(tmp_path: Path) -> None:
+def test_tool_builder_write_cwl_round_trips_yaml(tmp_path: Path) -> None:
     tool = _rich_tool()
     output_path = tmp_path / "aligner.cwl"
 
-    saved_path = tool.save(output_path)
+    saved_path = tool.write_cwl(output_path)
 
     assert saved_path == output_path
-    assert yaml.safe_load(output_path.read_text(encoding="utf-8")) == tool.to_dict()
+    assert yaml.safe_load(output_path.read_text(encoding="utf-8")) == tool.to_cwl_document()
 
 
 @pytest.mark.fast

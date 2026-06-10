@@ -40,9 +40,3 @@ sophios.compute_request
 
 .. automodule:: sophios.compute_request
    :members:
-
-sophios.submit
---------------
-
-.. automodule:: sophios.submit
-   :members:

@@ -12,7 +12,7 @@ import traceback
 from datetime import datetime
 from typing import Iterator, List, Optional, Dict
 from sophios.wic_types import Json
-from .compute_request import ComputeRequest, submit_compute_request
+from .compute_request import ComputeRequest
 
 try:
     import cwltool.main
@@ -297,11 +297,11 @@ def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
         print("Ill-formed URL string detected! Please provide a valid URL")
         return 1
 
-    return submit_compute_request(
-        compute_request,
+    submission = compute_request.submit(
         submit_url,
         log_path=Path(f'compute_logs_{jobid}.txt'),
     )
+    return submission.exit_code
 
 
 def copy_output_files(yaml_stem: str, basepath: str = '') -> None:

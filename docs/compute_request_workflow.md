@@ -26,7 +26,7 @@ This split gives you clear checkpoints:
 
 - `CommandLineTool(...)` keeps tool authoring structured and readable.
 - `Workflow([steps], name)` keeps DAG wiring explicit and reviewable.
-- `workflow.compile_to_cwl()` returns a `CompiledWorkflow` boundary object.
+- `workflow.compile()` returns a `CompiledWorkflow` boundary object.
 - `ComputeRequest.from_compiled(...)` validates the compute request shape.
 
 Schema validation catches request-shape mistakes before submission. The schema
@@ -79,7 +79,7 @@ def build_workflow(message: str) -> Workflow:
 
 
 workflow = build_workflow("hello from compute")
-compiled = workflow.compile_to_cwl()
+compiled = workflow.compile()
 
 request = ComputeRequest.from_compiled(
     compiled,
@@ -91,7 +91,7 @@ request_json = request.to_json()
 
 ## Workflow Boundary
 
-`workflow.compile_to_cwl()` returns a `CompiledWorkflow` object with named
+`workflow.compile()` returns a `CompiledWorkflow` object with named
 attributes:
 
 - `name`
@@ -155,19 +155,17 @@ Compute-specific concerns live in the compute request layer, not in
 Submission is intentionally a separate concern:
 
 ```python
-from sophios.compute_request import submit_compute_request
-from sophios.submit import submit
-
-retval = submit_compute_request(request, "http://127.0.0.1:7998/compute/")
-retval = submit(request_json, "http://127.0.0.1:7998/compute/")
+submission = request.submit("http://127.0.0.1:7998/compute/")
+retval = submission.exit_code
 ```
 
 Submission behavior is narrow:
 
-- send the validated request JSON text
-- use `submission_id` or the request JSON's top-level `id` for status polling
+- render and send the validated request JSON text
+- use the request id for status polling
 - poll `/status/` until the job reaches a started or terminal state
-- print logs only after the job reaches `RUNNING`
+- fetch logs only after the job reaches `RUNNING`
+- return structured submission state
 
 ## Run the Example
 

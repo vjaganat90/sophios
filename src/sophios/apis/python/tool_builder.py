@@ -501,7 +501,7 @@ class CommandLineTool:
             tool_registry=tool_registry,
         )
 
-    def build(self) -> dict[str, Any]:
+    def to_cwl_document(self) -> dict[str, Any]:
         document: dict[str, Any] = {
             "class": "CommandLineTool",
             "cwlVersion": self.cwl_version,
@@ -548,22 +548,23 @@ class CommandLineTool:
                 requirements["InlineJavascriptRequirement"] = {}
         return document
 
-    def to_dict(self) -> dict[str, Any]:
-        return self.build()
+    def to_cwl_yaml(self) -> str:
+        return yaml.safe_dump(self.to_cwl_document(), sort_keys=False, line_break="\n")
 
-    def to_yaml(self) -> str:
-        return yaml.safe_dump(self.build(), sort_keys=False, line_break="\n")
-
-    def save(self, path: str | Path, *, validate: bool = False, skip_schemas: bool = False) -> Path:
+    def write_cwl(self, path: str | Path, *, validate: bool = False, skip_schemas: bool = False) -> Path:
         output_path = Path(path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(self.to_yaml(), encoding="utf-8")
+        output_path.write_text(self.to_cwl_yaml(), encoding="utf-8")
         if validate:
             _validate_path(output_path, skip_schemas=skip_schemas)
         return output_path
 
     def validate(self, *, skip_schemas: bool = False) -> ValidationResult:
-        return validate_cwl_document(self.build(), filename=f"{self.name}.cwl", skip_schemas=skip_schemas)
+        return validate_cwl_document(
+            self.to_cwl_document(),
+            filename=f"{self.name}.cwl",
+            skip_schemas=skip_schemas,
+        )
 
 
 __all__ = [

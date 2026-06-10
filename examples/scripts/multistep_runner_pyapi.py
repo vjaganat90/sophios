@@ -21,14 +21,14 @@ RUN_ARGS = {
 
 def workflow() -> Workflow:
     """Build a three-step workflow that creates, appends, and reads a file."""
-    touch = Step(ADAPTERS / "touch.cwl")
+    touch = Step(clt_path=ADAPTERS / "touch.cwl")
     touch.inputs.filename = "empty.txt"
 
-    append = Step(ADAPTERS / "append.cwl")
+    append = Step(clt_path=ADAPTERS / "append.cwl")
     append.inputs.file = touch.outputs.file
     append.inputs.str = "Hello"
 
-    cat = Step(ADAPTERS / "cat.cwl")
+    cat = Step(clt_path=ADAPTERS / "cat.cwl")
     cat.inputs.file = append.outputs.file
 
     workflow_ = Workflow([touch, append, cat], "multistep_runner_pyapi")

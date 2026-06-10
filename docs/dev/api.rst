@@ -18,11 +18,6 @@ sophios.compute_request
 .. automodule:: sophios.compute_request
    :no-index:
 
-sophios.submit
-------------------------------------
-.. automodule:: sophios.submit
-   :no-index:
-
 sophios.cwl_subinterpreter
 ------------------------------------
 .. automodule:: sophios.cwl_subinterpreter

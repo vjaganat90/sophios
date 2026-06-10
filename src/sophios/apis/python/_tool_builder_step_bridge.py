@@ -19,7 +19,7 @@ class _CommandLineToolLike(Protocol):  # pylint: disable=too-few-public-methods
 
     name: str
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_cwl_document(self) -> dict[str, Any]:
         """Render the CLT to a plain CWL document."""
 
 
@@ -34,7 +34,7 @@ def _command_line_tool_to_step(
     """Convert a built CLT into a workflow `Step` without touching disk.
 
     Args:
-        tool (_CommandLineToolLike): Built CLT-like object with `name` and `to_dict()`.
+        tool (_CommandLineToolLike): Built CLT-like object with `name` and `to_cwl_document()`.
         step_name (str | None): Optional workflow step name override.
         run_path (str | Path | None): Optional virtual `.cwl` path for compiler bookkeeping.
         config (dict[str, Any] | None): Optional input values to pre-bind on the step.
@@ -47,8 +47,8 @@ def _command_line_tool_to_step(
 
     resolved_name = step_name or tool.name
     resolved_run_path = run_path or Path(f"{resolved_name}.cwl")
-    return Step.from_cwl(
-        tool.to_dict(),
+    return Step.from_cwl_document(
+        tool.to_cwl_document(),
         process_name=resolved_name,
         run_path=resolved_run_path,
         config=config,

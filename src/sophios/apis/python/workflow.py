@@ -46,8 +46,7 @@ from ._workflow_runtime import (
     silence_autodiscovery_logging as _silence_autodiscovery_logging,
     validate_step_assignment as _validate_step_assignment,
     workflow_document as _workflow_document,
-    workflow_wic_text as _workflow_wic_text,
-    write_workflow_ast_to_disk as _write_workflow_ast_to_disk,
+    workflow_wic_yaml as _workflow_wic_yaml,
     write_workflow_wic as _write_workflow_wic,
 )
 
@@ -68,8 +67,8 @@ __all__ = [
 
 def _tool_builder_source_name(value: Any) -> str | None:
     """Return the default step name for CommandLineTool-like objects."""
-    match getattr(value, "name", None), getattr(value, "to_dict", None):
-        case str() as name, to_dict if callable(to_dict):
+    match getattr(value, "name", None), getattr(value, "to_cwl_document", None):
+        case str() as name, to_cwl_document if callable(to_cwl_document):
             return name
         case _:
             return None
@@ -241,6 +240,19 @@ class Step(_ProcessBase):
         source: StrPath,
         config_path: StrPath | None = None,
         *,
+        clt_path: None = None,
+        step_name: str | None = None,
+        tool_registry: Tools | None = None,
+    ) -> None:
+        ...
+
+    @overload
+    def __init__(
+        self,
+        source: None = None,
+        config_path: StrPath | None = None,
+        *,
+        clt_path: StrPath,
         step_name: str | None = None,
         tool_registry: Tools | None = None,
     ) -> None:
@@ -252,6 +264,7 @@ class Step(_ProcessBase):
         source: Any,
         config_path: None = None,
         *,
+        clt_path: None = None,
         step_name: str | None = None,
         tool_registry: Tools | None = None,
     ) -> None:
@@ -259,22 +272,27 @@ class Step(_ProcessBase):
 
     def __init__(
         self,
-        source: Any,
+        source: Any | None = None,
         config_path: StrPath | None = None,
         *,
+        clt_path: StrPath | None = None,
         step_name: str | None = None,
         tool_registry: Tools | None = None,
     ) -> None:
         """Create a ``Step`` from a CWL file or CommandLineTool-like object.
 
         Args:
-            source (Any): Path to a CWL tool definition, or an object with
-                ``name`` and ``to_dict()`` such as
-                ``tool_builder.CommandLineTool``.
+            source (Any | None): CommandLineTool-like object, or a positional
+                CWL path retained for compatibility.
+            clt_path (StrPath | None): Explicit path to a CWL tool definition.
+                This is the preferred file-backed constructor spelling.
             config_path (StrPath | None): Optional YAML config used to pre-bind
                 file-backed step inputs.
             step_name (str | None): Optional workflow step name override.
             tool_registry (Tools | None): Optional fallback registry for known tools.
+                CommandLineTool-like objects must expose ``name`` and
+                ``to_cwl_document()``, such as
+                ``tool_builder.CommandLineTool``.
 
         Raises:
             TypeError: If the source or config uses an unsupported type.
@@ -284,6 +302,10 @@ class Step(_ProcessBase):
             None: The step is initialized in place.
         """
         resolved_registry = {} if tool_registry is None else tool_registry
+        if source is not None and clt_path is not None:
+            raise TypeError("Step accepts either source or clt_path, not both")
+        if source is None:
+            source = clt_path
 
         match source:
             case str() | Path() as path:
@@ -306,11 +328,13 @@ class Step(_ProcessBase):
                     raise TypeError("config_path is only supported when Step is created from a CWL file path")
                 resolved_name = step_name or tool_name
                 run_path = Path(f"{resolved_name}.cwl")
-                match source.to_dict():
+                match source.to_cwl_document():
                     case Mapping() as document:
                         clt, yaml_file = _load_clt_document(document, run_path=run_path)
                     case _:
-                        raise TypeError("CommandLineTool-like Step source must return a mapping from to_dict()")
+                        raise TypeError(
+                            "CommandLineTool-like Step source must return a mapping from to_cwl_document()"
+                        )
 
                 self._initialize_loaded_tool(
                     clt=clt,
@@ -321,10 +345,10 @@ class Step(_ProcessBase):
                     process_name=resolved_name,
                 )
             case _:
-                raise TypeError("Step source must be a path or CommandLineTool-like object")
+                raise TypeError("Step requires clt_path or a CommandLineTool-like source")
 
     @classmethod
-    def from_cwl(
+    def from_cwl_document(
         cls,
         document: Mapping[str, Any],
         *,
@@ -815,22 +839,7 @@ class Workflow(_ProcessBase):
         """
         return _workflow_document(self, inline_subtrees=True)
 
-    def _write_ast_to_disk(self, directory: Path) -> None:
-        """Write this workflow tree to disk as sibling ``.wic`` files.
-
-        This compatibility method is retained for existing callers. New code
-        should prefer :meth:`write_wic`, which can write either one inline
-        document or a sibling-file tree.
-
-        Args:
-            directory (Path): Directory where the workflow AST should be written.
-
-        Returns:
-            None: Files are written to disk as a side effect.
-        """
-        _write_workflow_ast_to_disk(self, directory)
-
-    def to_wic(self, *, inline_subworkflows: bool = True) -> str:
+    def to_wic_yaml(self, *, inline_subworkflows: bool = True) -> str:
         """Return this workflow as ``.wic`` YAML text.
 
         Args:
@@ -840,7 +849,7 @@ class Workflow(_ProcessBase):
         Returns:
             str: The serialized ``.wic`` document.
         """
-        return _workflow_wic_text(self, inline_subworkflows=inline_subworkflows)
+        return _workflow_wic_yaml(self, inline_subworkflows=inline_subworkflows)
 
     def write_wic(
         self,
@@ -891,8 +900,15 @@ class Workflow(_ProcessBase):
         """
         return _compile_workflow(self, write_to_disk=write_to_disk, tool_registry=tool_registry)
 
-    def compile_to_cwl(self, *, tool_registry: Tools | None = None) -> CompiledWorkflow:
+    def compile(
+        self,
+        *,
+        tool_registry: Tools | None = None,
+    ) -> CompiledWorkflow:
         """Compile this workflow into CWL and generated job inputs.
+
+        The old ``CompilerInfo`` result remains available only through the
+        internal :meth:`_compile`.
 
         Args:
             tool_registry (Tools | None): Optional tool registry override.
@@ -901,34 +917,6 @@ class Workflow(_ProcessBase):
             CompiledWorkflow: Public compiled workflow boundary object.
         """
         return _compiled_workflow(self, tool_registry=tool_registry)
-
-    def compile(
-        self,
-        write_to_disk: bool = False,
-        *,
-        tool_registry: Tools | None = None,
-    ) -> CompiledWorkflow:
-        """Compatibility alias for compiling to the public CWL boundary.
-
-        New code should prefer :meth:`compile_to_cwl`. The old ``CompilerInfo``
-        result remains available only through the internal :meth:`_compile`.
-        """
-        return _compiled_workflow(
-            self,
-            write_to_disk=write_to_disk,
-            tool_registry=tool_registry,
-        )
-
-    def write_artifacts(self, *, tool_registry: Tools | None = None) -> CompiledWorkflow:
-        """Compile this workflow and write generated CWL artifacts to disk.
-
-        Args:
-            tool_registry (Tools | None): Optional tool registry override.
-
-        Returns:
-            CompiledWorkflow: Public compiled workflow boundary object.
-        """
-        return self.compile(write_to_disk=True, tool_registry=tool_registry)
 
     def run(
         self,
@@ -966,5 +954,5 @@ class Workflow(_ProcessBase):
             return {"id": f"{self.process_name}.wic", "subtree": self.yaml, "parentargs": parentargs}
         if directory is None:
             raise ValueError("directory is required when serializing subworkflows to disk")
-        self._write_ast_to_disk(directory)
+        self.write_wic(directory, inline_subworkflows=False)
         return {"id": f"{self.process_name}.wic", **parentargs}

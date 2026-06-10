@@ -12,7 +12,6 @@ from sophios.compute_request import (
     ComputeOutputConfig,
     ComputeRequest,
     SlurmJobConfig,
-    submit_compute_request,
     ToilRuntimeConfig,
 )
 
@@ -120,7 +119,7 @@ def main() -> int:
 
     # ========== BUILD WORKFLOW ======================
     autoseg_workflow = workflow(input_dicts, "autoseg_workflow")
-    compiled_workflow = autoseg_workflow.compile_to_cwl()
+    compiled_workflow = autoseg_workflow.compile()
 
     # ========== COMPUTE INPUT =======================
     # workflow Name
@@ -137,9 +136,8 @@ def main() -> int:
         return 0
 
     # =========  SUBMIT TO COMPUTE ===================
-    submission_status: int = submit_compute_request(
-        compute_request, SUBMIT_URL)
-    return submission_status
+    submission = compute_request.submit(SUBMIT_URL)
+    return submission.exit_code
 
 
 if __name__ == '__main__':

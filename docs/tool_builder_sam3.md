@@ -216,7 +216,7 @@ tool = (
 )
 
 output_path = Path("sam3_ome_zarr_autosegmentation.cwl")
-tool.save(output_path, validate=True)
+tool.write_cwl(output_path, validate=True)
 ```
 
 ## What the builder is hiding for you
@@ -275,7 +275,7 @@ The builder gives you named operations rather than raw nested dictionaries, whic
 When you call:
 
 ```python
-tool.save(output_path, validate=True)
+tool.write_cwl(output_path, validate=True)
 ```
 
 or:
@@ -286,7 +286,7 @@ tool.validate()
 
 Sophios validates the generated CLT as a real CWL `CommandLineTool`.
 
-Sophios checks the concrete tool document it will save or hand to the workflow
+Sophios checks the concrete tool document it will write or hand to the workflow
 API, so mistakes show up at the tool boundary instead of later inside a larger
 workflow.
 

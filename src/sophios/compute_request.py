@@ -4,12 +4,20 @@ from dataclasses import dataclass, field, fields as dataclass_fields
 from functools import lru_cache
 import json
 from pathlib import Path
+import time
 from typing import Any, Mapping, Protocol, cast
 
 from jsonschema import Draft202012Validator
+import requests
 
-from .submit import submit
 from .wic_types import Json, RawJson
+
+
+_TIMEOUT = (5, 30)
+_STARTED = frozenset({"RUNNING", "COMPLETED", "ERROR", "CANCELLED"})
+_ACCEPTED = frozenset({"RUNNING", "COMPLETED"})
+_BODY_HEADERS = {"Content-Type": "application/json"}
+_Body = Json | list[Any] | str
 
 
 class ComputeRequestValidationError(ValueError):
@@ -55,6 +63,97 @@ def _config_mapping(config: Any) -> Json:
         renderer = item.metadata.get("render", _json_value)
         request[str(json_key)] = renderer(value)
     return request
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeSubmission:
+    """Result returned by compute request submission."""
+
+    workflow_id: str
+    phase: str | None
+    accepted: bool
+    submit_response: _Body | None = None
+    status_response: _Body | None = None
+    logs: _Body | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Return whether Compute accepted or completed the submitted request."""
+        return self.accepted
+
+    @property
+    def exit_code(self) -> int:
+        """Return a process-style status code for CLI callers."""
+        return 0 if self.accepted else 1
+
+
+@dataclass(frozen=True, slots=True)
+class _HttpResult:
+    ok: bool
+    status_code: int
+    body: _Body
+
+
+@dataclass(slots=True)
+class _ComputeClient:
+    base_url: str
+    session: requests.Session
+    timeout: tuple[int, int]
+
+    def post(self, request_json: RawJson) -> _HttpResult:
+        response = self.session.post(
+            self._url(),
+            data=request_json,
+            headers=_BODY_HEADERS,
+            timeout=self.timeout,
+        )
+        return _response_result(response)
+
+    def status(self, workflow_id: str) -> _HttpResult:
+        response = self.session.get(self._url(workflow_id, "status"), timeout=self.timeout)
+        return _response_result(response)
+
+    def logs(self, workflow_id: str) -> _HttpResult:
+        response = self.session.get(self._url(workflow_id, "logs"), timeout=self.timeout)
+        return _response_result(response)
+
+    def _url(self, workflow_id: str | None = None, endpoint: str | None = None) -> str:
+        base = self.base_url.rstrip("/") + "/"
+        return base if workflow_id is None else f"{base}{workflow_id}/{endpoint}/"
+
+
+def _response_result(response: requests.Response) -> _HttpResult:
+    try:
+        body = response.json()
+    except ValueError:
+        body = response.text
+    if isinstance(body, dict):
+        body = cast(Json, body)
+    elif isinstance(body, list):
+        body = list(body)
+    else:
+        body = str(body)
+    return _HttpResult(response.ok, response.status_code, body)
+
+
+def _phase(body: _Body) -> str | None:
+    if isinstance(body, dict) and "status" in body:
+        return str(body["status"]).upper()
+    return None
+
+
+def _poll_status(
+    client: _ComputeClient,
+    workflow_id: str,
+    *,
+    poll_interval_seconds: int,
+) -> tuple[str | None, _HttpResult]:
+    while True:
+        result = client.status(workflow_id)
+        phase = _phase(result.body)
+        if result.ok and phase in _STARTED:
+            return phase, result
+        time.sleep(poll_interval_seconds)
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +274,13 @@ class ComputeRequest:
         workflow_id = self.workflow_id or self.cwl_workflow.get("id")
         return workflow_id if isinstance(workflow_id, str) and workflow_id else None
 
+    def require_workflow_id(self) -> str:
+        """Return the workflow id or raise before network submission."""
+        workflow_id = self.resolved_workflow_id()
+        if workflow_id is None:
+            raise ValueError("ComputeRequest.submit requires workflow_id or cwl_workflow['id']")
+        return workflow_id
+
     def to_mapping(self) -> Json:
         """Render and validate the compute request as a Python mapping."""
         request: Json = {
@@ -195,6 +301,46 @@ class ComputeRequest:
         """Render and validate the compute request as serialized JSON text."""
         return json.dumps(self.to_mapping(), indent=indent, sort_keys=sort_keys)
 
+    def submit(
+        self,
+        submit_url: str,
+        *,
+        timeout: tuple[int, int] = _TIMEOUT,
+        poll_interval_seconds: int = 15,
+        fetch_logs: bool = True,
+        log_path: str | Path | None = None,
+    ) -> ComputeSubmission:
+        """Submit this request to Compute and return structured submission state."""
+        workflow_id = self.require_workflow_id()
+        with requests.Session() as session:
+            client = _ComputeClient(submit_url, session, timeout)
+            submit_result = client.post(self.to_json())
+            if not submit_result.ok:
+                return ComputeSubmission(
+                    workflow_id,
+                    None,
+                    False,
+                    submit_response=submit_result.body,
+                )
+
+            phase, status_result = _poll_status(
+                client,
+                workflow_id,
+                poll_interval_seconds=poll_interval_seconds,
+            )
+            logs = client.logs(workflow_id).body if fetch_logs and phase == "RUNNING" else None
+            if log_path is not None and logs is not None:
+                Path(log_path).write_text(str(logs), encoding="utf-8")
+
+        return ComputeSubmission(
+            workflow_id,
+            phase,
+            phase in _ACCEPTED,
+            submit_response=submit_result.body,
+            status_response=status_result.body,
+            logs=logs,
+        )
+
 
 def validate_compute_request(request: Mapping[str, Any]) -> Json:
     """Validate a compute request mapping against the checked-in schema."""
@@ -204,25 +350,6 @@ def validate_compute_request(request: Mapping[str, Any]) -> Json:
     except Exception as exc:  # pragma: no cover - schema library formats the message
         raise ComputeRequestValidationError(str(exc)) from exc
     return request_mapping
-
-
-def submit_compute_request(
-    request: ComputeRequest,
-    submit_url: str,
-    *,
-    timeout: tuple[int, int] = (5, 30),
-    poll_interval_seconds: int = 15,
-    log_path: str | Path | None = None,
-) -> int:
-    """Submit a typed compute request through the generic JSON submitter."""
-    return submit(
-        request.to_json(),
-        submit_url,
-        submission_id=request.resolved_workflow_id(),
-        timeout=timeout,
-        poll_interval_seconds=poll_interval_seconds,
-        log_path=log_path,
-    )
 
 
 @lru_cache(maxsize=1)
@@ -239,9 +366,9 @@ __all__ = [
     "ComputeOutputConfig",
     "ComputeRequest",
     "ComputeRequestValidationError",
+    "ComputeSubmission",
     "RawJson",
     "SlurmJobConfig",
     "ToilRuntimeConfig",
-    "submit_compute_request",
     "validate_compute_request",
 ]

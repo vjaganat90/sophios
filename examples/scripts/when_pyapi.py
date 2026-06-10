@@ -9,10 +9,10 @@ ADAPTERS = REPO_ROOT / "cwl_adapters"
 
 def workflow() -> Workflow:
     """Build a workflow with a conditional step."""
-    to_string = Step(ADAPTERS / "toString.cwl")
+    to_string = Step(clt_path=ADAPTERS / "toString.cwl")
     to_string.inputs.input = 27
 
-    echo = Step(ADAPTERS / "echo.cwl")
+    echo = Step(clt_path=ADAPTERS / "echo.cwl")
     echo.inputs.message = to_string.outputs.output
 
     # Alternate JavaScript syntax:

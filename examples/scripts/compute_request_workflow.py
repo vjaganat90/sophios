@@ -16,7 +16,7 @@ from sophios.apis.python.workflow import (
     Step,
     Workflow,
 )
-from sophios.compute_request import ComputeRequest, submit_compute_request
+from sophios.compute_request import ComputeRequest
 
 
 MESSAGE = "hello from compute request workflow"
@@ -83,7 +83,7 @@ def build_request(message: str) -> ComputeRequest:
         ComputeRequest: A validated compute request object.
     """
     workflow = build_workflow(message)
-    compiled_workflow = workflow.compile_to_cwl()
+    compiled_workflow = workflow.compile()
     workflow_id = (
         f"{workflow.process_name}__{datetime.now().strftime('%Y_%m_%d_%H.%M.%S')}__"
     )
@@ -112,7 +112,7 @@ def main() -> int:
 
     if SUBMIT_URL is None:
         return 0
-    return submit_compute_request(request, SUBMIT_URL)
+    return request.submit(SUBMIT_URL).exit_code
 
 
 if __name__ == "__main__":

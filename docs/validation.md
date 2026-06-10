@@ -23,7 +23,7 @@ When you build a `CommandLineTool` in Python, you can validate the generated CWL
 
 ```python
 tool.validate()
-tool.save("tool.cwl", validate=True)
+tool.write_cwl("tool.cwl", validate=True)
 ```
 
 This checks that the generated document is valid CWL, not merely a dictionary

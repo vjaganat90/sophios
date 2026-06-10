@@ -66,7 +66,7 @@ def build_tool() -> CommandLineTool:
 
 def main() -> int:
     """Write the generated CLT to disk and optionally validate it."""
-    output_path = build_tool().save(OUTPUT_PATH, validate=VALIDATE)
+    output_path = build_tool().write_cwl(OUTPUT_PATH, validate=VALIDATE)
     print(f"Wrote {output_path}")
     if VALIDATE:
         print("Validation succeeded.")
