@@ -5,23 +5,23 @@ import os
 from pathlib import Path
 import traceback
 from types import SimpleNamespace
-from typing import Any, Iterator
+from typing import Any, Iterator, cast
 from unittest.mock import patch
 
 import pytest
 import yaml
 
 import sophios
-import sophios.apis.python as python_api_package
-import sophios.apis.python._workflow_runtime as python_runtime
+import sophios.api.python as python_api_package
+import sophios.api.python._workflow_runtime as python_runtime
 import sophios.compute_request as compute_request_module
 import sophios.main as main_module
 import sophios.plugins
 import sophios.run_local as run_local
 from sophios import input_output as io
 from sophios import utils, utils_cwl
-from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
-from sophios.apis.python.workflow import CompiledWorkflow, InvalidLinkError, InvalidStepError, Step, Workflow
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.api.python.workflow import CompiledWorkflow, InvalidLinkError, InvalidStepError, Step, Workflow
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest, ComputeSubmission
 from sophios.python_cwl_adapter import import_python_file
 from sophios.schemas import wic_schema
@@ -76,7 +76,7 @@ def _step_registry_injected(tool_registry: Tools) -> Iterator[None]:
     Yields:
         Iterator[None]: Context where imported scripts see the patched ``Step``.
     """
-    from sophios.apis.python import workflow  # pylint: disable=C0415:import-outside-toplevel
+    from sophios.api.python import workflow  # pylint: disable=C0415:import-outside-toplevel
 
     step_class = workflow.Step
 
@@ -184,8 +184,9 @@ def test_step_constructor_accepts_tool_builder_command_line_tool() -> None:
 
 @pytest.mark.fast
 def test_step_constructor_rejects_config_path_for_in_memory_tool() -> None:
+    tool = cast(Any, _emit_text_tool())
     with pytest.raises(TypeError, match="config_path is only supported"):
-        Step(_emit_text_tool(), "config.yml")  # type: ignore[call-overload]
+        Step(tool, "config.yml")
 
 
 @pytest.mark.fast
@@ -213,10 +214,10 @@ def test_port_namespaces_do_not_accept_string_indexing() -> None:
     step = Step(_emit_text_tool())
 
     with pytest.raises(TypeError, match="integer indexing only"):
-        step.inputs["message"]  # type: ignore[index]
+        step.inputs["message"]
 
     with pytest.raises(TypeError, match="integer indexing only"):
-        step.outputs["file"]  # type: ignore[index]
+        step.outputs["file"]
 
 
 @pytest.mark.fast
@@ -671,7 +672,7 @@ def test_workflow_requires_steps_in_constructor() -> None:
 @pytest.mark.fast
 def test_legacy_python_api_module_is_not_available() -> None:
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("sophios.apis.python.api")
+        importlib.import_module("sophios.api.python.api")
 
 
 @pytest.mark.fast
@@ -736,6 +737,28 @@ def test_run_local_python_api_restores_environment_after_run(monkeypatch: pytest
     assert retval == 0
     assert seen_inside["value"] == "inside"
     assert sentinel_key not in os.environ
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("cwl_runner", ["cwltool", "toil-cwl-runner"])
+def test_build_cmd_uses_user_outdir(tmp_path: Path, cwl_runner: str) -> None:
+    outdir = tmp_path / "workflow_output"
+
+    cmd = run_local.build_cmd(
+        "wf",
+        str(tmp_path / "exec"),
+        cwl_runner,
+        "docker",
+        passthrough_args=[],
+        outdir=str(outdir),
+    )
+
+    assert cmd.count("--outdir") == 1
+    assert cmd[cmd.index("--outdir") + 1] == str(outdir.resolve())
+    if cwl_runner == "toil-cwl-runner":
+        assert cmd[cmd.index("--clean") + 1] == "always"
+    else:
+        assert "--clean" not in cmd
 
 
 @pytest.mark.fast
@@ -822,10 +845,13 @@ def test_workflow_run_does_not_forward_python_run_flags_to_runner(
 
     captured: dict[str, Any] = {}
 
+    def fake_find_and_create_output_dirs(rose_tree: Any, basepath: str) -> None:
+        captured["output_basepath"] = basepath
+
     monkeypatch.setattr(
         python_runtime.pc,
         "find_and_create_output_dirs",
-        lambda rose_tree: None,
+        fake_find_and_create_output_dirs,
     )
     monkeypatch.setattr(
         python_runtime.pc,
@@ -862,20 +888,23 @@ def test_workflow_run_does_not_forward_python_run_flags_to_runner(
             "copy_output_files": "yes",
             "generate_run_script": "yes",
             "logLevel": "INFO",
+            "outdir": str(tmp_path / "workflow_output"),
         },
     )
 
     assert captured["passthrough_args"] == ["--logLevel", "INFO"]
     assert captured["run_args_dict"]["copy_output_files"] == "yes"
     assert captured["run_args_dict"]["generate_run_script"] == "yes"
+    assert captured["run_args_dict"]["outdir"] == str(tmp_path / "workflow_output")
     assert captured["workflow_name"] == "runtime_flag_demo"
     assert captured["basepath"] == str(tmp_path)
+    assert captured["output_basepath"] == str(tmp_path)
 
 
 @pytest.mark.fast
 def test_compile_python_workflows() -> None:
     """Import and compile all auto-discovered Python workflow scripts."""
-    from sophios.apis.python import workflow  # pylint: disable=C0415:import-outside-toplevel
+    from sophios.api.python import workflow  # pylint: disable=C0415:import-outside-toplevel
 
     global_config = _load_global_config()
     tools_cwl = sophios.plugins.get_tools_cwl(global_config)

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 
 
 OUTPUT_PATH = Path(__file__).with_name("sam3_ome_zarr_autosegmentation.cwl")

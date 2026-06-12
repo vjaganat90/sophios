@@ -3,16 +3,16 @@
 
 import logging
 from pathlib import Path
-from typing import Optional, TypeVar
+from typing import Any, Optional, TypeVar
 
 import yaml
 from pydantic import model_validator
 
-from sophios.apis.utils.ict.ict_spec.hardware import HardwareRequirements
-from sophios.apis.utils.ict.ict_spec.io import IO
-from sophios.apis.utils.ict.ict_spec.metadata import Metadata
-from sophios.apis.utils.ict.ict_spec.tools import clt_dict, ict_dict
-from sophios.apis.utils.ict.ict_spec.ui import UIItem
+from sophios.api.utils.ict.ict_spec.hardware import HardwareRequirements
+from sophios.api.utils.ict.ict_spec.io import IO
+from sophios.api.utils.ict.ict_spec.metadata import Metadata
+from sophios.api.utils.ict.ict_spec.tools import clt_dict, ict_dict
+from sophios.api.utils.ict.ict_spec.ui import UIItem
 
 StrPath = TypeVar("StrPath", str, Path)
 
@@ -31,14 +31,14 @@ class ICT(Metadata):
     def validate_ui(self) -> "ICT":
         """Validate that the ui matches the inputs and outputs."""
         if self.ui is not None:
-            io_dict = {"inputs": [], "outputs": []}  # type: ignore
+            io_dict: dict[str, list[str]] = {"inputs": [], "outputs": []}
             ui_keys = [ui.key.root.split(".") for ui in self.ui]
             for ui_ in ui_keys:
                 io_dict[ui_[0]].append(ui_[1])
 
         return self
 
-    def to_clt(self, network_access: bool = False) -> dict:
+    def to_clt(self, network_access: bool = False) -> dict[Any, Any]:
         """Convert ICT to CWL CommandLineTool.
 
 
@@ -53,12 +53,12 @@ class ICT(Metadata):
         return clt_dict(self, network_access)
 
     @property
-    def clt(self) -> dict:
+    def clt(self) -> dict[Any, Any]:
         """CWL CommandLineTool from an ICT object."""
         return clt_dict(self, network_access=False)
 
     @property
-    def ict(self) -> dict:
+    def ict(self) -> dict[Any, Any]:
         """ICT yaml from an ICT object."""
         return ict_dict(self)
 

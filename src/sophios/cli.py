@@ -107,6 +107,8 @@ parser.add_argument('--no_skip_dollar_schemas', default=False, action="store_tru
                     See https://github.com/common-workflow-language/cwltool/issues/623''')
 parser.add_argument('--cachedir', type=str, required=False, default='cachedir',
                     help='The directory to save intermediate results; useful with RealtimePlots.py')
+parser.add_argument('--outdir', type=str, required=False, default='',
+                    help='Workflow output directory passed to the CWL runner.')
 
 parser.add_argument('--graphviz', default=False, action="store_true",
                     help='Generate a DAG using graphviz.')

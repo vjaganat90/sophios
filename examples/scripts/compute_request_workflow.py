@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import sys
 
-from sophios.apis.python.tool_builder import (
+from sophios.api.python.tool_builder import (
     CommandLineTool,
     Input,
     Inputs,
@@ -12,7 +12,7 @@ from sophios.apis.python.tool_builder import (
     Outputs,
     cwl,
 )
-from sophios.apis.python.workflow import (
+from sophios.api.python.workflow import (
     Step,
     Workflow,
 )

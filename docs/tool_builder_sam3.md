@@ -1,7 +1,7 @@
 # Building Tool Contracts in Python
 
 This walkthrough shows how to build a real CWL `CommandLineTool` using
-`sophios.apis.python.tool_builder`.
+`sophios.api.python.tool_builder`.
 
 The design goal is simple:
 
@@ -157,7 +157,7 @@ Again, the goal is to describe what the output means, not to hand-assemble `outp
 ```python
 from pathlib import Path
 
-from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 
 
 inputs = Inputs(

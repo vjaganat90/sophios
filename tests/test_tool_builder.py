@@ -1,13 +1,14 @@
 import importlib
 import inspect
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
 
-import sophios.apis.python._tool_builder_support as tool_builder_support
-import sophios.apis.python.tool_builder as tool_builder_module
-from sophios.apis.python.tool_builder import (
+import sophios.api.python._tool_builder_support as tool_builder_support
+import sophios.api.python.tool_builder as tool_builder_module
+from sophios.api.python.tool_builder import (
     CommandLineTool,
     Dirent,
     Field,
@@ -19,13 +20,13 @@ from sophios.apis.python.tool_builder import (
     cwl,
     secondary_file,
 )
-from sophios.apis.python.workflow import Step
+from sophios.api.python.workflow import Step
 
 
 @pytest.mark.fast
 def test_old_tool_builder_module_name_is_not_available() -> None:
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("sophios.apis.python." + "cwl" + "_builder")
+        importlib.import_module("sophios.api.python." + "cwl" + "_builder")
 
 
 @pytest.mark.fast
@@ -85,8 +86,9 @@ def _rich_tool() -> CommandLineTool:
 
 @pytest.mark.fast
 def test_tool_builder_requires_structural_core() -> None:
+    constructor = cast(Any, CommandLineTool)
     with pytest.raises(TypeError):
-        CommandLineTool("missing-inputs")  # type: ignore[call-arg]
+        constructor("missing-inputs")
 
 
 @pytest.mark.fast

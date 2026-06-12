@@ -19,7 +19,7 @@ A runnable version lives in
 ```python
 from pathlib import Path
 
-from sophios.apis.python.workflow import Step, Workflow
+from sophios.api.python.workflow import Step, Workflow
 
 
 ADAPTERS = Path("cwl_adapters")

@@ -2,8 +2,8 @@
 
 Sophios has two related Python surfaces:
 
-- `sophios.apis.python.tool_builder` for authoring a single CWL `CommandLineTool`
-- `sophios.apis.python.workflow` for wiring tools into a workflow with `Step` and `Workflow`
+- `sophios.api.python.tool_builder` for authoring a single CWL `CommandLineTool`
+- `sophios.api.python.workflow` for wiring tools into a workflow with `Step` and `Workflow`
 
 Those APIs are intentionally separate, but they can be combined cleanly.
 
@@ -81,7 +81,7 @@ The snippet below assumes you are running from the repository root, so the check
 ```python
 from pathlib import Path
 
-from sophios.apis.python.tool_builder import (
+from sophios.api.python.tool_builder import (
     CommandLineTool,
     Input,
     Inputs,
@@ -89,7 +89,7 @@ from sophios.apis.python.tool_builder import (
     Outputs,
     cwl,
 )
-from sophios.apis.python.workflow import (
+from sophios.api.python.workflow import (
     Step,
     Workflow,
 )

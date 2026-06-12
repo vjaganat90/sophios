@@ -4,9 +4,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
-from sophios.apis.python.workflow import CompiledWorkflow, Step, Workflow
+from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
 
-from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.compute_request import (
     ComputeExecutionConfig,
     ComputeOutputConfig,

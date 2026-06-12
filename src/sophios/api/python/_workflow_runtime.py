@@ -596,7 +596,7 @@ def run_workflow(
 
     resolved_run_args = effective_run_args(run_args_dict)
     rose_tree = runtime_rose_tree(workflow, tool_registry=tool_registry)
-    pc.find_and_create_output_dirs(rose_tree)
+    pc.find_and_create_output_dirs(rose_tree, basepath)
     pc.verify_container_engine_config(resolved_run_args["container_engine"], False)
     input_output.write_to_disk(
         rose_tree,

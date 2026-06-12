@@ -13,7 +13,7 @@ from sophios import utils_cwl
 from sophios.post_compile import cwl_inline_runtag
 from sophios.cli import get_args, get_dicts_for_compilation
 from sophios.wic_types import CompilerInfo, Json, Tool, Tools, StepId, YamlTree, NodeData
-from sophios.apis.utils import converter
+from sophios.api.utils import converter
 import sophios.plugins as plugins
 # from .auth.auth import authenticate
 

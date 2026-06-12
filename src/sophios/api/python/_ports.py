@@ -96,7 +96,7 @@ class ParameterStore(Generic[ParameterT]):
     def __len__(self) -> int:
         return len(self.parameters)
 
-    def __getitem__(self, index: int) -> ParameterT:
+    def __getitem__(self, index: object) -> ParameterT:
         if not isinstance(index, int):
             raise TypeError("parameter collections support integer indexing only; use attribute access for names")
         return tuple(self.parameters.values())[index]
@@ -316,7 +316,7 @@ class ParameterNamespace(Generic[ParameterT, ViewT]):
     def __len__(self) -> int:
         return len(self._store)
 
-    def __getitem__(self, index: int) -> ParameterT:
+    def __getitem__(self, index: object) -> ParameterT:
         if not isinstance(index, int):
             raise TypeError("port namespaces support integer indexing only; use attribute access for names")
         return self._store[index]

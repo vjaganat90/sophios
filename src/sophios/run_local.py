@@ -115,8 +115,16 @@ def generate_run_script(cmdline: str) -> None:
     os.chmod('run.sh', st.st_mode | stat.S_IEXEC)
 
 
+def _runner_outdir(basepath: str, cwl_runner: str, date_time: str, outdir: str | None) -> str:
+    """Return the explicit or default output directory for a CWL runner."""
+    if outdir:
+        return str(Path(outdir).absolute().resolve())
+    runner_name = 'cwltool' if cwl_runner == 'cwltool' else 'toil'
+    return f'{basepath}/outdir_{runner_name}_{date_time}'
+
+
 def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
-              container_cmd: str, passthrough_args: List[str]) -> List[str]:
+              container_cmd: str, passthrough_args: List[str], outdir: str | None = None) -> List[str]:
     """Build the command to run the workflow in an environment
 
     Args:
@@ -150,6 +158,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
     path_check = ['--relax-path-checks']
     now = datetime.now()
     date_time = now.strftime("%Y_%m_%d_%H.%M.%S")
+    runner_outdir = _runner_outdir(basepath, cwl_runner, date_time, outdir)
     # See https://github.com/common-workflow-language/cwltool/blob/5a645dfd4b00e0a704b928cc0bae135b0591cc1a/cwltool/command_line_tool.py#L94
     # NOTE: Using --leave-outputs to disable --outdir
     # See https://github.com/dnanexus/dx-cwl/issues/20
@@ -161,7 +170,7 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         container_cmd_ + write_summary + skip_schemas + path_check
     if cwl_runner == 'cwltool':
         cmd += ['--move-outputs', '--enable-ext',
-                '--outdir', f'{basepath}/outdir_cwltool_{date_time}']
+                '--outdir', runner_outdir]
         cmd += passthrough_args
         cmd += [f'{basepath}/{workflow_name}.cwl',
                 f'{basepath}/{workflow_name}_inputs.yml']
@@ -170,9 +179,10 @@ def build_cmd(workflow_name: str, basepath: str, cwl_runner: str,
         if 'slurm' not in passthrough_args:
             cmd += provenance
 
-        cmd += ['--outdir', f'{basepath}/outdir_toil_{date_time}',
+        cmd += ['--outdir', runner_outdir,
                 # NOTE: This is the equivalent of --cachedir
                 '--jobStore', f'file:{basepath}/jobStore_{workflow_name}',
+                '--clean', 'always',
                 '--noLinkImports',
                 '--disableProgress',  # disable the progress bar in the terminal, saves UI cycles
                 ]
@@ -209,7 +219,7 @@ def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
 
     # build the runner command
     cmd = build_cmd(workflow_name, basepath, cwl_runner,
-                    container_engine, passthrough_args)
+                    container_engine, passthrough_args, run_args_dict.get('outdir') or None)
     cmdline = ' '.join(cmd)
     exec_env = create_safe_env(user_env_vars or {})
 
@@ -253,7 +263,8 @@ def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
                 print(e)
 
     if retval == 0:
-        print('Success! Output files should be in outdir/')
+        output_location = run_args_dict.get('outdir') or basepath
+        print(f'Success! Runner outputs are under {output_location}/')
     else:
         print('Failure! Please scroll up and find the FIRST error message.')
         print('(You may have to scroll up A LOT.)')

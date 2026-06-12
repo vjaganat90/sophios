@@ -171,7 +171,7 @@ A tool contract says what one command-line tool needs and what it returns.
 In Python, this is a `CommandLineTool`:
 
 ```python
-from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 
 inputs = Inputs(
     message=Input(cwl.string, position=1),
@@ -206,7 +206,7 @@ bind and outputs that later steps can consume.
 ```python
 from pathlib import Path
 
-from sophios.apis.python.workflow import Step
+from sophios.api.python.workflow import Step
 
 echo = Step(clt_path=Path("cwl_adapters") / "echo.cwl")
 echo.inputs.message = "hello from Sophios"
@@ -229,7 +229,7 @@ That line means: the `file` input of `cat` comes from the `stdout` output of
 A `Workflow` is an ordered collection of steps and nested workflows.
 
 ```python
-from sophios.apis.python.workflow import Workflow
+from sophios.api.python.workflow import Workflow
 
 workflow = Workflow([echo], "hello_python")
 compiled = workflow.compile()

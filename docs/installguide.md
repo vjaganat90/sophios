@@ -52,8 +52,8 @@ Verify the public Python APIs:
 
 ```bash
 python - <<'PY'
-from sophios.apis.python.workflow import Step, Workflow
-from sophios.apis.python.tool_builder import CommandLineTool, Input, Output, cwl
+from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.tool_builder import CommandLineTool, Input, Output, cwl
 from sophios.compute_request import ComputeRequest
 
 print("Sophios is installed")

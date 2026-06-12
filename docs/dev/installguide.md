@@ -108,8 +108,8 @@ Confirm that Python imports Sophios from this checkout:
 ```bash
 python - <<'PY'
 import sophios
-from sophios.apis.python.workflow import Step, Workflow
-from sophios.apis.python.tool_builder import CommandLineTool, Input, Output, cwl
+from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.tool_builder import CommandLineTool, Input, Output, cwl
 
 print(f"Sophios version: {sophios.__version__}")
 print(f"Sophios module:  {sophios.__file__}")

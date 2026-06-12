@@ -59,7 +59,7 @@ A `Step` is a CWL `CommandLineTool` placed inside a workflow context.
 ```python
 from pathlib import Path
 
-from sophios.apis.python.workflow import Step
+from sophios.api.python.workflow import Step
 
 
 echo = Step(clt_path=Path("cwl_adapters") / "echo.cwl")
@@ -114,7 +114,7 @@ The docs use the explicit form because it is clearer:
 Wrap the step in a workflow:
 
 ```python
-from sophios.apis.python.workflow import Workflow
+from sophios.api.python.workflow import Workflow
 
 
 workflow = Workflow([echo], "hello_python")
@@ -142,7 +142,7 @@ The minimal complete example is therefore:
 ```python
 from pathlib import Path
 
-from sophios.apis.python.workflow import Step, Workflow
+from sophios.api.python.workflow import Step, Workflow
 
 
 def build_workflow() -> Workflow:
@@ -165,7 +165,7 @@ Most workflows become useful when one step consumes another step's output.
 ```python
 from pathlib import Path
 
-from sophios.apis.python.workflow import Step, Workflow
+from sophios.api.python.workflow import Step, Workflow
 
 
 touch = Step(clt_path=Path("cwl_adapters") / "touch.cwl")
