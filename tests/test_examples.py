@@ -22,7 +22,7 @@ from sophios import auto_gen_header
 from sophios.cli import get_args
 from sophios.utils_yaml import wic_loader
 from sophios.post_compile import cwl_docker_extract, remove_entrypoints, stage_input_files
-from sophios.post_compile import verify_container_engine_config, find_and_create_output_dirs
+from sophios.post_compile import verify_container_engine_config
 from sophios.wic_types import NodeData, StepId, Yaml, YamlTree, Json
 from sophios.utils_graphs import get_graph_reps
 
@@ -55,9 +55,13 @@ large_workflows: List[str] = config_ci.get("large_workflows", [])
 
 def _is_workflow_document(yml_path: Path) -> bool:
     with open(yml_path, mode='r', encoding='utf-8') as y:
-        yml = yaml.load(y.read(), Loader=wic_loader())
-    wic = yml.get('wic', {}) if isinstance(yml, dict) else {}
-    return isinstance(yml, dict) and ('steps' in yml or 'implementations' in wic)
+        match yaml.load(y.read(), Loader=wic_loader()):
+            case {"steps": _}:
+                return True
+            case {"wic": {"implementations": _}}:
+                return True
+            case _:
+                return False
 
 
 yml_paths_tuples_not_large = [
@@ -237,7 +241,6 @@ def run_workflows(yml_path_str: str, yml_path: Path, cwl_runner: str, args: argp
     # NOTE: Do not use --cachedir; we want to actually test everything.
     # stage input files for run
     stage_input_files(sub_node_data.workflow_inputs_file, Path(args.yaml).parent.absolute(), basepath)
-    find_and_create_output_dirs(rose_tree)
     run_args_dict = {}
     run_args_dict['container_engine'] = args.container_engine
     run_args_dict['cwl_runner'] = cwl_runner

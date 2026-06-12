@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import asyncio
 import importlib
 import json
 import os
@@ -18,6 +19,7 @@ import sophios.compute_request as compute_request_module
 import sophios.main as main_module
 import sophios.plugins
 import sophios.run_local as run_local
+import sophios.run_local_async as run_local_async
 from sophios import input_output as io
 from sophios import utils, utils_cwl
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
@@ -49,6 +51,35 @@ def _emit_text_tool() -> CommandLineTool:
         .base_command("echo")
         .stdout("stdout.txt")
     )
+
+
+def _output_directory_tool(path: Path) -> Path:
+    path.write_text(
+        """class: CommandLineTool
+cwlVersion: v1.2
+requirements:
+  InitialWorkDirRequirement:
+    listing:
+      - entry: $(inputs.outDir)
+        writable: true
+  InlineJavascriptRequirement: {}
+baseCommand: [bash, -lc]
+arguments:
+  - valueFrom: "touch $(inputs.outDir.basename)/done.txt"
+inputs:
+  outDir:
+    type: Directory
+    inputBinding:
+      prefix: --outDir
+outputs:
+  outDir:
+    type: Directory
+    outputBinding:
+      glob: $(inputs.outDir.basename)
+""",
+        encoding="utf-8",
+    )
+    return path
 
 
 def _load_global_config() -> Json:
@@ -207,6 +238,30 @@ def test_tool_builder_step_bridge_supports_multistep_workflow() -> None:
     assert step_ids[1].endswith("cat")
     assert list(compiled.cwl_workflow["outputs"]) == ["result"]
     assert compiled.cwl_workflow["outputs"]["result"]["outputSource"] == f"{step_ids[1]}/output"
+
+
+@pytest.mark.fast
+def test_output_target_directories_compile_as_runner_local_inputs(tmp_path: Path) -> None:
+    step = Step(clt_path=_output_directory_tool(tmp_path / "write_dir.cwl"))
+    step.inputs.outDir = Path("result.outDir")
+    workflow = Workflow([step], "virtual_dir_demo")
+
+    compiled = workflow.compile()
+
+    assert compiled.cwl_job_inputs["virtual_dir_demo__step__1__write_dir___outDir"] == "result.outDir"
+    assert compiled.cwl_workflow["inputs"]["virtual_dir_demo__step__1__write_dir___outDir"]["type"] == "string"
+    assert compiled.cwl_workflow["steps"][0]["run"]["inputs"]["outDir"]["type"] == "string"
+    assert compiled.cwl_workflow["steps"][0]["run"]["outputs"]["outDir"]["outputBinding"]["glob"] == "$(inputs.outDir)"
+
+
+@pytest.mark.fast
+def test_output_target_directories_reject_absolute_locations(tmp_path: Path) -> None:
+    step = Step(clt_path=_output_directory_tool(tmp_path / "write_dir.cwl"))
+    step.inputs.outDir = tmp_path / "absolute.outDir"
+    workflow = Workflow([step], "absolute_dir_demo")
+
+    with pytest.raises(ValueError, match="cannot use an absolute location"):
+        workflow.compile()
 
 
 @pytest.mark.fast
@@ -845,14 +900,6 @@ def test_workflow_run_does_not_forward_python_run_flags_to_runner(
 
     captured: dict[str, Any] = {}
 
-    def fake_find_and_create_output_dirs(rose_tree: Any, basepath: str) -> None:
-        captured["output_basepath"] = basepath
-
-    monkeypatch.setattr(
-        python_runtime.pc,
-        "find_and_create_output_dirs",
-        fake_find_and_create_output_dirs,
-    )
     monkeypatch.setattr(
         python_runtime.pc,
         "verify_container_engine_config",
@@ -898,7 +945,79 @@ def test_workflow_run_does_not_forward_python_run_flags_to_runner(
     assert captured["run_args_dict"]["outdir"] == str(tmp_path / "workflow_output")
     assert captured["workflow_name"] == "runtime_flag_demo"
     assert captured["basepath"] == str(tmp_path)
-    assert captured["output_basepath"] == str(tmp_path)
+
+
+@pytest.mark.fast
+def test_workflow_run_writes_virtual_output_directories_without_orphans(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    step = Step(clt_path=_output_directory_tool(tmp_path / "write_dir.cwl"))
+    step.inputs.outDir = Path("result.outDir")
+    workflow = Workflow([step], "virtual_run_demo")
+
+    monkeypatch.setattr(python_runtime.pc, "verify_container_engine_config", lambda container, ignore: None)
+    monkeypatch.setattr(python_runtime.pc, "cwl_docker_extract", lambda container, pull_dir, cwl_path: None)
+    monkeypatch.setattr(
+        python_runtime.rl,
+        "run_local",
+        lambda run_args_dict, use_subprocess, passthrough_args, workflow_name, basepath, user_env_vars=None: 0,
+    )
+
+    workflow.run(basepath=str(tmp_path))
+
+    inputs = yaml.safe_load((tmp_path / "virtual_run_demo_inputs.yml").read_text(encoding="utf-8"))
+    assert inputs["virtual_run_demo__step__1__write_dir___outDir"] == "result.outDir"
+    assert not (tmp_path / "result.outDir").exists()
+
+
+@pytest.mark.fast
+def test_async_serialized_run_uses_normalized_job_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workflow: Json = {
+        "name": "async_virtual_demo",
+        "class": "Workflow",
+        "cwlVersion": "v1.2",
+        "inputs": {"target": {"type": "Directory"}},
+        "outputs": {},
+        "steps": [
+            {
+                "id": "write_dir",
+                "in": {"outDir": {"source": "target"}},
+                "out": ["outDir"],
+                "run": yaml.safe_load(_output_directory_tool(tmp_path / "write_dir.cwl").read_text(encoding="utf-8")),
+            }
+        ],
+        "yaml_inputs": {
+            "target": {
+                "class": "Directory",
+                "location": "async_result.outDir",
+            }
+        },
+    }
+
+    monkeypatch.setattr(run_local_async, "generate_run_script", lambda cmdline: None)
+
+    retval = asyncio.run(
+        run_local_async.run_cwl_serialized(
+            workflow,
+            str(tmp_path),
+            "cwltool",
+            "docker",
+            {},
+            run_args_dict={"generate_run_script": "yes"},
+        )
+    )
+
+    inputs = yaml.safe_load((tmp_path / "async_virtual_demo_inputs.yml").read_text(encoding="utf-8"))
+    assert retval == 0
+    generated_cwl = yaml.safe_load((tmp_path / "async_virtual_demo.cwl").read_text(encoding="utf-8"))
+    assert inputs["target"] == "async_result.outDir"
+    assert generated_cwl["inputs"]["target"]["type"] == "string"
+    assert generated_cwl["steps"][0]["run"]["inputs"]["outDir"]["type"] == "string"
+    assert workflow["name"] == "async_virtual_demo"
 
 
 @pytest.mark.fast

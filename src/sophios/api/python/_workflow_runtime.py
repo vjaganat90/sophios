@@ -19,6 +19,7 @@ from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
 from sophios.cli import get_dicts_for_compilation, get_known_and_unknown_args
+from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
 from sophios.utils import convert_args_dict_to_args_list, step_name_str
 from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import CompilerInfo, RoseTree, StepId, Tool, Tools, YamlTree
@@ -268,9 +269,11 @@ def load_clt_document(
     Returns:
         tuple[CWLCommandLineTool, dict[str, Any]]: Parsed CWL object and normalized YAML.
     """
-    yaml_file = yaml.safe_load(yaml.safe_dump(dict(document), sort_keys=False))
-    if not isinstance(yaml_file, dict):
-        raise TypeError("document must be a mapping of CWL fields")
+    match yaml.safe_load(yaml.safe_dump(dict(document), sort_keys=False)):
+        case dict() as yaml_file:
+            pass
+        case _:
+            raise TypeError("document must be a mapping of CWL fields")
     try:
         clt = load_document_by_yaml(yaml_file, str(run_path))
     except Exception as exc:
@@ -514,19 +517,19 @@ def compiled_workflow_from_compiler_info(
     """Build the public compiled-workflow boundary from compiler internals."""
     rose_tree = pc.cwl_inline_runtag(compiler_info.rose)
     sub_node_data = rose_tree.data
-    cwl_workflow = dict(sub_node_data.compiled_cwl)
+    cwl_workflow = normalize_rose_tree_cwl(rose_tree)
     if workflow._outputs:
-        outputs = cwl_workflow.get("outputs")
-        if isinstance(outputs, dict):
-            cwl_workflow["outputs"] = {
-                output.name: outputs[output.name]
-                for output in workflow._outputs
-                if output.name in outputs
-            }
+        match cwl_workflow.get("outputs"):
+            case dict() as outputs:
+                cwl_workflow["outputs"] = {
+                    output.name: outputs[output.name]
+                    for output in workflow._outputs
+                    if output.name in outputs
+                }
     return CompiledWorkflow(
         name=workflow.process_name,
         cwl_workflow=cwl_workflow,
-        cwl_job_inputs=dict(sub_node_data.workflow_inputs_file),
+        cwl_job_inputs=normalize_rose_tree_job_inputs(rose_tree, sub_node_data.workflow_inputs_file),
     )
 
 
@@ -596,7 +599,6 @@ def run_workflow(
 
     resolved_run_args = effective_run_args(run_args_dict)
     rose_tree = runtime_rose_tree(workflow, tool_registry=tool_registry)
-    pc.find_and_create_output_dirs(rose_tree, basepath)
     pc.verify_container_engine_config(resolved_run_args["container_engine"], False)
     input_output.write_to_disk(
         rose_tree,

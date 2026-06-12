@@ -167,8 +167,6 @@ def test_rest_core_runs_workflow(inp_file: str) -> None:
     inp_path = REST_OBJECTS / inp_file
     workflow_name = inp_file.split(".", maxsplit=1)[0]
     res = prepare_call_rest_api(inp_path)
-    output_dirs = pc.find_output_dirs(res)
-    pc.create_output_dirs(output_dirs, basepath)
     write_out_to_disk(res, workflow_name)
     retval = run_cwl_local(workflow_name, "cwltool", "docker", False)
     assert retval == 0

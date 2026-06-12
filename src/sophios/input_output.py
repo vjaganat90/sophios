@@ -7,6 +7,7 @@ from typing import Any, Dict
 import yaml
 
 from . import auto_gen_header
+from .runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
 from .wic_types import (Namespaces, NodeData, RoseTree, Yaml, ExplicitEdgeCalls, Json)
 
 
@@ -66,8 +67,8 @@ def _write_to_disk(rose_tree: RoseTree, path: Path, relative_run_path: bool, inp
     node_data: NodeData = rose_tree.data
     namespaces = node_data.namespaces
     yaml_stem = node_data.name
-    cwl_tree = node_data.compiled_cwl
-    yaml_inputs = {**node_data.workflow_inputs_file, **inputs}
+    cwl_tree = normalize_rose_tree_cwl(rose_tree)
+    yaml_inputs = normalize_rose_tree_job_inputs(rose_tree, {**node_data.workflow_inputs_file, **inputs})
 
     path.mkdir(parents=True, exist_ok=True)
     if relative_run_path:
