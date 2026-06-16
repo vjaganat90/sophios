@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import traceback
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterator, List, Optional, Dict
 from sophios.wic_types import Json
@@ -32,6 +33,13 @@ except ImportError as exc:
 from . import auto_gen_header
 from . import utils  # , utils_graphs
 from .plugins import logging_filters
+
+
+@dataclass(frozen=True, slots=True)
+class _CompiledWorkflowForCompute:
+    name: str
+    cwl_workflow: Json
+    cwl_job_inputs: Json
 
 
 def sanitize_env_vars(env_vars: Dict[str, str]) -> Dict[str, str]:
@@ -263,7 +271,7 @@ def run_local(run_args_dict: Dict[str, str], use_subprocess: bool,
                 print(e)
 
     if retval == 0:
-        output_location = run_args_dict.get('outdir') or basepath
+        output_location = cmd[cmd.index('--outdir') + 1] if '--outdir' in cmd else basepath
         print(f'Success! Runner outputs are under {output_location}/')
     else:
         print('Failure! Please scroll up and find the FIRST error message.')
@@ -298,8 +306,7 @@ def run_compute(workflow_name: str, workflow: Json, workflow_inputs: Json,
     date_time = now.strftime("%Y_%m_%d_%H.%M.%S")
     jobid = workflow_name + '__' + str(date_time) + '__'
     compute_request = ComputeRequest(
-        cwl_workflow=workflow,
-        cwl_job_inputs=workflow_inputs,
+        _CompiledWorkflowForCompute(workflow_name, workflow, workflow_inputs),
         workflow_id=jobid,
     )
 

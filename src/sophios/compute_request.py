@@ -241,51 +241,73 @@ class ComputeExecutionConfig:
         return _config_mapping(self)
 
 
-@dataclass(slots=True)
 class ComputeRequest:
-    """Schema-backed compute-slurm submission request."""
+    """Compute submission request built from a compiled workflow."""
 
-    cwl_workflow: Json
-    cwl_job_inputs: Json
-    workflow_id: str | None = None
-    jobs: Json = field(default_factory=dict)
-    compute_config: ComputeExecutionConfig | None = None
+    _compiled_name: str
+    _cwl_job_inputs: Json
+    _cwl_workflow: Json
+    compute_config: ComputeExecutionConfig | None
+    jobs: Json
+    workflow_id: str | None
 
-    @classmethod
-    def from_compiled(
-        cls,
+    __slots__ = (
+        "_compiled_name",
+        "_cwl_job_inputs",
+        "_cwl_workflow",
+        "compute_config",
+        "jobs",
+        "workflow_id",
+    )
+
+    def __init__(
+        self,
         compiled: CompiledWorkflowLike,
         *,
         workflow_id: str | None = None,
         jobs: Mapping[str, Any] | None = None,
         compute_config: ComputeExecutionConfig | None = None,
-    ) -> "ComputeRequest":
-        """Create a compute request from a compiled workflow boundary object."""
-        return cls(
-            cwl_workflow=dict(compiled.cwl_workflow),
-            cwl_job_inputs=dict(compiled.cwl_job_inputs),
-            workflow_id=workflow_id or compiled.name,
-            jobs=dict(jobs or {}),
-            compute_config=compute_config,
-        )
+    ) -> None:
+        """Create a compute request from the public compiled-workflow boundary."""
+        self._compiled_name = compiled.name
+        self._cwl_workflow = dict(compiled.cwl_workflow)
+        self._cwl_job_inputs = dict(compiled.cwl_job_inputs)
+        self.workflow_id = workflow_id or compiled.name
+        self.jobs = dict(jobs or {})
+        self.compute_config = compute_config
+
+    @property
+    def name(self) -> str:
+        """Return the compiled workflow name."""
+        return self._compiled_name
+
+    @property
+    def cwl_workflow(self) -> Json:
+        """Return a copy of the compiled CWL workflow document."""
+        return dict(self._cwl_workflow)
+
+    @property
+    def cwl_job_inputs(self) -> Json:
+        """Return a copy of the compiled CWL job inputs."""
+        return dict(self._cwl_job_inputs)
 
     def resolved_workflow_id(self) -> str | None:
         """Return the workflow id used for request status polling."""
-        workflow_id = self.workflow_id or self.cwl_workflow.get("id")
+        workflow_id = self.workflow_id or self._cwl_workflow.get("id")
         return workflow_id if isinstance(workflow_id, str) and workflow_id else None
 
     def require_workflow_id(self) -> str:
         """Return the workflow id or raise before network submission."""
         workflow_id = self.resolved_workflow_id()
         if workflow_id is None:
-            raise ValueError("ComputeRequest.submit requires workflow_id or cwl_workflow['id']")
+            raise ValueError("ComputeRequest.submit requires workflow_id or compiled workflow name")
         return workflow_id
 
     def to_mapping(self) -> Json:
         """Render and validate the compute request as a Python mapping."""
         request: Json = {
-            "cwlWorkflow": self.cwl_workflow,
-            "cwlJobInputs": self.cwl_job_inputs,
+            "cwlWorkflow": dict(self._cwl_workflow),
+            "cwlJobInputs": dict(self._cwl_job_inputs),
             "jobs": dict(self.jobs),
         }
         workflow_id = self.resolved_workflow_id()
@@ -295,7 +317,7 @@ class ComputeRequest:
             compute_config = self.compute_config.to_mapping()
             if compute_config:
                 request["computeConfig"] = compute_config
-        return validate_compute_request(request)
+        return _validate_compute_request(request)
 
     def to_json(self, *, indent: int | None = None, sort_keys: bool = False) -> RawJson:
         """Render and validate the compute request as serialized JSON text."""
@@ -342,7 +364,7 @@ class ComputeRequest:
         )
 
 
-def validate_compute_request(request: Mapping[str, Any]) -> Json:
+def _validate_compute_request(request: Mapping[str, Any]) -> Json:
     """Validate a compute request mapping against the checked-in schema."""
     request_mapping: Json = dict(request)
     try:
@@ -370,5 +392,4 @@ __all__ = [
     "RawJson",
     "SlurmJobConfig",
     "ToilRuntimeConfig",
-    "validate_compute_request",
 ]

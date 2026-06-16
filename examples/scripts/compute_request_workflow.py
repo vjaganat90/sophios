@@ -87,7 +87,7 @@ def build_request(message: str) -> ComputeRequest:
     workflow_id = (
         f"{workflow.process_name}__{datetime.now().strftime('%Y_%m_%d_%H.%M.%S')}__"
     )
-    return ComputeRequest.from_compiled(
+    return ComputeRequest(
         compiled_workflow,
         workflow_id=workflow_id,
     )

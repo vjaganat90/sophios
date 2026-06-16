@@ -8,7 +8,8 @@ The layers stay separate:
 1. `tool_builder` defines a CWL `CommandLineTool`.
 2. `workflow` composes steps into a `Workflow([steps], name)` DAG.
 3. `compute_request` packages compiled CWL for remote execution.
-4. `submit` sends serialized JSON to the service.
+4. `ComputeRequest.submit(...)` sends the validated request JSON to the
+   compute service.
 
 You do not need to hand-build JSON, and you do not need to write an
 intermediate `.cwl` file just to produce a request body.
@@ -27,7 +28,7 @@ This split gives you clear checkpoints:
 - `CommandLineTool(...)` keeps tool authoring structured and readable.
 - `Workflow([steps], name)` keeps DAG wiring explicit and reviewable.
 - `workflow.compile()` returns a `CompiledWorkflow` boundary object.
-- `ComputeRequest.from_compiled(...)` validates the compute request shape.
+- `ComputeRequest(compiled)` packages the compiled workflow for compute.
 
 Schema validation catches request-shape mistakes before submission. The schema
 lives at
@@ -81,7 +82,7 @@ def build_workflow(message: str) -> Workflow:
 workflow = build_workflow("hello from compute")
 compiled = workflow.compile()
 
-request = ComputeRequest.from_compiled(
+request = ComputeRequest(
     compiled,
     workflow_id=f"{compiled.name}__{datetime.now():%Y_%m_%d_%H.%M.%S}__",
 )
@@ -107,17 +108,13 @@ That object is the public workflow-to-compute handoff. The lower-level
 The compute API is request-oriented:
 
 ```python
-request = ComputeRequest.from_compiled(compiled)
-request_mapping = request.to_mapping()
+request = ComputeRequest(compiled)
 request_json = request.to_json()
 ```
 
-The core request object needs:
-
-- the compiled CWL workflow document
-- generated CWL job inputs
-- optionally a workflow id
-- optionally compute-specific execution settings
+The request constructor takes the compiled workflow boundary object, plus
+optional compute-specific execution settings. It does not expose a parallel
+schema-shaped constructor for raw CWL dictionaries.
 
 That keeps the compute layer loosely coupled to the workflow API. It does not
 need to know how the workflow was authored.
@@ -136,7 +133,7 @@ from sophios.compute_request import (
     ToilRuntimeConfig,
 )
 
-request = ComputeRequest.from_compiled(
+request = ComputeRequest(
     compiled,
     workflow_id="demo_job",
     compute_config=ComputeExecutionConfig(
@@ -161,7 +158,7 @@ retval = submission.exit_code
 
 Submission behavior is narrow:
 
-- render and send the validated request JSON text
+- render and send validated request JSON text from `request.to_json()`
 - use the request id for status polling
 - poll `/status/` until the job reaches a started or terminal state
 - fetch logs only after the job reaches `RUNNING`

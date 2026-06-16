@@ -12,6 +12,7 @@ from sophios.utils_graphs import get_graph_reps
 from sophios import utils_cwl
 from sophios.post_compile import cwl_inline_runtag
 from sophios.cli import get_args, get_dicts_for_compilation
+from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
 from sophios.wic_types import CompilerInfo, Json, Tool, Tools, StepId, YamlTree, NodeData
 from sophios.api.utils import converter
 import sophios.plugins as plugins
@@ -101,8 +102,8 @@ async def compile_wf(request: Request) -> Json:
     # ========= PROCESS COMPILED OBJECT =========
     sub_node_data: NodeData = rose_tree.data
     yaml_stem = sub_node_data.name
-    cwl_tree = sub_node_data.compiled_cwl
-    yaml_inputs = sub_node_data.workflow_inputs_file
+    cwl_tree = normalize_rose_tree_cwl(rose_tree)
+    yaml_inputs = normalize_rose_tree_job_inputs(rose_tree, sub_node_data.workflow_inputs_file)
 
     # Convert the compiled yaml file to json for Compute API.
     cwl_tree_run = copy.deepcopy(cwl_tree)

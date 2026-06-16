@@ -235,12 +235,12 @@ without asking users to pick apart a legacy dictionary shape.
 
 The next function,
 [`create_compute_request(...)`](https://github.com/PolusAI/sophios/blob/main/examples/scripts/ichnaea_compact.py),
-packages the compiled workflow into a schema-backed `ComputeRequest`.
+packages the compiled workflow into a `ComputeRequest`.
 
 The construction is intentionally direct:
 
 ```python
-compute_request = ComputeRequest.from_compiled(
+compute_request = ComputeRequest(
     compiled_workflow,
     workflow_id=workflow_id,
     compute_config=ComputeExecutionConfig(

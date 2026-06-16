@@ -240,6 +240,7 @@ def main() -> None:
         run_args_dict['cwl_runner'] = args.cwl_runner
         run_args_dict['copy_output_files'] = 'yes' if args.copy_output_files else 'no'
         run_args_dict['cachedir'] = args.cachedir
+        run_args_dict['outdir'] = args.outdir
         run_args_dict['generate_run_script'] = 'yes' if args.generate_run_script else 'no'
         run_local.run_local(run_args_dict, False,
                             workflow_name=rose_tree.data.name, passthrough_args=unknown_args, basepath=basepath)

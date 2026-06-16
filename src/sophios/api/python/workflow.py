@@ -326,6 +326,8 @@ class Step(_ProcessBase):
             case _ if (tool_name := _tool_builder_source_name(source)) is not None:
                 if config_path is not None:
                     raise TypeError("config_path is only supported when Step is created from a CWL file path")
+                if source is None:
+                    raise TypeError("Step requires clt_path or a CommandLineTool-like source")
                 resolved_name = step_name or tool_name
                 run_path = Path(f"{resolved_name}.cwl")
                 match source.to_cwl_document():

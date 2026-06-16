@@ -49,12 +49,11 @@ stale. Regenerate it when you add, remove, or rename tools.
 schema before submission:
 
 ```python
-request_mapping = request.to_mapping()
 request_json = request.to_json()
 ```
 
-That makes the submission boundary explicit: build the request, validate it,
-then submit.
+That makes the submission boundary explicit: construct the request from a
+compiled workflow, render validated JSON, then submit.
 
 ## Strictness
 

@@ -98,8 +98,8 @@ def workflow(input_dicts: Dict[str, str], workflow_name: str) -> Workflow:
 
 
 def create_compute_request(workflow_id: str, compiled_workflow: CompiledWorkflow) -> ComputeRequest:
-    """Return a schema-backed compute request."""
-    return ComputeRequest.from_compiled(
+    """Return a compute request object for the compiled workflow."""
+    return ComputeRequest(
         compiled_workflow,
         workflow_id=workflow_id,
         compute_config=ComputeExecutionConfig(

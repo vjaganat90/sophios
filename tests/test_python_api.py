@@ -282,7 +282,7 @@ def test_compute_request_accepts_compiled_python_workflow() -> None:
 
     workflow = Workflow([emit_step], "compute_request_workflow_demo")
     compiled = workflow.compile()
-    request = ComputeRequest.from_compiled(
+    request = ComputeRequest(
         compiled,
         workflow_id="compute_request_workflow_demo",
         compute_config=ComputeExecutionConfig(output=ComputeOutputConfig.workflow_declared()),
@@ -353,11 +353,8 @@ def test_compute_request_submit_returns_structured_submission(
 
     monkeypatch.setattr(compute_request_module.requests, "Session", FakeSession)
 
-    request = ComputeRequest(
-        cwl_workflow={"class": "Workflow", "inputs": {}, "outputs": {}, "steps": []},
-        cwl_job_inputs={},
-        workflow_id="workflow-1",
-    )
+    compiled = CompiledWorkflow("workflow-1", {"class": "Workflow", "inputs": {}, "outputs": {}, "steps": []}, {})
+    request = ComputeRequest(compiled)
     submission = request.submit("http://example.test/compute", poll_interval_seconds=0, log_path=log_path)
 
     assert submission == ComputeSubmission(
@@ -382,10 +379,8 @@ def test_compute_request_submit_returns_structured_submission(
 
 @pytest.mark.fast
 def test_compute_request_submit_requires_workflow_id() -> None:
-    request = ComputeRequest(
-        cwl_workflow={"class": "Workflow", "inputs": {}, "outputs": {}, "steps": []},
-        cwl_job_inputs={},
-    )
+    compiled = CompiledWorkflow("", {"class": "Workflow", "inputs": {}, "outputs": {}, "steps": []}, {})
+    request = ComputeRequest(compiled)
 
     with pytest.raises(ValueError, match="requires workflow_id"):
         request.submit("http://example.test/compute")
