@@ -58,18 +58,6 @@ def named_schema(name: str, schema: Json) -> Json:
     return schema_
 
 
-def named_empty_schema(name: str) -> Json:
-    """Creates a schema which starts with name, but is otherwise an empty wildcard
-
-    Args:
-        name (str): The identifier of the string
-
-    Returns:
-        Json: A schema which matches anything starting with name
-    """
-    return named_schema(name, {})  # NOTE: {} is essentially a wildcard
-
-
 def named_null_schema(name: str) -> Json:
     """Creates a schema which starts with name and contains nothing else
 
@@ -151,7 +139,7 @@ def cwl_type_to_jsonschema_type(type_obj: Json) -> Json:
         if type_obj == 'WritableDirectory':
             return None
 
-    if isinstance(type_obj, Dict):
+    if isinstance(type_obj, dict):
         if type_obj.get('type') == 'array' and 'items' in type_obj:
             items = cwl_type_to_jsonschema_type(type_obj['items'])
             if items is None:
@@ -164,7 +152,7 @@ def cwl_type_to_jsonschema_type(type_obj: Json) -> Json:
             return {**type_obj, 'items': items}
         # TODO: Other cases?
 
-    if isinstance(type_obj, List):
+    if isinstance(type_obj, list):
         items = [cwl_type_to_jsonschema_type(item) for item in type_obj]
         if any([item is None for item in items]):
             return None  # Propagate any type failures
@@ -172,8 +160,8 @@ def cwl_type_to_jsonschema_type(type_obj: Json) -> Json:
         # In a list, if some of the types are themselves arrays or objects,
         # we need to replace them with "array" and "object". This loses
         # information, but that's the specification, so...
-        items = ['array' if isinstance(item, Dict) and item.get('type', '') == 'array' else item for item in items]
-        items = ['object' if isinstance(item, Dict) and item.get('type', '') == 'object' else item for item in items]
+        items = ['array' if isinstance(item, dict) and item.get('type', '') == 'array' else item for item in items]
+        items = ['object' if isinstance(item, dict) and item.get('type', '') == 'object' else item for item in items]
         return items
 
     # TODO: Support CWL records
@@ -241,7 +229,7 @@ def cwl_schema(name: str, cwl: Json, id_prefix: str) -> Json:
         if jsontype:
             if jsontype == {'type': 'string'}:
                 jsontype = str_nonempty
-            if isinstance(jsontype['type'], List) and 'string' in jsontype['type']:
+            if isinstance(jsontype['type'], list) and 'string' in jsontype['type']:
                 jsontype['type'].remove('string')
             inputs_props[key] = {'anyOf': [str_nonempty, alias, ii, {**jsontype, **metadata}]}
         else:
@@ -649,7 +637,7 @@ def compile_workflow_generate_schema(homedir: str,
     return schema
 
 
-def get_validator(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[str, Json] = {},
+def get_validator(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[str, Json] | None = None,
                   write_to_disk: bool = False, hypothesis: bool = False) -> Draft202012Validator:
     """Generates the main schema used to check the yml files for correctness and returns a validator.
 
@@ -663,6 +651,7 @@ def get_validator(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[str
     Returns:
         Draft202012Validator: A validator which is used to check the yml files for correctness.
     """
+    schema_store = {} if schema_store is None else schema_store
     for step_id, tool in tools_cwl.items():
         schema_tool = cwl_schema(step_id.stem, tool.cwl, 'tools')
         schema_store[schema_tool['$id']] = schema_tool

@@ -229,7 +229,6 @@ def main() -> None:
         pc.cwl_docker_extract(args.container_engine, args.pull_dir, Path(basepath) / f'{yaml_stem}.cwl')
         if args.docker_remove_entrypoints:
             rose_tree = pc.remove_entrypoints(args.container_engine, rose_tree)
-        pc.find_and_create_output_dirs(rose_tree)
         # stage input files for run
         pc.stage_input_files(rose_tree.data.workflow_inputs_file, Path(args.yaml).parent.absolute(), basepath)
         # No need to re-write to disk as nothing of the cwl or yaml_inputs has changed!
@@ -241,6 +240,7 @@ def main() -> None:
         run_args_dict['cwl_runner'] = args.cwl_runner
         run_args_dict['copy_output_files'] = 'yes' if args.copy_output_files else 'no'
         run_args_dict['cachedir'] = args.cachedir
+        run_args_dict['outdir'] = args.outdir
         run_args_dict['generate_run_script'] = 'yes' if args.generate_run_script else 'no'
         run_local.run_local(run_args_dict, False,
                             workflow_name=rose_tree.data.name, passthrough_args=unknown_args, basepath=basepath)

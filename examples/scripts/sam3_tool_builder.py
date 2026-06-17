@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from sophios.apis.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 
 
 OUTPUT_PATH = Path(__file__).with_name("sam3_ome_zarr_autosegmentation.cwl")
@@ -66,7 +66,7 @@ def build_tool() -> CommandLineTool:
 
 def main() -> int:
     """Write the generated CLT to disk and optionally validate it."""
-    output_path = build_tool().save(OUTPUT_PATH, validate=VALIDATE)
+    output_path = build_tool().write_cwl(OUTPUT_PATH, validate=VALIDATE)
     print(f"Wrote {output_path}")
     if VALIDATE:
         print("Validation succeeded.")

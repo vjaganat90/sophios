@@ -13,7 +13,7 @@ User Documentation
    multistep_runner.md
    tool_builder_sam3.md
    tool_builder_workflow.md
-   compute_payload_workflow.md
+   compute_request_workflow.md
    ichnaea_compact_compute.md
    python_api_reference.rst
    advanced.md

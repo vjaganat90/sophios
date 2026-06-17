@@ -52,9 +52,9 @@ Verify the public Python APIs:
 
 ```bash
 python - <<'PY'
-from sophios.apis.python.workflow import Step, Workflow
-from sophios.apis.python.tool_builder import CommandLineTool, Input, Output, cwl
-from sophios.compute_payload import ComputeWorkflowPayload
+from sophios.api.python.workflow import Step, Workflow
+from sophios.api.python.tool_builder import CommandLineTool, Input, Output, cwl
+from sophios.compute_request import ComputeRequest
 
 print("Sophios is installed")
 PY
@@ -72,7 +72,7 @@ That includes the Python packages for:
 - `.wic` YAML parsing and validation,
 - Python workflow authoring with `Step` and `Workflow`,
 - Python tool authoring with `CommandLineTool`,
-- compute payload construction and validation.
+- compute request construction and validation.
 
 `pip` does not install every system executable that a workflow may call. The
 next section covers those tools.

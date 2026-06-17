@@ -275,19 +275,6 @@ def dockerPull_append_noentrypoint(cwl: Cwl) -> Cwl:
         return cwl
 
 
-def dockerPull_append_noentrypoint_tools(tools: Tools) -> Tools:
-    """Appends -noentrypoint to the dockerPull version tag for every tool in tools.
-
-    Args:
-        tools (Tools): The CWL CommandLineTool definitions found using get_tools_cwl()
-
-    Returns:
-        Tools: tools with -noentrypoint appended to all of the dockerPull version tags.
-    """
-    return {stepid: Tool(tool.run_path, dockerPull_append_noentrypoint(tool.cwl))
-            for stepid, tool in tools.items()}
-
-
 def dockerPull_append_noentrypoint_rosetree(rose_tree: RoseTree) -> RoseTree:
     """Appends -noentrypoint to the dockerPull version tag for every CWL CommandLineTool
 

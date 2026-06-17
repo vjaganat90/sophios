@@ -13,14 +13,9 @@ sophios.compiler
 ------------------------------------
 .. automodule:: sophios.compiler
 
-sophios.compute_payload
+sophios.compute_request
 ------------------------------------
-.. automodule:: sophios.compute_payload
-   :no-index:
-
-sophios.compute_submit
-------------------------------------
-.. automodule:: sophios.compute_submit
+.. automodule:: sophios.compute_request
    :no-index:
 
 sophios.cwl_subinterpreter

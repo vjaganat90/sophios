@@ -1,7 +1,7 @@
 import copy
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import yaml
 
@@ -78,40 +78,6 @@ def shorten_namespaced_output_name(namespaced_output_name: str, sep: str = ' ') 
             strs.append(f'step{sep}{i+1}{sep}{step_key}')
     shortened = '___'.join(strs + [output_name])
     return (yaml_stem_init, shortened)
-
-
-def restore_namespaced_output_name(yaml_stem_init: str, shortened_output_name: str, sep: Optional[str] = None) -> str:
-    """The inverse function to shorten_namespaced_output_name()
-
-    Args:
-        yaml_stem_init (str): The initial yaml_stem prefix
-        shortened_output_name (str): The shortened namespaced_output_name
-        sep (Optional[str], optional): The separator used for shortening. Defaults to None.
-
-    Raises:
-        Exception: If the argument is not of the same form as returned by shorten_namespaced_output_name
-
-    Returns:
-        str: The original namespaced_output_name before shortening.
-    """
-    if yaml_stem_init == '':
-        return shortened_output_name
-    else:
-        split = shortened_output_name.split('___')
-        namespaces = split[:-1]
-        output_name = split[-1]
-        yaml_stem = yaml_stem_init
-        strs = []
-        for shortened_step_name_str in namespaces:
-            words = shortened_step_name_str.split(sep)
-            if len(words) != 3:
-                raise Exception(
-                    f'Error! {shortened_step_name_str} is not of the correct format!')
-            _, num, name_yml = words
-            strs.append(f'{yaml_stem}{sep}step{sep}{num}{sep}{name_yml}')
-            yaml_stem = Path(name_yml).stem
-        restored = '___'.join(strs + [output_name])
-        return restored
 
 
 def partition_by_lowest_common_ancestor(nss1: Namespaces, nss2: Namespaces) -> Tuple[Namespaces, Namespaces]:
@@ -331,9 +297,9 @@ def recursively_delete_dict_key(key: str, obj: Any) -> Any:
     Returns:
         Any: The original dict with the given key recursively deleted.
     """
-    if isinstance(obj, List):
+    if isinstance(obj, list):
         return [recursively_delete_dict_key(key, x) for x in obj]
-    if isinstance(obj, Dict):
+    if isinstance(obj, dict):
         new_dict = {}
         for key_ in obj.keys():
             if not key_ == key:  # i.e. effectively delete key
@@ -352,9 +318,9 @@ def recursively_contains_dict_key(key: str, obj: Any) -> bool:
     Returns:
         bool: True if key is found, else False.
     """
-    if isinstance(obj, List):
+    if isinstance(obj, list):
         return any([recursively_contains_dict_key(key, x) for x in obj])
-    if isinstance(obj, Dict):
+    if isinstance(obj, dict):
         return (key in obj.keys()) or any(recursively_contains_dict_key(key, val) for val in obj.values())
     return False
 
@@ -458,7 +424,7 @@ def parse_provenance_output_files_(obj: Any, parentdirs: str) -> List[Tuple[str,
     Returns:
         List[Tuple[str, str, str]]: A List of (location, parentdirs, basename) for each output file.
     """
-    if isinstance(obj, Dict):
+    if isinstance(obj, dict):
         if obj.get('class', '') == 'File':
             # This basename is a file name
             return [(str(obj['location']), parentdirs, str(obj['basename']))]
@@ -466,7 +432,7 @@ def parse_provenance_output_files_(obj: Any, parentdirs: str) -> List[Tuple[str,
             # This basename is a directory name
             subdir = parentdirs + '/' + obj['basename']
             return parse_provenance_output_files_(obj['listing'], subdir)
-    if isinstance(obj, List):
+    if isinstance(obj, list):
         files = []
         for o in obj:
             files.append(parse_provenance_output_files_(o, parentdirs))

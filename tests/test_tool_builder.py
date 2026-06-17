@@ -1,14 +1,18 @@
 import importlib
+import inspect
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
 
-import sophios.apis.python._tool_builder_support as tool_builder_support
-from sophios.apis.python.tool_builder import (
+import sophios.api.python._tool_builder_support as tool_builder_support
+import sophios.api.python.tool_builder as tool_builder_module
+from sophios.api.python.tool_builder import (
     CommandLineTool,
     Dirent,
     Field,
+    Fields,
     Input,
     Inputs,
     Output,
@@ -16,23 +20,36 @@ from sophios.apis.python.tool_builder import (
     cwl,
     secondary_file,
 )
-from sophios.apis.python.workflow import Step
+from sophios.api.python.workflow import Step
 
 
 @pytest.mark.fast
 def test_old_tool_builder_module_name_is_not_available() -> None:
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("sophios.apis.python." + "cwl" + "_builder")
+        importlib.import_module("sophios.api.python." + "cwl" + "_builder")
+
+
+@pytest.mark.fast
+def test_tool_builder_does_not_export_duplicate_aliases() -> None:
+    for removed_name in (
+        "array_type",
+        "enum_type",
+        "record_type",
+        "record_field",
+        "step_from_command_line_tool",
+    ):
+        assert not hasattr(tool_builder_module, removed_name)
+        assert removed_name not in tool_builder_module.__all__
 
 
 def _rich_tool() -> CommandLineTool:
     mode_type = cwl.enum("fast", "accurate", name="Mode")
     settings_type = cwl.record(
-        {
-            "threads": Field(cwl.int),
-            "preset": Field(mode_type),
-            "tags": Field.array(cwl.string),
-        },
+        Fields(
+            threads=Field(cwl.int),
+            preset=Field(mode_type),
+            tags=Field.array(cwl.string),
+        ),
         name="Settings",
     )
     inputs = Inputs(
@@ -69,13 +86,60 @@ def _rich_tool() -> CommandLineTool:
 
 @pytest.mark.fast
 def test_tool_builder_requires_structural_core() -> None:
+    constructor = cast(Any, CommandLineTool)
     with pytest.raises(TypeError):
-        CommandLineTool("missing-inputs")  # type: ignore[call-arg]
+        constructor("missing-inputs")
+
+
+@pytest.mark.fast
+def test_command_line_tool_constructor_hides_internal_fields() -> None:
+    signature = inspect.signature(CommandLineTool)
+
+    assert list(signature.parameters) == ["name", "inputs", "outputs", "cwl_version"]
+    assert signature.parameters["cwl_version"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+@pytest.mark.fast
+def test_tool_builder_names_are_python_identifiers() -> None:
+    with pytest.raises(ValueError, match="valid Python identifier"):
+        Inputs(**{"input-file": Input(cwl.file)})
+
+    with pytest.raises(ValueError, match="valid Python identifier"):
+        Fields(**{"class": Field(cwl.string)})
+
+
+@pytest.mark.fast
+def test_tool_builder_names_reject_namespace_collisions() -> None:
+    with pytest.raises(ValueError, match="reserved"):
+        Inputs(items=Input(cwl.file))
+
+    with pytest.raises(ValueError, match="reserved"):
+        Outputs(to_dict=Output(cwl.file, glob="out.txt"))
+
+    with pytest.raises(ValueError, match="reserved"):
+        Fields(to_list=Field(cwl.string))
+
+    with pytest.raises(ValueError, match="reserved"):
+        Inputs(_items=Input(cwl.file))
+
+
+@pytest.mark.fast
+def test_structured_port_references_do_not_accept_raw_strings() -> None:
+    with pytest.raises(TypeError, match="named Input/Output object"):
+        Output(cwl.file, from_input="output")
+
+    tool = CommandLineTool(
+        "demo",
+        Inputs(input=Input(cwl.file)),
+        Outputs(output=Output(cwl.file, glob="out.txt")),
+    )
+    with pytest.raises(TypeError, match="named Input/Output object"):
+        tool.stage("input")
 
 
 @pytest.mark.fast
 def test_tool_builder_covers_common_clt_surface() -> None:
-    tool = _rich_tool().to_dict()
+    tool = _rich_tool().to_cwl_document()
 
     assert tool["$namespaces"] == {"edam": "https://edamontology.org/"}
     assert tool["$schemas"] == ["https://example.org/formats.rdf"]
@@ -117,7 +181,10 @@ def test_tool_builder_accepts_raw_extensions() -> None:
     )
 
     with pytest.warns(UserWarning, match="raw CWL injection"):
-        rendered = tool.time_limit(60).extra(sbol_intent="example:custom", customExtension={"enabled": True}).to_dict()
+        rendered = tool.time_limit(60).extra(
+            sbol_intent="example:custom",
+            customExtension={"enabled": True},
+        ).to_cwl_document()
 
     assert rendered["requirements"]["ToolTimeLimit"] == {"timelimit": 60}
     assert rendered["sbol_intent"] == "example:custom"
@@ -161,7 +228,7 @@ def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
         .stage(inputs.input)
         .resources(cores=4, ram=64000)
         .base_command("/backend/.venv/bin/python", "/backend/dagster_pipelines/jobs/autosegmentation/logic.py")
-        .to_dict()
+        .to_cwl_document()
     )
 
     assert tool["$namespaces"]["edam"] == "https://edamontology.org/"
@@ -198,14 +265,14 @@ def test_tool_builder_high_level_helpers_hide_cwl_plumbing() -> None:
 
 
 @pytest.mark.fast
-def test_tool_builder_save_round_trips_yaml(tmp_path: Path) -> None:
+def test_tool_builder_write_cwl_round_trips_yaml(tmp_path: Path) -> None:
     tool = _rich_tool()
     output_path = tmp_path / "aligner.cwl"
 
-    saved_path = tool.save(output_path)
+    saved_path = tool.write_cwl(output_path)
 
     assert saved_path == output_path
-    assert yaml.safe_load(output_path.read_text(encoding="utf-8")) == tool.to_dict()
+    assert yaml.safe_load(output_path.read_text(encoding="utf-8")) == tool.to_cwl_document()
 
 
 @pytest.mark.fast
