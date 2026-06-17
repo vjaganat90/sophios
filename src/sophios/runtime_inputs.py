@@ -8,6 +8,7 @@ from pathlib import PurePath
 import re
 from typing import Any
 
+from sophios.edam import resolve_file_format
 from sophios.wic_types import Json, NodeData, RoseTree
 
 
@@ -52,10 +53,29 @@ def _normalize_job_inputs(
     job_inputs: Mapping[str, Any],
 ) -> Json:
     normalized = copy.deepcopy(dict(job_inputs))
+    _normalize_file_formats(normalized)
     for source_key in _output_target_source_keys(cwl_workflow, run_by_step_id):
         if source_key in normalized:
             normalized[source_key] = _normalize_output_target_name(normalized[source_key], source_key)
     return normalized
+
+
+def _normalize_file_formats(value: Any) -> None:
+    match value:
+        case {"class": "File", "format": list() as formats} as file_input:
+            match resolve_file_format(file_input, formats):
+                case str() as concrete_format:
+                    file_input["format"] = concrete_format
+                case _:
+                    file_input.pop("format", None)
+        case Mapping() as mapping:
+            for item in mapping.values():
+                _normalize_file_formats(item)
+        case list() as items:
+            for item in items:
+                _normalize_file_formats(item)
+        case _:
+            pass
 
 
 def _normalize_cwl_document(
