@@ -38,7 +38,6 @@ for _yml_namespaces in search_paths_wic_tag:
     for yml_dir in yml_dirs:
         config_ci_json = Path(yml_dir) / 'config_ci.json'
         if config_ci_json.exists():
-            print(f'Reading {config_ci_json}')
             with open(config_ci_json) as f:
                 contents = f.read().splitlines()
                 # Strip out comments. (Comments are not allowed in JSON)
@@ -82,9 +81,6 @@ yml_paths_tuples_not_blacklist_on_push = [(s, p) for (s, p) in yml_paths_tuples
 
 yml_paths_partial_failure = [(s, p) for (s, p) in yml_paths_tuples
                              if s in run_partial_failures]
-
-# currently [vs_demo_2, vs_demo_3, vs_demo_4, elm, nmr,
-#            multistep1, multistep2, multistep3, helloworld, scattering_scaling]
 
 
 def is_isomorphic_with_timeout(g_m: isomorphism.GraphMatcher, yml_path_str: str) -> None:
@@ -146,12 +142,11 @@ def test_run_partial_failures_pass(yml_path_str: str, yml_path: Path, cwl_runner
     run_workflows(yml_path_str, yml_path, cwl_runner, args)
 
 
-@pytest.mark.xfail()
 @pytest.mark.parametrize("yml_path_str, yml_path", yml_paths_partial_failure)
-def test_run_partial_failures_xfail(yml_path_str: str, yml_path: Path, cwl_runner: str) -> None:
+def test_run_partial_failures_fail_without_flag(yml_path_str: str, yml_path: Path, cwl_runner: str) -> None:
     """Run workflows with known failures but without partial failure cli flag. It is expected to fail"""
     args = get_args(str(yml_path), [])
-    run_workflows(yml_path_str, yml_path, cwl_runner, args)
+    run_workflows(yml_path_str, yml_path, cwl_runner, args, expect_success=False)
 
 
 @pytest.mark.slow
@@ -175,10 +170,17 @@ def test_cwl_docker_extract(yml_path_str: str, yml_path: Path) -> None:
     """ Uses cwl-docker-extract to recursively `docker pull`"""
     args = get_args(str(yml_path))
     run_workflows(yml_path_str, yml_path, 'cwltool', args, docker_pull_only=True)
-    return
 
 
-def run_workflows(yml_path_str: str, yml_path: Path, cwl_runner: str, args: argparse.Namespace, docker_pull_only: bool = False) -> None:
+def run_workflows(
+    yml_path_str: str,
+    yml_path: Path,
+    cwl_runner: str,
+    args: argparse.Namespace,
+    *,
+    docker_pull_only: bool = False,
+    expect_success: bool = True,
+) -> None:
     """Runs all of the given workflows."""
 
     # First compile the workflow.
@@ -247,7 +249,10 @@ def run_workflows(yml_path_str: str, yml_path: Path, cwl_runner: str, args: argp
     run_args_dict['copy_output_files'] = str(args.copy_output_files)
     retval = sophios.run_local.run_local(run_args_dict, True,
                                          workflow_name=yaml_stem, passthrough_args=[], basepath=basepath)
-    assert retval == 0
+    if expect_success:
+        assert retval == 0
+    else:
+        assert retval != 0
 
 
 @pytest.mark.fast
@@ -354,9 +359,7 @@ def test_cwl_embedding_independence(yml_path_str: str, yml_path: Path) -> None:
         # Check that the subgraphs are isomorphic.
         sub_graph_nx = sub_node_data.graph.networkx
         sub_graph_fakeroot_nx = sub_node_data_fakeroot.graph.networkx
-        # assert isomorphism.faster_could_be_isomorphic(sub_graph_nx, sub_graph_fakeroot_nx)
         g_m = isomorphism.GraphMatcher(sub_graph_nx, sub_graph_fakeroot_nx)
-        print('is_isomorphic()?', yml_path_str, sub_name)
         is_isomorphic_with_timeout(g_m, yml_path_str)
 
 
@@ -385,7 +388,7 @@ def test_inline_subworkflows(yml_path_str: str, yml_path: Path) -> None:
     namespaces_list = sophios.inlineing.get_inlineable_subworkflows(
         yaml_tree, tools_cwl, 'implementation' in wic_tag, [])
     if namespaces_list == []:
-        assert True  # There's nothing to test
+        return
 
     compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation()
 
@@ -411,7 +414,5 @@ def test_inline_subworkflows(yml_path_str: str, yml_path: Path) -> None:
         # Check that the subgraphs are isomorphic.
         sub_graph_nx = sub_node_data.graph.networkx
         sub_graph_fakeroot_nx = inline_sub_node_data.graph.networkx
-        # assert isomorphism.faster_could_be_isomorphic(sub_graph_nx, sub_graph_fakeroot_nx)
         g_m = isomorphism.DiGraphMatcher(sub_graph_nx, sub_graph_fakeroot_nx)
-        print('is_isomorphic()?', yml_path_str, namespaces)
         is_isomorphic_with_timeout(g_m, yml_path_str)

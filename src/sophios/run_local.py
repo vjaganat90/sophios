@@ -328,10 +328,6 @@ def copy_output_files(yaml_stem: str, basepath: str = '') -> None:
     Args:
         yaml_stem (str): The --yaml filename (without .extension)
     """
-    output_json_file = Path(f'{basepath}/output_{yaml_stem}.json')
-    if output_json_file.exists():
-        pass  # TODO
-
     output_json_file_prov = Path(
         f'provenance/{yaml_stem}/workflow/primary-output.json')
     # NOTE: The contents of --write-summary is

@@ -74,8 +74,6 @@ def _normalize_file_formats(value: Any) -> None:
         case list() as items:
             for item in items:
                 _normalize_file_formats(item)
-        case _:
-            pass
 
 
 def _normalize_cwl_document(
@@ -88,8 +86,6 @@ def _normalize_cwl_document(
             _normalize_command_line_tool(normalized, _output_target_inputs(normalized))
         case "Workflow":
             _normalize_workflow(normalized, run_by_step_id)
-        case _:
-            pass
     return normalized
 
 

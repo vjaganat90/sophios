@@ -115,6 +115,8 @@ def cwl_inline_runtag(rose_tree: RoseTree) -> RoseTree:
 
     if cwl_tree.get('class', '') == 'Workflow':
         for sub_rose_tree in rose_tree_mod.sub_trees:
+            # Inline descendants before embedding this child into the parent run tag.
+            sub_rose_tree = cwl_inline_runtag(sub_rose_tree)
             sub_node_data: NodeData = sub_rose_tree.data
             sub_step_name = sub_node_data.namespaces[-1]
             step_to_update = next(
@@ -122,12 +124,11 @@ def cwl_inline_runtag(rose_tree: RoseTree) -> RoseTree:
             step_to_update['run'] = sub_node_data.compiled_cwl
             # merge the steps/clt namespaces to global namespaces
             # as the run tag can't have namespaces and schemas
-            cwl_tree['$namespaces'] = cwl_tree['$namespaces'] | step_to_update['run'].get(
+            cwl_tree['$namespaces'] = cwl_tree.get('$namespaces', {}) | step_to_update['run'].get(
                 '$namespaces', {})
-            # and then get rid off $namespaces and $schemas in the run tag
+            # and then get rid of $namespaces and $schemas in the run tag
             step_to_update['run'].pop('$namespaces', None)
             step_to_update['run'].pop('$schemas', None)
-            sub_rose_tree = cwl_inline_runtag(sub_rose_tree)
     return rose_tree_mod
 
 
@@ -138,8 +139,6 @@ def remove_entrypoints(container_engine: str, rose_tree: RoseTree) -> RoseTree:
         plugins.remove_entrypoints_docker()
     elif container_engine == 'podman':
         plugins.remove_entrypoints_podman()
-    else:
-        pass
     return plugins.dockerPull_append_noentrypoint_rosetree(rose_tree)
 
 
@@ -177,6 +176,3 @@ def stage_input_files(yml_inputs: Yaml,
                 # Avoid unnecessary copy
                 if src_path.resolve() != dst_path.resolve():
                     shutil.copy2(src_path, dst_path)
-
-            case _:
-                pass

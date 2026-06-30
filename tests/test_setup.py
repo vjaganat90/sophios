@@ -1,7 +1,6 @@
 import json
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
-import time
 from typing import Dict
 
 from hypothesis.strategies import SearchStrategy
@@ -147,8 +146,6 @@ def wic_yaml_filter_implementations_or_steps(yml: Yaml) -> bool:
     return ('implementations' in yml or 'steps' in yml)
 
 
-time_initial = time.time()
-
 wic_schema = sophios.schemas.wic_schema.wic_main_schema(
     tools_cwl, yaml_stems, schema_store, hypothesis=True)
 wic_strategy: SearchStrategy = hj.from_schema(wic_schema)
@@ -157,10 +154,6 @@ wic_strategy: SearchStrategy = hj.from_schema(wic_schema)
 wic_strategy = wic_strategy.filter(wic_yaml_filter_blank_steps)
 wic_strategy = wic_strategy.filter(wic_yaml_filter_implementations_or_steps)
 wic_strategy = wic_strategy.filter(wic_yaml_filter_top_level_types)
-
-time_final = time.time()
-print(f'from_schema time: {round(time_final - time_initial, 4)} seconds')
-print()
 
 
 def test_version_resolution_warns_when_package_metadata_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:

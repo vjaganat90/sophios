@@ -37,10 +37,7 @@ def import_python_file(python_module_name: str, python_file_path: Path) -> Modul
     # file into its own temporary directory. If you use an initial workdir, the
     # symlinks are now all in the same directory, but their sources are still
     # pointing wherever. Thus, import_module will never work!
-    # module = importlib.import_module(python_script_mod)
-    # ModuleNotFoundError: No module named ...
-
-    # The solution is buried in the examples at the bottom of the documentation
+    # The solution is in the examples at the bottom of the documentation
     # https://docs.python.org/3/library/importlib.html#importing-a-source-file-directly
     # and https://stackoverflow.com/questions/65206129/importlib-not-utilising-recognising-path
     spec = importlib.util.spec_from_file_location(
@@ -58,8 +55,6 @@ def import_python_file(python_module_name: str, python_file_path: Path) -> Modul
                 raise Exception
         except Exception as e:
             raise Exception(f'Error! Cannot load python_script {python_file_path}') from e
-        # Note that now (after calling exec_module) we can call import_module without error
-        # module_ = importlib.import_module(python_module_name)
     else:
         raise Exception(f'Error! Cannot load python_script spec {spec} from file\n{python_file_path}')
     return module_
@@ -81,11 +76,6 @@ def get_main_args(module_: ModuleType) -> dict[str, Any]:
     anns = inspect.getfullargspec(module_.main).annotations
     if 'return' in anns:
         del anns['return']
-    # print(anns)
-    # print(ret)
-
-    # print(inspect.signature(module_.main).parameters)
-    # print(inspect.signature(module_.main).return_annotation)
     return anns
 
 
@@ -141,16 +131,13 @@ def generate_CWL_CommandLineTool(module_inputs: dict[str, Any], module_outputs: 
         return {'inputBinding': {'position': position, 'prefix': f'--{prefix}'}}
 
     inputs: dict[str, Any] = {}
-    # driver_script_file = {'class': 'File', 'path': driver_script}
     inputs['driver_script'] = {'type': 'string', 'format': 'edam:format_2330',
-                               **input_binding(1), 'default': DRIVER_SCRIPT}  # driver_script_file
-    # workflow_types_file = {'class': 'File', 'path': types_script}
+                               **input_binding(1), 'default': DRIVER_SCRIPT}
     inputs['workflow_types'] = {'type': 'string', 'format': 'edam:format_2330',
-                                **input_binding(2), 'default': TYPES_SCRIPT}  # workflow_types_file
+                                **input_binding(2), 'default': TYPES_SCRIPT}
     inputs['script'] = {'type': 'File', 'format': 'edam:format_2330', **input_binding(3)}
     for i, (arg_key, arg_val) in enumerate(module_inputs.items()):
         inputs[arg_key] = {**arg_val, **input_binding(i+4, arg_key)}
-    # inputs['args'] = {'type': 'string', **input_binding(4)}
     yaml_tree['inputs'] = inputs
 
     outputs: dict[str, Any] = {}
@@ -175,8 +162,6 @@ def get_module(python_script_mod: str, python_script_path: Path, yml_args: dict[
     """
     import_python_file('workflow_types', Path(TYPES_SCRIPT_REL))
     module_ = import_python_file(python_script_mod, python_script_path)
-    # print(module_.inputs)
-    # print(module_.outputs)
 
     main_args = get_main_args(module_)
     check_args_match_inputs(module_, main_args)

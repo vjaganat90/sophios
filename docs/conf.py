@@ -38,7 +38,7 @@ extensions = [
     # from the function signature and inserts them into the docstring.
     # This avoids duplication and looks much cleaner. (particularly
     # since type aliases get expanded and the trick below isn't working...)
-    # TODO: Remove all of the duplicated type annotations in the docstrings.
+    # Docstrings should avoid repeating type annotations already present in signatures.
     'sphinx.ext.duration',
     'sphinx.ext.doctest',
     'sphinx.ext.autodoc',
@@ -71,7 +71,6 @@ autodoc_default_options = {
 # The sphinx autodoc documentation claims type aliases defined in wic_types.py
 # can be added to autodoc_type_aliases instead of showing their expansions.
 # The automatic alias expansion is disabled until it works reliably.
-# TODO: Consider removing all type aliases in favor of classes.
 autodoc_type_aliases: Dict[str, str] = {
 }
 napoleon_use_param = True

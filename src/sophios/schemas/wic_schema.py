@@ -535,7 +535,7 @@ def wic_main_schema(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[s
 
     schema = default_schema(url=True)
     schema['$id'] = 'wic_main'
-    schema['title'] = 'Validating against the Workflow Inference Compiler schema'
+    schema['title'] = 'Validating against the Sophios workflow schema'
     # schema['description'] = ''
     # schema['required'] = ['steps'] # steps are not required, e.g. npt.wic
 
@@ -568,10 +568,6 @@ def wic_main_schema(tools_cwl: Tools, yml_stems: List[str], schema_store: Dict[s
     schema['properties'] = schema_props
 
     # https://json-schema.org/understanding-json-schema/structuring.html#bundling
-    # import copy
-    # schema['$defs'] = copy.deepcopy(schema_store)
-    # Without deepcopy, "ValueError: Circular reference detected"
-    # "f.write(json.dumps(schema, indent=2))"
 
     return schema
 
