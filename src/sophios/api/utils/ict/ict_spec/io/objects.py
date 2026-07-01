@@ -12,7 +12,7 @@ CWL_IO_DICT: dict[str, str] = {
     "number": "double",
     "array": "string",
     "boolean": "boolean",
-    # TODO: File vs Directory?
+    # ICT path parameters do not distinguish File and Directory.
 }
 
 
@@ -26,17 +26,11 @@ class TypesEnum(str, enum.Enum):
     PATH = "path"
 
 
-# def _get_cwl_type(io_name: str, io_type: str) -> str:
 def _get_cwl_type(io_type: str) -> str:
     """Return the CWL type from the ICT IO type."""
     if io_type == "path":
-        # NOTE: for now, default to directory
-        # this needs to be addressed
-        # path could be File or Directory
+        # ICT path inputs do not distinguish File and Directory; keep the historical Directory default.
         return "Directory"
-        # if bool(re.search("dir", io_name, re.I)):
-        #     return "Directory"
-        # return "File"
     return CWL_IO_DICT[io_type]
 
 
@@ -76,7 +70,7 @@ class IO(BaseModel):
         alias="format",
         description="Defines the actual value(s) that the input/output parameter"
         + "represents using an ontology schema.",
-    )  # TODO ontology
+    )
 
     @property
     def _is_optional(self) -> str:
@@ -99,7 +93,6 @@ class IO(BaseModel):
         """Convert inputs to CWL."""
         cwl_dict_ = {
             "inputBinding": {"prefix": f"--{self.name}"},
-            # "type": f"{_get_cwl_type(self.name, self.io_type)}{self._is_optional}",
             "type": f"{_get_cwl_type(self.io_type)}{self._is_optional}",
         }
 
@@ -121,30 +114,6 @@ class IO(BaseModel):
                     cwl_type = "Directory"
                 else:
                     cwl_type = "File"
-
-                # the logic here is probably wrong
-                # let's not go here until we have a better idea of io_format in ICT Spec
-
-                # if (
-                #     not isinstance(self.io_format, list)
-                #     and self.io_format["term"].lower()
-                #     == "directory"  # pylint: disable=unsubscriptable-object
-                # ):
-                #     cwl_type = "Directory"
-                # elif (
-                #     not isinstance(self.io_format, list)
-                #     and self.io_format["term"].lower()
-                #     == "file"  # pylint: disable=unsubscriptable-object
-                # ):
-                #     cwl_type = "File"
-                # elif (
-                #     isinstance(self.io_format, list)
-                #     and len(self.io_format) == 1
-                #     and self.io_format[0].lower() == 'directory'
-                # ):
-                #     cwl_type = "Directory"
-                # else:
-                #     cwl_type = "File"
 
                 cwl_dict_ = {
                     "outputBinding": {"glob": f"$(inputs.{self.name}.basename)"},

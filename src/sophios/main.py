@@ -133,7 +133,6 @@ def main() -> None:
             if namespaces_list == []:
                 break
 
-            # print('inlineing', namespaces_list[0])
             yaml_tree, _len_substeps = inlineing.inline_subworkflow(yaml_tree, namespaces_list[0])
 
         # Append _inline here instead of in io.write_to_disk()

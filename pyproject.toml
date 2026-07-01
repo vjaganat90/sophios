@@ -220,6 +220,7 @@ markers = [
     "fast: (i.e. for maximum speed, use 'pytest -m fast')",
     "slow: (i.e. for medium speed, use 'pytest -m \"not slow\"')",
     "serial: (These tests CANNOT be run in parallel with --workers n > 1)",
+    "skip_pypi_ci: tests intentionally excluded from PyPI package-build CI",
 ]
 addopts = ""
 
@@ -232,7 +233,8 @@ ignore-words = "codespellwords.txt"
 
 [tool.pylint.main]
 
-# TODO: Add class and module docstrings.
+# Docstring coverage is enforced selectively; the legacy compiler still has many
+# modules where mandatory docstrings add noise before they add clarity.
 disable=[
         "missing-class-docstring",
         "missing-module-docstring",

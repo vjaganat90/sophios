@@ -16,7 +16,6 @@ from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_
 from sophios.wic_types import CompilerInfo, Json, Tool, Tools, StepId, YamlTree, NodeData
 from sophios.api.utils import converter
 import sophios.plugins as plugins
-# from .auth.auth import authenticate
 
 
 app = FastAPI()

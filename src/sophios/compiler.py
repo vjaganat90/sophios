@@ -67,9 +67,6 @@ def compile_workflow(yaml_tree_ast: YamlTree,
         node_data: NodeData = compiler_info.rose.data
         ast_modified = not yaml_tree.yml == node_data.yml
         if ast_modified:
-            # import yaml
-            # print(yaml.dump(node_data.yml))
-            # print()
             yaml_tree = YamlTree(yaml_tree_ast.step_id, node_data.yml)
         i += 1
 
@@ -157,7 +154,6 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
 
     # Check for top-level yml dsl args
     wic = {'wic': yaml_tree.get('wic', {})}
-    # import yaml; print(yaml.dump(wic))
     if 'wic' in yaml_tree:
         del yaml_tree['wic']
     wic_steps = wic['wic'].get('steps', {})
@@ -401,10 +397,8 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
         args_provided = []
         if 'in' in steps[i]:
             args_provided = list(steps[i]['in'])
-        # print(args_provided)
 
         in_tool = tool_i.cwl['inputs']
-        # print(list(in_tool.keys()))
         if tool_i.cwl['class'] == 'CommandLineTool':
             args_required = [arg for arg in in_tool if not (in_tool[arg].get('default') or
                                                             # Check for optional arguments using both the '?' syntactic sugar, as well as the
@@ -730,14 +724,12 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 steps[i]['in'][arg_key] = arg_var  # Leave un-evaluated
 
         for arg_key in args_required:
-            # print('arg_key', arg_key)
             in_name = f'{step_name_or_key}___{arg_key}'
             if arg_key in args_provided:
                 continue  # We already covered this case above.
             if in_name in inputs_file_workflow:
                 # We provided an explicit argument (but not an edge) in a subworkflow,
                 # and now we just need to pass it up to the root workflow.
-                # print('passing', in_name)
                 in_dict = utils_cwl.copy_cwl_input_output_dict(
                     in_tool[arg_key])
                 inputs_workflow.update({in_name: in_dict})
@@ -857,7 +849,6 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                 if 'when' in steps[i]:
                     print('Warning! overwriting an existing "when" clause')
                 steps[i]['when'] = f"$({when_clause})"
-        # print()
 
     # NOTE: add_subgraphs currently mutates graph
     wic_graphviz = wic['wic'].get('graphviz', {})

@@ -1,11 +1,11 @@
 # Sophios
 
-[![doc-buid-status](https://readthedocs.org/projects/workflow-inference-compiler/badge/?version=latest)](https://workflow-inference-compiler.readthedocs.io/en/latest/)
+[![doc-build-status](https://readthedocs.org/projects/sophios/badge/?version=latest)](https://sophios.readthedocs.io/en/latest/)
 
 Sophios is a Python-first authoring layer for [Common Workflow Language](https://www.commonwl.org) (CWL) workflows. It lets users describe command-line tool contracts, compose those tools into workflow DAGs, compile the graph to inspectable CWL, and run locally or prepare schema-validated compute submissions.
 
 ## Documentation
-The documentation is available on [readthedocs](https://workflow-inference-compiler.readthedocs.io/en/latest/).
+The documentation is available on [readthedocs](https://sophios.readthedocs.io/en/latest/).
 ## Quick Start
 See the [installation guide](docs/installguide.md) for more details, but:
 

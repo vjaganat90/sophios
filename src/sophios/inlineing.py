@@ -300,18 +300,12 @@ def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
 
     node_data: NodeData = rose_tree.data
     cwl_tree = copy.deepcopy(node_data.compiled_cwl)
-    # print('cwl_tree', yaml.dump(cwl_tree))
-    # print('subtrees')
-    # for t in rose_tree.sub_trees:
-    #    print(yaml.dump(t.data.compiled_cwl))
 
     steps = cwl_tree['steps']
     steps_keys = list(steps.keys())
     # NOTE: Only use the last namespace since we are recursively inlineing.
     subkeysdict = {t.data.namespaces[-1]: copy.deepcopy(t.data.compiled_cwl)
                    for t in sub_trees}  # NOT rose_tree.sub_trees
-    # print('subkeys', list(subkeysdict.keys()))
-    # print('steps_keys', steps_keys)
     steps_new = {}
 
     count = 0
@@ -427,10 +421,5 @@ def inline_subworkflow_cwl(rose_tree: RoseTree) -> RoseTree:
                     node_data.tool, node_data.workflow_inputs_file, node_data.explicit_edge_defs,
                     node_data.explicit_edge_calls, node_data.graph,
                     node_data.inputs_workflow, node_data.step_name_1)
-
-    # print('cwl_tree', yaml.dump(cwl_tree))
-    # print('subtrees')
-    # for t in rose_tree.sub_trees:
-    #    print(yaml.dump(t.data.compiled_cwl))
 
     return RoseTree(data, [])

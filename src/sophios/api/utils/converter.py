@@ -35,6 +35,27 @@ def validate_schema_and_object(schema: Json, jobj: Json) -> bool:
     return df2012.is_valid(jobj)
 
 
+def normalize_plugin_ui(wfb_data: Json) -> None:
+    """Normalize legacy plugin UI entries to the schema-backed WFB shape."""
+    for plugin in wfb_data.get("plugins", []):
+        inputs_by_name = {item.get("name"): item for item in plugin.get("inputs", [])}
+        outputs_by_name = {item.get("name"): item for item in plugin.get("outputs", [])}
+
+        for ui_item in plugin.get("ui", []):
+            name = ui_item.get("name")
+            if not isinstance(name, str):
+                continue
+
+            if "key" not in ui_item:
+                prefix = "outputs" if name in outputs_by_name and name not in inputs_by_name else "inputs"
+                ui_item["key"] = f"{prefix}.{name}"
+
+            source = inputs_by_name.get(name) or outputs_by_name.get(name) or {}
+            ui_item.setdefault("title", name)
+            ui_item.setdefault("description", source.get("description", name))
+            ui_item.setdefault("type", source.get("type", "string"))
+
+
 def extract_state(inp: Json) -> Json:
     """Extract only the state information from the incoming wfb object.
        It includes converting "ICT" nodes to "CLT" using "plugins" tag of the object.
@@ -97,8 +118,6 @@ def raw_wfb_to_lean_wfb(inp: Json) -> Json:
             nems = inp_restrict[k]
             rel_nodes_keys = nodes_req + do_not_rem_nodes_prop
             del_irrelevant_keys(nems, rel_nodes_keys)
-        else:
-            pass
 
     return inp_restrict
 
@@ -282,9 +301,7 @@ def wfb_to_wic(inp: Json, plugins: List[dict[str, Any]]) -> Cwl:
                 for arg in unprocessed_args:
                     node['in'][arg] = yaml.load(
                         '!ii ' + str(node['in'][arg]), Loader=wic_loader())
-    else:  # No plugins, use the old logic
-        # this logic is most likely not correct and need to be scrubbed
-        # along with updating the non_wfb dummy tests
+    else:  # No plugins, use the node/link mapping directly.
         for node in inp_restrict['nodes']:
             node.pop('settings', None)
 
@@ -370,15 +387,14 @@ def ict_to_clt(ict: Union[ICT, Path, str, dict], network_access: bool = False) -
 def update_payload_missing_inputs_outputs(wfb_data: Json) -> Json:
     """Update payload with missing inputs and outputs using links"""
 
-    # ensure the incoming wfb data is valid
-    if validate_schema_and_object(SCHEMA, wfb_data):
-        print('incoming object is valid against input object schema')
-
-    # return if no plugins are found in data
-    if not wfb_data['plugins']:
-        return wfb_data
-
     wfb_data_copy = copy.deepcopy(wfb_data)
+    normalize_plugin_ui(wfb_data_copy)
+
+    if not validate_schema_and_object(SCHEMA, wfb_data_copy):
+        raise ValueError("Incoming WFB payload does not match the input object schema.")
+
+    if not wfb_data_copy['plugins']:
+        return wfb_data_copy
 
     links = wfb_data_copy["state"]["links"]
     nodes = wfb_data_copy["state"]["nodes"]
@@ -426,7 +442,7 @@ def update_payload_missing_inputs_outputs(wfb_data: Json) -> Json:
                 tgt_node_in_arg = tgt_node_ui_config['inputs'][inlet_index]["name"]
                 tgt_node["settings"]["inputs"][tgt_node_in_arg] = src_node["settings"]["outputs"][src_node_out_arg]
 
-    if validate_schema_and_object(SCHEMA, wfb_data_copy):
-        print('Updated object is valid against input object schema')
+    if not validate_schema_and_object(SCHEMA, wfb_data_copy):
+        raise ValueError("Updated WFB payload does not match the input object schema.")
 
     return wfb_data_copy

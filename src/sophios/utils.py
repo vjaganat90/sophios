@@ -190,13 +190,8 @@ def extract_implementation(yaml_tree: Yaml, wic: Yaml, yaml_path: Path) -> Tuple
                 f'Error! No steps for implementation {stepid} in {yaml_path}!')
         steps = wic['implementations'][stepid]['steps']
         yaml_tree_copy.update({'steps': steps})
-        # TODO: Use the entire back_tree? Useful for inputs:
-        # back_tree = wic['implementations'][stepid]
-        # if 'wic' in back_tree:
-        #    del back_tree['wic']
-        # yaml_tree_copy.update(back_tree)
     elif 'steps' in yaml_tree_copy:
-        pass  # steps = yaml_tree_copy['steps']
+        pass
     else:
         raise Exception(
             f'Error! No implementations and/or steps in {yaml_path}!')
@@ -453,7 +448,6 @@ def get_input_mappings(input_mapping: Dict[str, List[str]], arg_keys: List[str],
     Returns:
         List[str]: A list of the workflow step inputs / call sites, recursively namespaced.
     """
-    # print('arg_keys', arg_keys)
     # Since each workflow input can be used in many workflow steps, we
     # need to (recursively) find all of the leaves of the mapping tree
     # corresponding to the root arg_key/in_name. Since we already added all
@@ -477,7 +471,6 @@ def get_input_mappings(input_mapping: Dict[str, List[str]], arg_keys: List[str],
                 else:
                     arg_keys_accum.append([arg_key_])
             arg_keys = [y for x in arg_keys_accum for y in x]
-            # print('arg_keys', arg_keys)
 
     return arg_keys
 
@@ -492,7 +485,6 @@ def get_output_mapping(output_mapping: Dict[str, str], out_key: str) -> str:
     Returns:
         str: The workflow step output / return location, recursively namespaced.
     """
-    # print('out_key', out_key)
     # Similarly, we need to find the fixed-point of output_mapping.
     # This is simpler since a workflow output can only come from one workflow step.
     # if not out_key_in_yaml_tree_outputs:
@@ -506,7 +498,6 @@ def get_output_mapping(output_mapping: Dict[str, str], out_key: str) -> str:
             out_key = '___'.join(out_key_init_namespaces +
                                  [output_mapping[out_key]])
             done = False
-        # print('out_key', out_key)
 
     return out_key
 
