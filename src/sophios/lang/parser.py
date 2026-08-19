@@ -1,0 +1,445 @@
+"""Parse `.wic` source into a typed AST.
+
+The parser composes YAML to a node tree rather than loading it to plain Python
+objects, because composition preserves the source marks that make diagnostics
+worth reading. Nothing here raises: a caller always receives a result carrying
+whatever was parsed plus whatever went wrong.
+
+See design_docs/core-refactor-design.md, Spec 1.
+"""
+import re
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, Final
+
+import yaml
+
+from ..utils_yaml import TAG_ALIAS, TAG_ANCHOR, TAG_INLINE_INPUT
+from .diagnostics import Code, Diagnostics
+from .nodes import (
+    Document,
+    EdgeDef,
+    EdgeRef,
+    InlineLiteral,
+    InputValue,
+    OpaqueCwl,
+    OutputBinding,
+    RawCwlRef,
+    Step,
+    StepKey,
+    UnresolvedName,
+    WicSidecar,
+)
+from .spans import SourceSpan
+
+#: `!cwl expr` — the per-value escape hatch. Additive: files that do not use it
+#: are unaffected, and it is the local form of the global --allow_raw_cwl flag.
+TAG_RAW_CWL: Final = '!cwl'
+
+#: CWL keys on a step that Sophios reads *and acts upon*. Everything else on a
+#: step is passthrough, by definition. Enumerating this set is what makes the
+#: leak boundary a specification rather than an accident.
+INTERPRETED_STEP_KEYS: Final = frozenset({'scatter', 'scatterMethod', 'when', 'run'})
+
+#: `wic:` sidecar step keys have the surface form "(1, step_name)".
+_WIC_STEP_KEY: Final = re.compile(r'^\(\s*(\d+)\s*,\s*(.+?)\s*\)$')
+
+#: How YAML's resolved scalar tags map to Python values. Annotated explicitly
+#: because the converters are heterogeneous and would otherwise infer as
+#: `object`, which is not callable.
+_SCALAR_TAGS: Final[dict[str, Callable[[str], Any]]] = {
+    'tag:yaml.org,2002:null': lambda _: None,
+    'tag:yaml.org,2002:bool': lambda s: s.lower() in ('true', 'yes', 'on'),
+    'tag:yaml.org,2002:int': int,
+    'tag:yaml.org,2002:float': float,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ParseResult:
+    """The outcome of parsing one document.
+
+    `document` is None only when nothing could be recovered — malformed YAML,
+    or a root that is not a mapping. Otherwise it is present even alongside
+    errors, so a caller can report several problems at once.
+    """
+
+    document: Document | None
+    diagnostics: Diagnostics
+
+    @property
+    def ok(self) -> bool:
+        """Whether a document was produced with no errors."""
+        return self.document is not None and not self.diagnostics.has_errors
+
+
+def parse(text: str, filename: str = '<string>') -> ParseResult:
+    """Parse `.wic` source text into a `Document`.
+
+    This function is total: it never raises, for any input. Malformed YAML,
+    wrong node kinds, and unknown tags are all reported as diagnostics.
+    """
+    diagnostics = Diagnostics()
+    whole = SourceSpan(filename, 1, 1, text.count('\n') + 1, 1)
+
+    try:
+        root = yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError as exc:
+        diagnostics.error(Code.INVALID_YAML, _yaml_error_message(exc), _yaml_error_span(filename, exc, whole))
+        return ParseResult(None, diagnostics)
+
+    if root is None:  # An empty document is well-formed and carries nothing.
+        return ParseResult(Document(span=whole), diagnostics)
+
+    if not isinstance(root, yaml.nodes.MappingNode):
+        diagnostics.error(
+            Code.NOT_A_MAPPING,
+            f'a .wic document must be a mapping, found {_kind(root)}',
+            SourceSpan.of(filename, root),
+        )
+        return ParseResult(None, diagnostics)
+
+    return ParseResult(_document(root, filename, diagnostics), diagnostics)
+
+
+# --------------------------------------------------------------------------
+# Structure
+# --------------------------------------------------------------------------
+
+
+def _document(root: yaml.nodes.MappingNode, file: str, diags: Diagnostics) -> Document:
+    """Build a Document from the root mapping node."""
+    steps: tuple[Step, ...] = ()
+    steps_as_mapping = False
+    sidecar: WicSidecar | None = None
+    passthrough: list[tuple[str, OpaqueCwl]] = []
+
+    for key_node, value_node in root.value:
+        key = _key_text(key_node)
+        match key:
+            case 'steps':
+                steps, steps_as_mapping = _steps(value_node, file, diags)
+            case 'wic':
+                sidecar = _sidecar(value_node, file, diags)
+            case _:
+                passthrough.append((key, _opaque(value_node, file, diags)))
+
+    return Document(
+        steps=steps,
+        sidecar=sidecar,
+        passthrough=tuple(passthrough),
+        span=SourceSpan.of(file, root),
+        steps_as_mapping=steps_as_mapping,
+    )
+
+
+def _steps(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple[Step, ...], bool]:
+    """Parse `steps:`, which may be a mapping or a sequence.
+
+    Both surface forms are long-standing and remain supported; the AST is the
+    same either way, so nothing downstream needs to care which was written.
+    """
+    match node:
+        case yaml.nodes.MappingNode():
+            return tuple(_step(_key_text(k), v, file, diags) for k, v in node.value), True
+        case yaml.nodes.SequenceNode():
+            return tuple(_sequence_step(item, file, diags) for item in node.value), False
+        case _:
+            diags.error(
+                Code.EXPECTED_MAPPING,
+                f'steps: must be a mapping or a sequence, found {_kind(node)}',
+                SourceSpan.of(file, node),
+            )
+            return (), False
+
+
+def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step:
+    """Parse one entry of a sequence-form `steps:`.
+
+    Two surface forms are in long-standing use and both remain supported:
+
+        - id: touch        # explicit id, body alongside it
+          in: {...}
+
+        - touch:           # single-key mapping, the key is the id
+            in: {...}
+    """
+    span = SourceSpan.of(file, node)
+    if not isinstance(node, yaml.nodes.MappingNode):
+        diags.error(Code.EXPECTED_MAPPING, f'each step must be a mapping, found {_kind(node)}', span)
+        return Step(id='', span=span)
+
+    id_node = next((v for k, v in node.value if _key_text(k) == 'id'), None)
+    if id_node is not None:
+        step_id = str(_scalar(id_node) or '')
+        if not step_id:
+            diags.error(Code.EMPTY_STEP_ID, 'id: must be a non-empty string', SourceSpan.of(file, id_node))
+        body = [(k, v) for k, v in node.value if _key_text(k) != 'id']
+        return _step_body(step_id, body, span, file, diags)
+
+    if len(node.value) == 1:
+        key_node, value_node = node.value[0]
+        return _step(_key_text(key_node), value_node, file, diags)
+
+    diags.error(
+        Code.MISSING_STEP_ID,
+        'a step in a sequence needs either an id: or a single name key',
+        span,
+    )
+    return Step(id='', span=span)
+
+
+def _step(step_id: str, node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step:
+    """Parse a step body, keyed by its id.
+
+    A step may legitimately have no body at all (`some_step.wic:` with nothing
+    under it), which YAML resolves to null.
+    """
+    span = SourceSpan.of(file, node)
+    if node.tag == 'tag:yaml.org,2002:null':
+        return Step(id=step_id, span=span)
+    if not isinstance(node, yaml.nodes.MappingNode):
+        diags.error(Code.EXPECTED_MAPPING, f'step {step_id!r} must be a mapping, found {_kind(node)}', span)
+        return Step(id=step_id, span=span)
+    return _step_body(step_id, list(node.value), span, file, diags)
+
+
+def _step_body(
+    step_id: str,
+    entries: list[tuple[yaml.nodes.Node, yaml.nodes.Node]],
+    span: SourceSpan,
+    file: str,
+    diags: Diagnostics,
+) -> Step:
+    """Split a step's keys into inputs, outputs, interpreted CWL, and passthrough."""
+    inputs: tuple[tuple[str, InputValue], ...] = ()
+    outputs: tuple[OutputBinding, ...] = ()
+    interpreted: list[tuple[str, OpaqueCwl]] = []
+    passthrough: list[tuple[str, OpaqueCwl]] = []
+
+    for key_node, value_node in entries:
+        key = _key_text(key_node)
+        if key == 'in':
+            inputs = _inputs(value_node, file, diags)
+        elif key == 'out':
+            outputs = _outputs(value_node, file, diags)
+        elif key in INTERPRETED_STEP_KEYS:
+            interpreted.append((key, _opaque(value_node, file, diags)))
+        else:
+            passthrough.append((key, _opaque(value_node, file, diags)))
+
+    return Step(
+        id=step_id,
+        inputs=inputs,
+        outputs=outputs,
+        interpreted=tuple(interpreted),
+        passthrough=tuple(passthrough),
+        span=span,
+    )
+
+
+def _inputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple[str, InputValue], ...]:
+    """Parse a step's `in:` mapping into typed input values."""
+    if not isinstance(node, yaml.nodes.MappingNode):
+        diags.error(Code.EXPECTED_MAPPING, f'in: must be a mapping, found {_kind(node)}', SourceSpan.of(file, node))
+        return ()
+    return tuple((_key_text(k), _input_value(v, file, diags)) for k, v in node.value)
+
+
+def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputValue:
+    """Classify one step input into the closed `InputValue` union.
+
+    The tag decides the form. An untagged scalar is an `UnresolvedName`, which
+    resolution later either binds to a workflow input or reports on.
+    """
+    span = SourceSpan.of(file, node)
+    match node.tag:
+        case t if t == TAG_INLINE_INPUT:
+            return InlineLiteral(_literal(node, file, diags), span)
+        case t if t == TAG_ANCHOR:
+            return EdgeDef(str(_scalar(node) or ''), span)
+        case t if t == TAG_ALIAS:
+            return EdgeRef(str(_scalar(node) or ''), span)
+        case t if t == TAG_RAW_CWL:
+            return RawCwlRef(str(_scalar(node) or ''), span)
+        case _:
+            if isinstance(node, yaml.nodes.ScalarNode):
+                return UnresolvedName(node.value, span)
+            # A bare mapping or sequence cannot name a workflow input, so it is
+            # only meaningful as a literal.
+            return InlineLiteral(_opaque(node, file, diags), span)
+
+
+def _outputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[OutputBinding, ...]:
+    """Parse a step's `out:` sequence."""
+    if not isinstance(node, yaml.nodes.SequenceNode):
+        diags.error(Code.EXPECTED_SEQUENCE, f'out: must be a sequence, found {_kind(node)}', SourceSpan.of(file, node))
+        return ()
+    return tuple(_output_binding(item, file, diags) for item in node.value)
+
+
+def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> OutputBinding:
+    """Parse one `out:` entry: a bare name, or a name bound to an edge definition."""
+    span = SourceSpan.of(file, node)
+    match node:
+        case yaml.nodes.ScalarNode():
+            return OutputBinding(node.value, None, span)
+        case yaml.nodes.MappingNode() if len(node.value) == 1:
+            key_node, value_node = node.value[0]
+            edge = value_node.tag == TAG_ANCHOR
+            return OutputBinding(
+                _key_text(key_node),
+                EdgeDef(str(_scalar(value_node) or ''), SourceSpan.of(file, value_node)) if edge else None,
+                span,
+            )
+        case _:
+            diags.error(
+                Code.EXPECTED_SCALAR,
+                'each out: entry must be a name or a single-key mapping',
+                span,
+            )
+            return OutputBinding('', None, span)
+
+
+def _sidecar(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> WicSidecar:
+    """Parse a `wic:` block, normalising its `"(1, name)"` step keys."""
+    span = SourceSpan.of(file, node)
+    if node.tag == 'tag:yaml.org,2002:null':
+        # `wic:` with nothing under it is an empty sidecar, not an error.
+        return WicSidecar(span=span)
+    if not isinstance(node, yaml.nodes.MappingNode):
+        diags.error(Code.EXPECTED_MAPPING, f'wic: must be a mapping, found {_kind(node)}', span)
+        return WicSidecar(span=span)
+
+    steps: list[tuple[StepKey, WicSidecar]] = []
+    entries: list[tuple[str, OpaqueCwl]] = []
+
+    for key_node, value_node in node.value:
+        key = _key_text(key_node)
+        if key != 'steps':
+            entries.append((key, _opaque(value_node, file, diags)))
+            continue
+        if not isinstance(value_node, yaml.nodes.MappingNode):
+            diags.error(
+                Code.EXPECTED_MAPPING,
+                f'wic: steps: must be a mapping, found {_kind(value_node)}',
+                SourceSpan.of(file, value_node),
+            )
+            continue
+        for sub_key, sub_value in value_node.value:
+            parsed = _step_key(_key_text(sub_key))
+            if parsed is None:
+                diags.error(
+                    Code.MALFORMED_WIC_STEP_KEY,
+                    f'wic: step key {_key_text(sub_key)!r} must have the form "(index, name)"',
+                    SourceSpan.of(file, sub_key),
+                )
+                continue
+            steps.append((parsed, _sidecar(sub_value, file, diags)))
+
+    return WicSidecar(steps=tuple(steps), entries=tuple(entries), span=span)
+
+
+def _step_key(text: str) -> StepKey | None:
+    """Normalise a `"(1, name)"` sidecar key, or None if it is malformed."""
+    match = _WIC_STEP_KEY.match(text)
+    if match is None:
+        return None
+    return StepKey(int(match.group(1)), match.group(2))
+
+
+# --------------------------------------------------------------------------
+# Leaves
+# --------------------------------------------------------------------------
+
+
+def _literal(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Any:
+    """Materialise an `!ii` payload, which may be a scalar, mapping, or sequence.
+
+    A custom tag suppresses YAML's own type resolution, so `!ii 5` arrives as
+    the text "5". Re-resolving it here reproduces `inlineinput_constructor`
+    exactly, which matters: the two must agree or the specification would
+    quietly change what existing documents mean.
+    """
+    if not isinstance(node, yaml.nodes.ScalarNode):
+        return _opaque(node, file, diags)
+    if node.value == '':
+        return ''
+    try:
+        return yaml.safe_load(node.value)
+    except yaml.YAMLError:
+        # Not a primitive; the literal text is the honest interpretation.
+        return node.value
+
+
+def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> OpaqueCwl:
+    """Materialise a node Sophios does not interpret, preserving it verbatim.
+
+    Custom wic tags are still recognised inside otherwise-opaque content so
+    that an edge reference buried in passthrough is not silently flattened to
+    a plain string.
+    """
+    match node:
+        case yaml.nodes.ScalarNode():
+            if node.tag in (TAG_ANCHOR, TAG_ALIAS, TAG_INLINE_INPUT, TAG_RAW_CWL):
+                return _input_value(node, file, diags)
+            return _tagged_scalar(node)
+        case yaml.nodes.SequenceNode():
+            return [_opaque(item, file, diags) for item in node.value]
+        case yaml.nodes.MappingNode():
+            return {_key_text(k): _opaque(v, file, diags) for k, v in node.value}
+        case _:
+            diags.error(Code.UNKNOWN_TAG, f'unsupported node {_kind(node)}', SourceSpan.of(file, node))
+            return None
+
+
+def _tagged_scalar(node: yaml.nodes.ScalarNode) -> Any:
+    """Convert a resolved scalar node to its Python value."""
+    convert = _SCALAR_TAGS.get(node.tag)
+    if convert is None:
+        return node.value
+    try:
+        return convert(node.value)
+    except ValueError:
+        # The resolver claimed a type the text cannot actually produce; the raw
+        # text is the honest fallback.
+        return node.value
+
+
+def _scalar(node: yaml.nodes.Node) -> Any:
+    """Return a scalar node's value, or None for any other node kind."""
+    return _tagged_scalar(node) if isinstance(node, yaml.nodes.ScalarNode) else None
+
+
+def _key_text(node: yaml.nodes.Node) -> str:
+    """Return a mapping key as text."""
+    return str(node.value)
+
+
+def _kind(node: yaml.nodes.Node) -> str:
+    """Describe a node's kind for a diagnostic message."""
+    match node:
+        case yaml.nodes.ScalarNode() if node.tag == 'tag:yaml.org,2002:null':
+            return 'nothing'
+        case yaml.nodes.ScalarNode():
+            return 'a scalar'
+        case yaml.nodes.SequenceNode():
+            return 'a sequence'
+        case yaml.nodes.MappingNode():
+            return 'a mapping'
+        case _:
+            return 'an unsupported node'
+
+
+def _yaml_error_message(exc: yaml.YAMLError) -> str:
+    """Extract a single-line message from a PyYAML error."""
+    problem = getattr(exc, 'problem', None)
+    return str(problem) if problem else str(exc).splitlines()[0]
+
+
+def _yaml_error_span(file: str, exc: yaml.YAMLError, fallback: SourceSpan) -> SourceSpan:
+    """Locate a PyYAML error, falling back to the whole document."""
+    mark = getattr(exc, 'problem_mark', None)
+    if mark is None:
+        return fallback
+    return SourceSpan(file, mark.line + 1, mark.column + 1, mark.line + 1, mark.column + 1)
