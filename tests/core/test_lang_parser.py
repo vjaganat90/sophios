@@ -208,6 +208,46 @@ def test_corpus_is_not_empty() -> None:
     assert CORPUS, 'no corpus .wic files discovered'
 
 
+@pytest.mark.fast
+@given(
+    st.sampled_from([('!ii', 'wic_inline_input', InlineLiteral),
+                     ('!&', 'wic_anchor', EdgeDef),
+                     ('!*', 'wic_alias', EdgeRef),
+                     ('!cwl', 'wic_raw_cwl', RawCwlRef)]),
+    identifiers,
+)
+@FAST
+def test_surface_forms_are_equivalent(form: tuple[str, str, type], payload: str) -> None:
+    """Tagged and desugared spellings of a construct parse to the same node.
+
+    Humans write `!ii x`; the Python API emits `{wic_inline_input: x}`, because
+    a constructor that re-emitted its own tag would fire again on reload. Both
+    are the same language, so both must produce the same AST — otherwise the
+    two front-ends have quietly diverged.
+    """
+    tag, key, expected = form
+    tagged = parse(f'steps:\n- id: s\n  in:\n    f: {tag} {payload}\n', 'a.wic')
+    sugared = parse(f'steps:\n- id: s\n  in:\n    f:\n      {key}: {payload}\n', 'b.wic')
+    assert tagged.ok and sugared.ok
+    assert tagged.document is not None and sugared.document is not None
+
+    left = tagged.document.steps[0].inputs[0][1]
+    right = sugared.document.steps[0].inputs[0][1]
+    assert isinstance(left, expected) and isinstance(right, expected)
+    assert _payload(left) == _payload(right)
+
+
+def _payload(value: InputValue) -> Any:
+    """The carried value of an input node, whatever its form."""
+    match value:
+        case InlineLiteral():
+            return value.value
+        case RawCwlRef():
+            return value.expression
+        case EdgeDef() | EdgeRef() | UnresolvedName():
+            return value.name
+
+
 # --------------------------------------------------------------------------
 # Sanity checks (not acceptance evidence)
 # --------------------------------------------------------------------------
@@ -280,3 +320,32 @@ def test_passthrough_keys_are_retained() -> None:
     doc = parse('$namespaces:\n  edam: http://example\nsteps:\n  s: {}\n', 'p.wic').document
     assert doc is not None
     assert dict(doc.passthrough)['$namespaces'] == {'edam': 'http://example'}
+
+
+@pytest.mark.fast
+def test_python_api_emits_documents_this_parser_accepts() -> None:
+    """The Python API is a second front-end over the same language.
+
+    Whatever it emits must parse, or the two front-ends have diverged and the
+    language reference is describing something that does not exist. See
+    docs/wic_language_reference.md, section 6.
+    """
+    # Imported here: the API pulls in the whole compiler, which the syntax
+    # layer deliberately does not depend on.
+    # pylint: disable=import-outside-toplevel
+    from sophios.api.python.workflow import Step as ApiStep
+    from sophios.api.python.workflow import Workflow
+
+    from .test_python_api import _adapter
+
+    touch = ApiStep(clt_path=_adapter('touch'))
+    touch.inputs.filename = 'empty.txt'
+    workflow = Workflow([touch], 'adherence')
+
+    result = parse(workflow.to_wic_yaml(), 'api_emitted.wic')
+
+    assert result.ok, [str(d) for d in result.diagnostics]
+    assert result.document is not None
+    emitted = result.document.steps[0].input('filename')
+    assert isinstance(emitted, InlineLiteral)
+    assert emitted.value == 'empty.txt'

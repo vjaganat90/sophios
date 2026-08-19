@@ -14,7 +14,7 @@ from typing import Any, Final
 
 import yaml
 
-from ..utils_yaml import TAG_ALIAS, TAG_ANCHOR, TAG_INLINE_INPUT
+from ..utils_yaml import KEY_ALIAS, KEY_ANCHOR, KEY_INLINE_INPUT, TAG_ALIAS, TAG_ANCHOR, TAG_INLINE_INPUT
 from .diagnostics import Code, Diagnostics
 from .nodes import (
     Document,
@@ -35,6 +35,11 @@ from .spans import SourceSpan
 #: `!cwl expr` — the per-value escape hatch. Additive: files that do not use it
 #: are unaffected, and it is the local form of the global --allow_raw_cwl flag.
 TAG_RAW_CWL: Final = '!cwl'
+
+#: The desugared key for `!cwl`, mirroring KEY_ANCHOR / KEY_ALIAS /
+#: KEY_INLINE_INPUT in utils_yaml. Every construct has both a tagged and a
+#: desugared form so the Python API can emit documents that reload unchanged.
+KEY_RAW_CWL: Final = 'wic_raw_cwl'
 
 #: CWL keys on a step that Sophios reads *and acts upon*. Everything else on a
 #: step is passthrough, by definition. Enumerating this set is what makes the
@@ -171,7 +176,7 @@ def _sequence_step(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Step
 
     id_node = next((v for k, v in node.value if _key_text(k) == 'id'), None)
     if id_node is not None:
-        step_id = str(_scalar(id_node) or '')
+        step_id = _name_text(id_node)
         if not step_id:
             diags.error(Code.EMPTY_STEP_ID, 'id: must be a non-empty string', SourceSpan.of(file, id_node))
         body = [(k, v) for k, v in node.value if _key_text(k) != 'id']
@@ -249,25 +254,69 @@ def _inputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[tuple
 def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputValue:
     """Classify one step input into the closed `InputValue` union.
 
-    The tag decides the form. An untagged scalar is an `UnresolvedName`, which
-    resolution later either binds to a workflow input or reports on.
+    Each construct has two equivalent surface forms and both must produce the
+    same node (see the language reference, "Two surface forms"):
+
+        tagged     filename: !ii empty.txt
+        desugared  filename: {wic_inline_input: empty.txt}
+
+    Humans write the tagged form; the Python API emits the desugared form,
+    because a constructor that re-emitted its own tag would fire again on
+    reload. An untagged scalar is an `UnresolvedName`, which resolution later
+    binds to a workflow input or reports on.
     """
     span = SourceSpan.of(file, node)
-    match node.tag:
-        case t if t == TAG_INLINE_INPUT:
-            return InlineLiteral(_literal(node, file, diags), span)
-        case t if t == TAG_ANCHOR:
-            return EdgeDef(str(_scalar(node) or ''), span)
-        case t if t == TAG_ALIAS:
-            return EdgeRef(str(_scalar(node) or ''), span)
-        case t if t == TAG_RAW_CWL:
-            return RawCwlRef(str(_scalar(node) or ''), span)
-        case _:
-            if isinstance(node, yaml.nodes.ScalarNode):
-                return UnresolvedName(node.value, span)
-            # A bare mapping or sequence cannot name a workflow input, so it is
-            # only meaningful as a literal.
-            return InlineLiteral(_opaque(node, file, diags), span)
+
+    build = _TAGGED_FORMS.get(node.tag)
+    if build is not None:
+        return build(node, file, diags, span)
+
+    desugared = _desugared_form(node, file, diags, span)
+    if desugared is not None:
+        return desugared
+
+    if isinstance(node, yaml.nodes.ScalarNode):
+        return UnresolvedName(node.value, span)
+    # A bare mapping or sequence cannot name a workflow input, so it is only
+    # meaningful as a literal.
+    return InlineLiteral(_opaque(node, file, diags), span)
+
+
+def _desugared_form(
+    node: yaml.nodes.Node,
+    file: str,
+    diags: Diagnostics,
+    span: SourceSpan,
+) -> InputValue | None:
+    """Recognise the single-key mapping form of a wic construct, if present."""
+    if not isinstance(node, yaml.nodes.MappingNode) or len(node.value) != 1:
+        return None
+    key_node, value_node = node.value[0]
+    build = _DESUGARED_FORMS.get(_key_text(key_node))
+    if build is None:
+        return None
+    return build(value_node, file, diags, span)
+
+
+#: Tagged spellings to the node they build, paired with _DESUGARED_FORMS below.
+#: A table rather than a comparison chain: one lookup instead of four, and the
+#: two spellings of each construct stay side by side.
+_TAGGED_FORMS: Final[dict[str, Callable[[yaml.nodes.Node, str, Diagnostics, SourceSpan], InputValue]]] = {
+    TAG_INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_literal(n, f, d), s),
+    TAG_ANCHOR: lambda n, _f, _d, s: EdgeDef(_name_text(n), s),
+    TAG_ALIAS: lambda n, _f, _d, s: EdgeRef(_name_text(n), s),
+    TAG_RAW_CWL: lambda n, _f, _d, s: RawCwlRef(_name_text(n), s),
+}
+
+#: Desugared keys to the node they build. A table rather than a branch chain:
+#: adding a construct means adding a row, and the tagged and desugared spellings
+#: stay visibly paired.
+_DESUGARED_FORMS: Final[dict[str, Callable[[yaml.nodes.Node, str, Diagnostics, SourceSpan], InputValue]]] = {
+    KEY_INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_opaque(n, f, d), s),
+    KEY_ANCHOR: lambda n, _f, _d, s: EdgeDef(_name_text(n), s),
+    KEY_ALIAS: lambda n, _f, _d, s: EdgeRef(_name_text(n), s),
+    KEY_RAW_CWL: lambda n, _f, _d, s: RawCwlRef(_name_text(n), s),
+}
 
 
 def _outputs(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> tuple[OutputBinding, ...]:
@@ -289,7 +338,7 @@ def _output_binding(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> Out
             edge = value_node.tag == TAG_ANCHOR
             return OutputBinding(
                 _key_text(key_node),
-                EdgeDef(str(_scalar(value_node) or ''), SourceSpan.of(file, value_node)) if edge else None,
+                EdgeDef(_name_text(value_node), SourceSpan.of(file, value_node)) if edge else None,
                 span,
             )
         case _:
@@ -404,6 +453,16 @@ def _tagged_scalar(node: yaml.nodes.ScalarNode) -> Any:
         # The resolver claimed a type the text cannot actually produce; the raw
         # text is the honest fallback.
         return node.value
+
+
+def _name_text(node: yaml.nodes.Node) -> str:
+    """Return a scalar node's literal text.
+
+    Edge names and CWL references are identifiers, so the raw text is what is
+    meant — resolving `false` to a bool, or `01` to an int, would rename them.
+    This matches `anchor_constructor`, which uses `construct_scalar`.
+    """
+    return str(node.value) if isinstance(node, yaml.nodes.ScalarNode) else ''
 
 
 def _scalar(node: yaml.nodes.Node) -> Any:
