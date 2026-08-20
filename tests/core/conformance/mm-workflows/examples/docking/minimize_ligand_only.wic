@@ -1,0 +1,22 @@
+inputs:
+  sdf_path:
+    type: File
+    format:
+    - edam:format_3814
+
+steps:
+    convert_mol2:
+      in:
+        input_path: sdf_path
+        #input_path: !* ligand.sdf
+        arg1: !ii -h # add hydrogens
+        # arg1: !ii -p 7.4
+      out:
+      - output_mol2_path: !& ligand.mol2
+    obmin:
+      in:
+        # Perform an initial minimization (only), i.e. do not search for conformers.
+        script: !ii /obminimize.sh # NOTE: Initial / required
+        input_mol2_path: !* ligand.mol2
+      out:
+      - output_mol2_path: !& ligand_min.mol2

@@ -1,0 +1,49 @@
+inputs:
+  input_pdb_path:
+    type: File
+    format:
+    - edam:format_1476
+  input_sdf_path:
+    type: File
+    format:
+    - edam:format_3814
+
+steps:
+- id: convert_mol2
+  in:
+    input_path: input_sdf_path
+
+- id: convert_pdbqt
+  out:
+  - output_pdb_path: !& mol_prod.pdbqt
+
+- id: convert_mol2
+  in:
+    input_path: input_pdb_path
+
+- id: convert_pdbqt
+  in:
+    arg1: !ii -xr # Receptor needs to be rigid
+  out:
+  - output_pdb_path: !& receptor_prod.pdbqt
+
+wic:
+  graphviz:
+    label: Assign Partial\nCharges
+  steps:
+    (1, convert_mol2):
+      wic:
+        graphviz:
+          label: Assign Partial Charges
+    (2, convert_pdbqt):
+      wic:
+        graphviz:
+          label: Convert to\npdbqt format
+    (3, convert_mol2):
+      wic:
+        graphviz:
+          label: Assign Partial Charges
+    (4, convert_pdbqt):
+      wic:
+        graphviz:
+          label: Convert to\npdbqt format

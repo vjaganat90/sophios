@@ -34,7 +34,7 @@ from sophios.lang import (
 )
 from sophios.lang.spans import SourceSpan
 
-from .wic_corpus import CORPUS, corpus_id
+from .wic_corpus import CORPUS, IN_REPO_CORPUS, corpus_id
 
 FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 
@@ -126,7 +126,7 @@ def _resolvable(span: SourceSpan, text: str) -> bool:
     lines = text.splitlines() or ['']
     if not 1 <= span.start_line <= len(lines):
         return False
-    return 1 <= span.start_column <= len(lines[span.start_line - 1]) + 1
+    return bool(1 <= span.start_column <= len(lines[span.start_line - 1]) + 1)
 
 
 # --------------------------------------------------------------------------
@@ -204,9 +204,20 @@ def test_p07_corpus_files_parse(path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_corpus_is_not_empty() -> None:
-    """The corpus scan must find files, or P07 passes vacuously."""
+def test_corpus_is_complete() -> None:
+    """The corpus must contain every file it claims, or P07 passes vacuously.
+
+    Asserting the size, not just non-emptiness: a corpus that quietly shrinks
+    still passes every test in this file while guarding less each time.
+    """
     assert CORPUS, 'no corpus .wic files discovered'
+
+    missing = [path for path in CORPUS if not path.is_file()]
+    assert not missing, f'corpus files listed but absent: {missing}'
+
+    pinned = len(CORPUS) - len(IN_REPO_CORPUS)
+    assert len(IN_REPO_CORPUS) >= 14, f'in-repo corpus shrank to {len(IN_REPO_CORPUS)}'
+    assert pinned >= 68, f'pinned corpus shrank to {pinned}'
 
 
 @pytest.mark.fast
@@ -283,7 +294,9 @@ def test_sequence_and_mapping_steps_agree() -> None:
     as_seq = parse('steps:\n- id: touch\n  in:\n    f: !ii x\n', 's.wic').document
     assert as_map is not None and as_seq is not None
     assert [s.id for s in as_map.steps] == [s.id for s in as_seq.steps] == ['touch']
-    assert as_map.steps[0].inputs[0][1].value == as_seq.steps[0].inputs[0][1].value  # type: ignore[union-attr]
+    from_map, from_seq = as_map.steps[0].inputs[0][1], as_seq.steps[0].inputs[0][1]
+    assert isinstance(from_map, InlineLiteral) and isinstance(from_seq, InlineLiteral)
+    assert from_map.value == from_seq.value
 
 
 @pytest.mark.fast
