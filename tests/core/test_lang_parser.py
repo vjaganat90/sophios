@@ -20,6 +20,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from sophios.lang import (
+    Code,
     Document,
     EdgeDef,
     EdgeRef,
@@ -53,9 +54,9 @@ scalars = st.one_of(
 
 
 @st.composite
-def input_lines(draw: st.DrawFn) -> str:
+def input_lines(draw: st.DrawFn, name: str | None = None) -> str:
     """One `in:` binding, in any of the forms the language admits."""
-    name = draw(identifiers)
+    name = draw(identifiers) if name is None else name
     form = draw(st.sampled_from(['ii', 'anchor', 'alias', 'cwl', 'bare']))
     match form:
         case 'ii':
@@ -77,8 +78,10 @@ def documents(draw: st.DrawFn) -> str:
     for _ in range(draw(st.integers(min_value=1, max_value=4))):
         lines.append(f'  {draw(identifiers)}:')
         lines.append('    in:')
-        for _ in range(draw(st.integers(min_value=1, max_value=3))):
-            lines.append(draw(input_lines()))
+        # Unique: binding the same input twice is a diagnosed error, not a
+        # well-formed document (see wic010).
+        for name in draw(st.lists(identifiers, min_size=1, max_size=3, unique=True)):
+            lines.append(draw(input_lines(name)))
     if draw(st.booleans()):
         lines += ['wic:', '  graphviz:', f'    label: {draw(identifiers)}']
     return '\n'.join(lines) + '\n'
@@ -312,6 +315,20 @@ def test_malformed_yaml_reports_a_located_diagnostic() -> None:
     assert result.document is None
     assert len(result.diagnostics) == 1
     assert result.diagnostics[0].span.start_line >= 1
+
+
+@pytest.mark.fast
+def test_repeated_input_is_reported_not_silently_resolved() -> None:
+    """An input bound twice is an error naming the input (§4.2).
+
+    YAML leaves repeated keys undefined, so keeping either binding would mean
+    choosing silently on the writer's behalf.
+    """
+    result = parse('steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n', 'dup.wic')
+
+    assert [d.code for d in result.diagnostics] == [Code.DUPLICATE_KEY]
+    assert "'f'" in result.diagnostics[0].message
+    assert result.diagnostics[0].span.start_line == 5
 
 
 @pytest.mark.fast

@@ -34,6 +34,7 @@ class Code(StrEnum):
     EMPTY_STEP_ID = 'wic007'
     MALFORMED_WIC_STEP_KEY = 'wic008'
     UNKNOWN_TAG = 'wic009'
+    DUPLICATE_KEY = 'wic010'
 
 
 @dataclass(frozen=True, slots=True)
