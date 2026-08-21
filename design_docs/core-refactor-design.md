@@ -4,6 +4,19 @@
 **Baseline:** `master` at `6570369`
 **Scope:** Four specs, delivered in order. Each is independently shippable.
 
+## Naming
+
+**Sophios** is the language. It has one DSL with two surfaces: a YAML spelling,
+conventionally stored in files named `.wic`, and the Python API. Neither is
+primary; §5.3 and Spec 1's adherence properties depend on that being true.
+
+`.wic` is a file extension. This document writes "`.wic` files" for files on
+disk and "Sophios" for the language. Some concrete syntax still carries the
+older `wic` prefix — the `wic:` block, the `!ii` / `!&` / `!*` tags, the `wic_*`
+desugared keys — and keeps it, because existing workflows depend on those
+spellings. The language's own version tag is `lang_version`, which is
+unimplemented and therefore free to name correctly.
+
 ---
 
 ## 1. Governing constraint
@@ -61,8 +74,9 @@ precedes Spec 3.
 
 ### Guaranteed
 
-- The `.wic` DSL. `wic_version` 0.0.1 is defined to accept what exists today,
-  validated against `docs/tutorials/`, `examples/`, and the `.wic` files in
+- The Sophios DSL, in both surfaces. `lang_version` 0.0.1 is defined to accept
+  what exists today, validated against `docs/tutorials/`, `examples/`, and the
+  `.wic` files in
   `mm-workflows` and `image-workflows`. The version tag is optional, so no
   existing file requires editing.
 - `Workflow`, `Step`, `CompiledWorkflow`, and the `tool_builder` classes.
@@ -162,11 +176,11 @@ constraint.
 
 ---
 
-## 5. Spec 1 — Specified and versioned `.wic` grammar
+## 5. Spec 1 — Specified and versioned Sophios grammar
 
 ### 5.1 What is being specified
 
-`.wic` is a leaky abstraction over CWL, deliberately. A user writes shorthand
+Sophios is a leaky abstraction over CWL, deliberately. A user writes shorthand
 for the common case and drops into raw CWL for anything the shorthand does not
 cover. That design is retained. Sealing the abstraction would mean re-inventing
 CWL one feature at a time.
@@ -180,14 +194,14 @@ The grammar pins the leak. It does not plug it.
 
 ### 5.2 The CWL substrate
 
-Passthrough means "this is CWL, handed over unchanged", so part of `.wic`'s
+Passthrough means "this is CWL, handed over unchanged", so part of Sophios's
 meaning is CWL's meaning. A specification written against an unspecified CWL
 version specifies nothing. At baseline the version is genuinely unspecified:
 `compiler.py` emits `v1.2` for workflows, `python_cwl_adapter.py` hardcodes
 `v1.0` for generated CommandLineTools, and the schema validates `cwlVersion` as
 any non-empty string.
 
-**`.wic` is specified as an abstraction over CWL v1.2** — one declared version,
+**Sophios is specified as an abstraction over CWL v1.2** — one declared version,
 enforced as an enum rather than a free string, applied consistently across every
 emitting path. This gives passthrough a precise meaning and makes the residue
 property checkable.
@@ -204,13 +218,13 @@ Three concerns, currently fused into one generated JSON Schema:
 
 | Layer | Question | Environment-dependent | Artifact |
 |---|---|---|---|
-| **Syntax** | Is this well-formed `.wic`? | No — this is specified | Typed AST + parser with source positions |
+| **Syntax** | Is this well-formed Sophios? | No — this is specified | Typed AST + parser with source positions |
 | **Resolution** | Do referenced steps exist here? | Yes | Resolution pass, "unknown tool" diagnostics |
 | **Type checking** | Do port types line up? | Yes | Type pass |
 
 Fusing them is why the schema is enormous, slow, unstable across environments,
 and reports `None is not of type 'object'` instead of naming a file and line.
-At baseline, `.wic` validity depends on which plugins are installed, because the
+At baseline, Sophios validity depends on which plugins are installed, because the
 schema enumerates every installed tool as a valid step name. That also makes the
 existing fuzzer unusable as an oracle: it samples a random subset of an
 environment-dependent schema.
@@ -223,9 +237,9 @@ editor support, so there is one source of truth.
 
 ### 5.4 The leak boundary
 
-`.wic` leaks three ways:
+Sophios leaks three ways:
 
-1. **wic-owned syntax**, consumed and stripped before emitting CWL: `!&`, `!*`,
+1. **Sophios-owned syntax**, consumed and stripped before emitting CWL: `!&`, `!*`,
    `!ii`, and the `wic:` sidecar.
 2. **Interpreted CWL**, read and acted upon: `scatter` and `when` inject
    `ScatterFeatureRequirement` / `InlineJavascriptRequirement`; an inline `run:`
@@ -234,7 +248,7 @@ editor support, so there is one source of truth.
    `requirements` / `hints`.
 
 **The interpreted set (2) is enumerated exhaustively. Everything else is
-passthrough by definition, and the residue after stripping wic-owned syntax
+passthrough by definition, and the residue after stripping Sophios-owned syntax
 must be a valid CWL v1.2 document.** This yields two directly testable
 properties and keeps existing files working.
 
@@ -297,14 +311,14 @@ conformance corpus with the exclusion documented.
 The language is specified and versioned, not frozen. Pinning without an
 evolution path only defers the problem.
 
-- **`wic_version` starts at 0.0.1**, defined against CWL v1.2. The `.wic`
+- **`lang_version` starts at 0.0.1**, defined against CWL v1.2. The Sophios
   version and its CWL substrate move together.
 - **The tag is optional and expected to stay unused.** Downstream files are
   tagless.
 - **Versioning is semantic and applied by human judgment**, not derived from
   diffs.
 
-**Resolution.** An untagged file compiles at the **highest `wic_version` under
+**Resolution.** An untagged file compiles at the **highest `lang_version` under
 which that source actually compiles** — not the highest version shipped:
 
 | Case | Resolution |
@@ -338,8 +352,8 @@ hard.
 | Python API | An attribute on `CompiledWorkflow` |
 | Emitted artifact | A namespaced annotation, declared in `$namespaces` so output remains valid CWL v1.2 |
 
-**The version is settable without editing anything** — a `--wic_version` CLI
-flag and a matching `wic_version: str | None = None` parameter on the Python API
+**The version is settable without editing anything** — a `--lang_version` CLI
+flag and a matching `lang_version: str | None = None` parameter on the Python API
 compile and run entry points. This reaches legacy `.wic` files and deeply nested
 `Workflow` objects without touching either.
 
@@ -444,7 +458,7 @@ implicit in dictionary manipulation and call-stack state.
 
 | Phase | Transform | Environment-dependent |
 |---|---|---|
-| Parse | `.wic` → AST | No |
+| Parse | Sophios source → AST | No |
 | Resolve | AST + registry → resolved AST | Yes |
 | Lower | resolved AST → `WorkflowGraph` | No |
 | Link | compose subgraphs; namespacing; LCA explicit edges; obligations | No |
@@ -490,7 +504,7 @@ is not the justification for this work.
 | Grammar before IR | IR first, grammar as documentation | The oracle needs a fixed vocabulary to state properties in. IR first means refactoring with no stable target. |
 | Property tests before IR | Refactor first, test after | Without an oracle a rewrite is unverifiable. Differential testing is what makes Spec 3 verified rather than hopeful. |
 | Verification is property-based | More example tests | Example tests find breakage someone already thought to write down. That is the blind spot being removed. |
-| `wic_version` 0.0.1 on CWL v1.2 | Leave the version unspecified; target a later revision | Passthrough makes part of our meaning CWL's meaning, so an unspecified version specifies nothing. v1.2 is released and already emitted. |
+| `lang_version` 0.0.1 on CWL v1.2 | Leave the version unspecified; target a later revision | Passthrough makes part of our meaning CWL's meaning, so an unspecified version specifies nothing. v1.2 is released and already emitted. |
 | Version inferred as highest under which the source compiles | Highest shipped version; require the tag; default to 0.0.1 | "Highest shipped" silently reinterprets files a later version changed. Inference from what compiles is self-correcting and keeps downstream tagless. |
 | Version setting global to the compilation | Per-file or per-`Workflow` override | A mixed-version tree makes meaning depend on file location and lets an edge join ports under different language rules. Unrepresentable is better than discouraged. |
 | Typed AST via stdlib `dataclasses` | pydantic | Pydantic coerces by default; a frontend needs exact, position-aware rejection. It would also define the language in terms of a third party's validation semantics. |
