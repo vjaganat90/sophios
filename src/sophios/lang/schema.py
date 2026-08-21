@@ -27,21 +27,32 @@ an editor aid, not a second implementation of the language.
 See docs/sophios_language_reference.md.
 """
 from dataclasses import fields
-from typing import Any, Final
+from types import MappingProxyType
+from typing import Any, Final, Mapping, final
 
 from .nodes import Document, OutputBinding, Shape, Step, WicSidecar, surface_of
-from .parser import DESUGARED_KEYS, INTERPRETED_STEP_KEYS, WIC_STEP_KEY_PATTERN
+from .parser import Forms, Grammar
 
-#: Draft this schema targets. 2020-12 is what current editors consume.
-DIALECT: Final = 'https://json-schema.org/draft/2020-12/schema'
 
-#: Stable identifier, so an editor can bind it to `*.wic` by URI.
-SCHEMA_ID: Final = 'https://raw.githubusercontent.com/PolusAI/sophios/master/sophios.schema.json'
+@final
+class Json:  # pylint: disable=too-few-public-methods  # a namespace, not a type
+    """What this module needs to speak JSON Schema, and nothing more.
 
-#: How each declared shape is expressed in JSON Schema. This is the only place
-#: that translates the AST's vocabulary into this format; the vocabulary itself
-#: belongs to `nodes.Shape`.
-_SHAPE_SCHEMA: Final[dict[Shape, dict[str, Any]]] = {
+    The vocabulary being translated belongs to `nodes.Shape`; this namespace
+    holds only the target format's own constants.
+    """
+
+    #: Draft this schema targets. 2020-12 is what current editors consume.
+    DIALECT: Final = 'https://json-schema.org/draft/2020-12/schema'
+
+    #: Stable identifier, so an editor can bind it to `*.wic` by URI.
+    SCHEMA_ID: Final = 'https://raw.githubusercontent.com/PolusAI/sophios/master/sophios.schema.json'
+
+
+#: How each declared shape is expressed in JSON Schema. A read-only view of
+#: read-only fragments: callers get copies via `dict(...)` at use, so no caller
+#: can reach in and change what every later export produces.
+_SHAPE_SCHEMA: Final[Mapping[Shape, Mapping[str, Any]]] = MappingProxyType({
     Shape.INPUT_BINDINGS: {
         'description': 'Input bindings. Each input may be bound only once (§4.2).',
         'type': 'object',
@@ -56,11 +67,11 @@ _SHAPE_SCHEMA: Final[dict[Shape, dict[str, Any]]] = {
     Shape.SIDECAR_STEPS: {
         'description': 'Per-step metadata, keyed "(index, name)".',
         'type': 'object',
-        'patternProperties': {WIC_STEP_KEY_PATTERN: {'$ref': '#/$defs/wicBlock'}},
+        'patternProperties': {Grammar.WIC_STEP_KEY_PATTERN: {'$ref': '#/$defs/wicBlock'}},
         'additionalProperties': False,
     },
     Shape.IDENTITY: {'type': 'string', 'minLength': 1},
-}
+})
 
 
 def wic_schema() -> dict[str, Any]:
@@ -71,8 +82,8 @@ def wic_schema() -> dict[str, Any]:
     """
     document = _object_schema(Document)
     return {
-        '$schema': DIALECT,
-        '$id': SCHEMA_ID,
+        '$schema': Json.DIALECT,
+        '$id': Json.SCHEMA_ID,
         'title': 'Sophios workflow',
         'description': 'Desugared projection of a Sophios document. '
                        'See docs/sophios_language_reference.md.',
@@ -102,7 +113,7 @@ def _object_schema(node_type: type, *, omit: frozenset[str] = frozenset()) -> di
             case Shape.INTERPRETED:
                 # A closed set of CWL keys, listed for editor completion but
                 # left unconstrained — Sophios reads them, CWL owns their shapes.
-                for key in sorted(INTERPRETED_STEP_KEYS):
+                for key in sorted(Grammar.INTERPRETED_STEP_KEYS):
                     properties[key] = {'description': f'Interpreted by Sophios: {key} (§4.3).'}
             case _ if form.key is not None:
                 properties[form.key] = dict(_SHAPE_SCHEMA[form.shape])
@@ -197,6 +208,6 @@ def _construct() -> dict[str, Any]:
         'type': 'object',
         'minProperties': 1,
         'maxProperties': 1,
-        'properties': {key: {} for key in sorted(DESUGARED_KEYS)},
+        'properties': {key: {} for key in sorted(Forms.DESUGARED_KEYS)},
         'additionalProperties': False,
     }

@@ -26,14 +26,8 @@ from .nodes import (
     UnresolvedName,
     WicSidecar,
 )
-from .parser import (
-    DESUGARED_KEYS,
-    INTERPRETED_STEP_KEYS,
-    TAG_RAW_CWL,
-    WIC_STEP_KEY_PATTERN,
-    ParseResult,
-    parse,
-)
+from ..utils_yaml import Key, Tag
+from .parser import Forms, Grammar, ParseResult, parse
 from .render import render, to_json
 from .schema import wic_schema
 from .spans import SourceSpan
@@ -42,14 +36,13 @@ __all__ = [
     'CWL_VERSION',
     'CWL_VERSIONS',
     'CwlVersion',
-    'DESUGARED_KEYS',
-    'INTERPRETED_STEP_KEYS',
-    'TAG_RAW_CWL',
-    'WIC_STEP_KEY_PATTERN',
     'Code',
     'Diagnostic',
     'Diagnostics',
+    'Key',
     'Document',
+    'Forms',
+    'Grammar',
     'EdgeDef',
     'EdgeRef',
     'InlineLiteral',
@@ -62,6 +55,7 @@ __all__ = [
     'SourceSpan',
     'Step',
     'StepKey',
+    'Tag',
     'UnresolvedName',
     'WicSidecar',
     'parse',

@@ -21,18 +21,11 @@ See docs/sophios_language_reference.md.
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Final, TypeAlias
+from typing import Any, Final, TypeAlias, final
 
 import yaml
 
-from ..utils_yaml import (
-    KEY_ALIAS,
-    KEY_ANCHOR,
-    KEY_INLINE_INPUT,
-    TAG_ALIAS,
-    TAG_ANCHOR,
-    TAG_INLINE_INPUT,
-)
+from ..utils_yaml import Key, Tag
 from .nodes import (
     Document,
     EdgeDef,
@@ -46,18 +39,26 @@ from .nodes import (
     UnresolvedName,
     WicSidecar,
 )
-from .parser import KEY_RAW_CWL, TAG_RAW_CWL
 
 #: How one input value is spelled. The two implementations below are the
 #: tagged and desugared surface forms of the same construct.
 Spelling: TypeAlias = Callable[[InputValue], Any]
 
-#: Every tag the tagged spelling emits.
-_WIC_TAGS: Final = frozenset({TAG_INLINE_INPUT, TAG_ANCHOR, TAG_ALIAS, TAG_RAW_CWL})
 
-#: Text needing no quoting after a tag: no leading YAML indicator, no
-#: whitespace, and nothing that would start a comment or end the scalar.
-_PLAIN_SAFE: Final = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_./-]*\Z')
+@final
+class _Emit:  # pylint: disable=too-few-public-methods  # a namespace, not a type
+    """Everything the emitter needs to decide how to write a value.
+
+    Grouped so the two rules that govern output style sit together, and
+    immutable so they can be read from any thread without coordination.
+    """
+
+    #: Every tag the tagged spelling emits.
+    WIC_TAGS: Final = Tag.ALL
+
+    #: Text needing no quoting after a tag: no leading YAML indicator, no
+    #: whitespace, and nothing that would start a comment or end the scalar.
+    PLAIN_SAFE: Final = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_./-]*\Z')
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,17 +78,17 @@ def _tagged(value: InputValue) -> Any:
     """Spell an input value with its YAML tag, as people write it."""
     match value:
         case InlineLiteral(value=literal) if _is_scalar(literal):
-            return _Tagged(TAG_INLINE_INPUT, _scalar_text(literal))
+            return _Tagged(Tag.INLINE_INPUT, _scalar_text(literal))
         case InlineLiteral(value=literal):
             # A tag cannot carry a collection on one line, so the single case
             # the tagged spelling cannot express falls back to the other one.
-            return {KEY_INLINE_INPUT: literal}
+            return {Key.INLINE_INPUT: literal}
         case EdgeDef(name=name):
-            return _Tagged(TAG_ANCHOR, name)
+            return _Tagged(Tag.ANCHOR, name)
         case EdgeRef(name=name):
-            return _Tagged(TAG_ALIAS, name)
+            return _Tagged(Tag.ALIAS, name)
         case RawCwlRef(expression=expression):
-            return _Tagged(TAG_RAW_CWL, expression)
+            return _Tagged(Tag.RAW_CWL, expression)
         case UnresolvedName(name=name):
             return name
 
@@ -96,13 +97,13 @@ def _desugared(value: InputValue) -> Any:
     """Spell an input value as a single-key mapping, as tooling emits it."""
     match value:
         case InlineLiteral(value=literal):
-            return {KEY_INLINE_INPUT: literal}
+            return {Key.INLINE_INPUT: literal}
         case EdgeDef(name=name):
-            return {KEY_ANCHOR: name}
+            return {Key.ANCHOR: name}
         case EdgeRef(name=name):
-            return {KEY_ALIAS: name}
+            return {Key.ALIAS: name}
         case RawCwlRef(expression=expression):
-            return {KEY_RAW_CWL: expression}
+            return {Key.RAW_CWL: expression}
         case UnresolvedName(name=name):
             return name
 
@@ -183,7 +184,7 @@ class _Writer:
 
 def _represent_tagged(dumper: yaml.SafeDumper, data: _Tagged) -> yaml.nodes.Node:
     """Emit a `_Tagged` as `!tag value`."""
-    style = '' if _PLAIN_SAFE.match(data.value) else None
+    style = '' if _Emit.PLAIN_SAFE.match(data.value) else None
     return dumper.represent_scalar(data.tag, data.value, style=style)
 
 
@@ -203,7 +204,7 @@ class _WicDumper(yaml.SafeDumper):
         tags whenever the value analyses as safe to write bare.
         """
         event = self.event
-        if isinstance(event, yaml.events.ScalarEvent) and event.tag in _WIC_TAGS and event.style == '':
+        if isinstance(event, yaml.events.ScalarEvent) and event.tag in _Emit.WIC_TAGS and event.style == '':
             if self.analysis is None:
                 self.analysis = self.analyze_scalar(event.value)
             if self.analysis.allow_block_plain:
