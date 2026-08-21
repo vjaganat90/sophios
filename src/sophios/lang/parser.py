@@ -99,7 +99,7 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
     if not isinstance(root, yaml.nodes.MappingNode):
         diagnostics.error(
             Code.NOT_A_MAPPING,
-            f'a .wic document must be a mapping, found {_kind(root)}',
+            f'a Sophios document must be a mapping, found {_kind(root)}',
             SourceSpan.of(filename, root),
         )
         return ParseResult(None, diagnostics)

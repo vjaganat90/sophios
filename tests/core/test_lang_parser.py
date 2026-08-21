@@ -1,4 +1,4 @@
-"""Properties of the `.wic` syntax layer (CR-101).
+"""Properties of the Sophios syntax layer (CR-101).
 
 Acceptance here is property-based. The unit tests at the end are sanity checks
 on wiring and obvious errors; they are not evidence that the parser is correct.
@@ -8,7 +8,7 @@ Properties covered:
   P04  parsing never raises; it returns an AST or diagnostics
   P05  InputValue is closed — no value escapes the five forms
   P06  every diagnostic span indexes real source text
-  P07  every corpus .wic parses
+  P07  every corpus document parses
 
 See design_docs/core-refactor-design.md, Spec 1.
 """
@@ -72,7 +72,7 @@ def input_lines(draw: st.DrawFn) -> str:
 
 @st.composite
 def documents(draw: st.DrawFn) -> str:
-    """A syntactically well-formed `.wic` document, in mapping-form steps."""
+    """A syntactically well-formed Sophios document, in mapping-form steps."""
     lines = ['steps:']
     for _ in range(draw(st.integers(min_value=1, max_value=4))):
         lines.append(f'  {draw(identifiers)}:')
@@ -328,7 +328,7 @@ def test_python_api_emits_documents_this_parser_accepts() -> None:
 
     Whatever it emits must parse, or the two front-ends have diverged and the
     language reference is describing something that does not exist. See
-    docs/wic_language_reference.md, section 6.
+    docs/sophios_language_reference.md, section 6.
     """
     # Imported here: the API pulls in the whole compiler, which the syntax
     # layer deliberately does not depend on.

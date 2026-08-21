@@ -1,4 +1,4 @@
-"""Source positions for `.wic` documents.
+"""Source positions for Sophios documents.
 
 Every AST node carries a span so a diagnostic can name a file, a line, and a
 column instead of describing a schema violation somewhere in a generated
