@@ -1,4 +1,4 @@
-"""The `.wic` conformance corpus: every file the language is defined to accept.
+"""The Sophios conformance corpus: every file the language is defined to accept.
 
 Two sources, and the distinction matters:
 
@@ -7,7 +7,7 @@ Two sources, and the distinction matters:
   * **Pinned** — copies of the `mm-workflows` and `image-workflows` `.wic`
     files, taken at the commits recorded in `conformance/PINS.json`.
 
-The design names all four locations as the set `wic_version` 0.0.1 is defined to
+The design names all four locations as the set `lang_version` 0.0.1 is defined to
 accept, and makes "conformance corpus validated" the gate for Spec 1
 (`design_docs/core-refactor-design.md` §3, §5.6). Reading the sibling
 repositories from disk would not be that gate: it would check whatever their

@@ -1,7 +1,7 @@
 # Conformance corpus
 
 `.wic` files copied from the corpus repositories at fixed commits. Together with
-`docs/tutorials/` and `examples/`, this is the set `wic_version` 0.0.1 is
+`docs/tutorials/` and `examples/`, this is the set `lang_version` 0.0.1 is
 *defined* to accept.
 
 `PINS.json` records the origin and commit each file came from.
