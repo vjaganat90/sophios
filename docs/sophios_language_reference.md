@@ -1,21 +1,37 @@
-# The `.wic` Language Reference
+# The Sophios Language Reference
 
-**Version:** `wic_version` 0.0.1
+**Version:** `lang_version` 0.0.1
 **Substrate:** CWL v1.2
 
-This is the human-readable definition of the Sophios workflow language. The
-executable definition is `sophios.lang` — the typed AST and parser — and the
-two are meant to agree. Where they disagree, that is a bug in one of them.
+This is the human-readable definition of **Sophios**, the workflow language.
+The executable definition is `sophios.lang` — the typed AST and parser — and
+the two are meant to agree. Where they disagree, that is a bug in one of them.
 
-Sophios has **two front-ends that produce the same language**: `.wic` files
-written by hand, and the Python API. Both are defined by this document, and
-§6 states what each is obliged to do.
+## The language and its two surfaces
+
+Sophios is the language. It has one DSL, and that DSL can be written two ways:
+
+| Surface | How it is written | Where it lives |
+|---|---|---|
+| **YAML** | The YAML-based spelling of the DSL | Conventionally in files named `.wic` |
+| **Python API** | `Workflow`, `Step`, `CommandLineTool` | Python source |
+
+Neither is "the language" and neither is subordinate to the other. They are two
+ways of saying the same thing, which is why §6 can state what each owes the
+other and check it.
+
+`.wic` is **a file extension, not a language**. This document says "`.wic`
+files" when it means files on disk, and "Sophios" when it means the language.
+A handful of spellings inside the syntax still carry the older `wic` prefix —
+the `wic:` block, the `!ii` / `!&` / `!*` tags, and the `wic_*` desugared keys.
+Those are concrete syntax that existing workflows depend on, so they stay as
+they are; they are not evidence that the language is called wic.
 
 ---
 
 ## 1. What kind of language this is
 
-`.wic` is a **leaky abstraction over CWL, deliberately**. You write shorthand
+Sophios is a **leaky abstraction over CWL, deliberately**. You write shorthand
 for the common case and drop into raw CWL for anything the shorthand does not
 cover. Sealing the abstraction would mean re-inventing CWL one feature at a
 time and asking users to wait.
@@ -25,7 +41,7 @@ point of this document:
 
 | Category | What Sophios does | Examples |
 |---|---|---|
-| **wic-owned** | Consumes it; never appears in the output | `!ii`, `!&`, `!*`, `!cwl`, the `wic:` block |
+| **Sophios-owned** | Consumes it; never appears in the output | `!ii`, `!&`, `!*`, `!cwl`, the `wic:` block |
 | **Interpreted CWL** | Reads it *and acts on it* | `scatter`, `scatterMethod`, `when`, inline `run` |
 | **Passthrough CWL** | Copies it out unchanged | `$namespaces`, `$schemas`, `requirements`, `hints`, everything else |
 
@@ -37,7 +53,7 @@ rather than a surprise.
 
 ## 2. Document structure
 
-A `.wic` document is a YAML mapping. Every key is optional.
+In its YAML surface, a Sophios document is a YAML mapping. Every key is optional.
 
 ```yaml
 wic:            # optional  — compiler metadata, never emitted to CWL
@@ -179,14 +195,14 @@ A bare `wic:` with nothing under it is an empty block, not an error.
 
 ---
 
-## 6. How the two front-ends adhere
+## 6. How the two surfaces adhere
 
 This is the part that keeps the language single.
 
-### 6.1 Two surface forms per construct
+### 6.1 Two spellings per construct
 
-Every wic-owned construct has a **tagged** form and a **desugared** form, and
-they are equivalent:
+Within the YAML surface, every Sophios-owned construct has a **tagged** form
+and a **desugared** form, and they are equivalent:
 
 | Construct | Tagged | Desugared |
 |---|---|---|
@@ -202,12 +218,12 @@ desugared spelling.
 
 **Write the tagged form.** The desugared form is what tooling emits.
 
-### 6.2 What each front-end must do
+### 6.2 What each surface must do
 
-**`.wic` files** are the language as written. They are parsed by
+**`.wic` files** are the YAML surface as written. They are parsed by
 `sophios.lang.parse`, which accepts both spellings above.
 
-**The Python API** (`Workflow`, `Step`) is a second front-end over the same
+**The Python API** (`Workflow`, `Step`) is the second surface of the same
 language. `Workflow.write_wic()` and `.to_wic_yaml()` emit `.wic` documents,
 using the desugared spelling and sequence-form steps with explicit `id:`.
 
@@ -224,7 +240,7 @@ example — see `tests/core/test_lang_parser.py`.
 
 ### 6.3 What this does *not* cover
 
-This document defines **syntax**: whether a document is well-formed. Two
+This document defines **syntax**: whether a Sophios document is well-formed. Two
 further questions are deliberately separate because they depend on the
 environment, not the language:
 
@@ -238,11 +254,11 @@ without the right plugins installed. That is not a language error.
 
 ## 7. Versioning
 
-`wic_version` starts at **0.0.1**, defined against CWL v1.2. The `.wic` version
-and its CWL substrate move together.
+`lang_version` starts at **0.0.1**, defined against CWL v1.2. The Sophios
+version and its CWL substrate move together.
 
 The version tag is **optional and expected to stay unused**. An untagged file
-is compiled at the highest `wic_version` under which that source actually
+is compiled at the highest `lang_version` under which that source actually
 compiles — not merely the newest version available. That means:
 
 - A file using only long-standing syntax resolves to the newest version.

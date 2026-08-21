@@ -1,7 +1,7 @@
-"""The `.wic` language layer: typed AST, parser, and diagnostics.
+"""The Sophios language layer: typed AST, parser, and diagnostics.
 
 This package is the syntax layer of the specification — it answers "is this a
-well-formed `.wic` document?" without consulting which tools happen to be
+well-formed Sophios document?" without consulting which tools happen to be
 installed. Name resolution and type checking are separate, environment-
 dependent concerns.
 

@@ -1,7 +1,7 @@
-"""Typed AST for the `.wic` language.
+"""Typed AST for the Sophios language.
 
 The nodes here are the executable specification of the syntax layer: what a
-well-formed `.wic` document may contain, independent of which tools happen to
+well-formed Sophios document may contain, independent of which tools happen to
 be installed. See design_docs/core-refactor-design.md, Spec 1.
 
 Every node is frozen and slotted. Frozen because an AST that consumers can
@@ -142,7 +142,7 @@ class WicSidecar:
 
 @dataclass(frozen=True, slots=True)
 class Document:
-    """A parsed `.wic` document.
+    """A parsed Sophios document.
 
     `passthrough` carries every top-level key Sophios does not interpret —
     `$namespaces`, `$schemas`, `requirements`, `hints`, and anything else —

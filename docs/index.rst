@@ -66,7 +66,7 @@ understand, debug, and review.
    :caption: Advanced YAML and Operations
 
    advanced.md
-   wic_language_reference.md
+   sophios_language_reference.md
    tutorials/tutorials.rst
    validation.md
 
