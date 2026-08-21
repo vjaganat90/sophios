@@ -18,6 +18,7 @@ this here rather than asserting a stronger equivalence that is not true.
 
 See design_docs/core-refactor-design.md, Spec 1.
 """
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,21 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from sophios.lang import DESUGARED_KEYS, INTERPRETED_STEP_KEYS, parse, to_json, wic_schema
+from sophios.lang.nodes import (
+    Document,
+    EdgeDef,
+    EdgeRef,
+    InlineLiteral,
+    OutputBinding,
+    RawCwlRef,
+    Shape,
+    Step,
+    StepKey,
+    UnresolvedName,
+    WicSidecar,
+    surface,
+    surface_of,
+)
 from sophios.lang.parser import WIC_STEP_KEY_PATTERN
 
 from .test_lang_render import documents
@@ -158,3 +174,83 @@ def test_a_step_may_have_no_body() -> None:
     """`some_subworkflow.wic:` with nothing under it is well-formed (§3.1)."""
     assert _accepts({'steps': {'sub.wic': None}})
     assert _accepts({'wic': None})
+
+# --------------------------------------------------------------------------
+# The AST is the source of truth
+# --------------------------------------------------------------------------
+#
+# The schema is generated from the `Surface` declarations in `nodes.py`. These
+# check that the generation is total — that no field can be added, and no key
+# invented, without one of these failing.
+
+
+AST_NODES = [Document, Step, OutputBinding, WicSidecar, StepKey,
+             InlineLiteral, EdgeDef, EdgeRef, RawCwlRef, UnresolvedName]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('node_type', AST_NODES, ids=lambda n: n.__name__)
+def test_every_ast_field_declares_its_surface(node_type: type) -> None:
+    """Every field says how it is written, or `surface_of` raises.
+
+    A field with no declaration is a hole in the specification: the AST would
+    carry something the schema cannot describe and the reference does not
+    mention.
+    """
+    for declared in fields(node_type):
+        assert surface_of(node_type, declared.name) is not None
+
+
+@pytest.mark.fast
+def test_an_undeclared_field_is_rejected_loudly() -> None:
+    """Adding a field without declaring its surface fails, rather than
+    silently producing a schema that describes less than the AST holds."""
+
+    @dataclass(frozen=True)
+    class Drifted:
+        declared: str = surface(Shape.IDENTITY, 'declared')
+        forgotten: str = 'oops'
+
+    assert surface_of(Drifted, 'declared').key == 'declared'
+    with pytest.raises(TypeError, match='no surface declaration'):
+        surface_of(Drifted, 'forgotten')
+
+
+@pytest.mark.fast
+def test_schema_keys_come_only_from_the_ast() -> None:
+    """Every key the schema describes traces back to a declared field.
+
+    The schema is not allowed to invent syntax. `id` is expected on the
+    sequence form and absent from the mapping form, where the step's name is
+    the mapping key rather than a key inside it.
+    """
+    declared = {surface_of(Step, f.name).key for f in fields(Step)} - {None}
+    declared |= set(INTERPRETED_STEP_KEYS)
+
+    for form in ('sequenceStep', 'stepBody'):
+        keys = set(SCHEMA['$defs'][form]['properties'])
+        assert keys <= declared, f'{form} invented {keys - declared}'
+
+    assert 'id' in SCHEMA['$defs']['sequenceStep']['properties']
+    assert 'id' not in SCHEMA['$defs']['stepBody']['properties']
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('node_type,form', [(Step, 'sequenceStep'), (WicSidecar, 'wicBlock')],
+                         ids=['Step', 'WicSidecar'])
+def test_every_keyed_field_reaches_the_schema(node_type: type, form: str) -> None:
+    """A field that occupies a surface key is described by the schema."""
+    properties = SCHEMA['$defs'][form]['properties']
+    for declared in fields(node_type):
+        shape = surface_of(node_type, declared.name)
+        if shape.key is not None and shape.shape is not Shape.INTERNAL:
+            assert shape.key in properties, f'{node_type.__name__}.{declared.name} is not in the schema'
+
+
+@pytest.mark.fast
+def test_passthrough_declarations_open_their_objects() -> None:
+    """A node declaring PASSTHROUGH produces an open object, and one without
+    it does not. Openness is the AST's statement, not the generator's."""
+    assert any(surface_of(Step, f.name).shape is Shape.PASSTHROUGH for f in fields(Step))
+    assert SCHEMA['$defs']['sequenceStep']['additionalProperties'] is True
+    assert SCHEMA['$defs']['construct']['additionalProperties'] is False
