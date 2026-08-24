@@ -19,6 +19,7 @@ from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
+from sophios.lang import versions
 from sophios.input_output import dump_wic_yaml as _dump_yaml
 from sophios.cli import get_dicts_for_compilation, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
@@ -446,6 +447,7 @@ def compile_workflow(
     *,
     write_to_disk: bool = False,
     tool_registry: Tools | None = None,
+    lang_version: str | None = None,
 ) -> CompilerInfo:
     """Compile a Python API workflow into CWL.
 
@@ -467,6 +469,8 @@ def compile_workflow(
     merged_tools = _merged_known_tools(workflow._flatten_steps(), tool_registry)
 
     compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation()
+    if lang_version is not None:
+        compiler_options = {**compiler_options, 'lang_version': lang_version}
     compiler_info = compiler.compile_workflow(
         yaml_tree,
         compiler_options,
@@ -522,6 +526,7 @@ def compiled_workflow_from_compiler_info(
         name=workflow.process_name,
         cwl_workflow=cwl_workflow,
         cwl_job_inputs=normalize_rose_tree_job_inputs(rose_tree, sub_node_data.workflow_inputs_file),
+        lang_version=str(cwl_workflow.get(versions.ANNOTATION_KEY, versions.LANG_VERSION)),
     )
 
 
@@ -529,12 +534,15 @@ def compiled_workflow(
     workflow: "Workflow",
     *,
     tool_registry: Tools | None = None,
+    lang_version: str | None = None,
 ) -> CompiledWorkflow:
     """Compile a workflow into the public compiled-workflow boundary object.
 
     Args:
         workflow (Workflow): Workflow to compile.
         tool_registry (Tools | None): Optional tool registry override.
+        lang_version (str | None): Pin the Sophios language version for this
+            compilation; None infers it. An explicit setting beats file tags.
 
     Returns:
         CompiledWorkflow: Compiled CWL workflow plus generated job inputs.
@@ -542,6 +550,7 @@ def compiled_workflow(
     compiler_info = compile_workflow(
         workflow,
         tool_registry=tool_registry,
+        lang_version=lang_version,
     )
     return compiled_workflow_from_compiler_info(workflow, compiler_info)
 

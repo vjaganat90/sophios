@@ -236,3 +236,31 @@ def test_p13_residue_validates_as_cwl_v1_2(freight: dict[str, Any]) -> None:
 
     assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
     assert inlined['cwlVersion'] == 'v1.2'
+
+# --------------------------------------------------------------------------
+# P08 — the --allow_raw_cwl escape hatch still works
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.skip_pypi_ci
+@pytest.mark.fast
+def test_p08_allow_raw_cwl_is_the_difference_between_report_and_compile() -> None:
+    """P08: a bare unresolved name is reported without the flag and compiles
+    with it — the flag's one-line definition, observed at the boundary."""
+    from sophios.lang.diagnostics import Code, SophiosError
+
+    bare: Yaml = {'steps': [{'id': 'touch', 'in': {'filename': 'not_a_workflow_input'}}]}
+
+    with pytest.raises(SophiosError) as caught:
+        _compile(bare)
+    assert caught.value.diagnostics[0].code is Code.UNRESOLVED_INPUT
+    assert '!ii' in caught.value.diagnostics[0].message
+
+    options, graph_settings, tag_paths = sophios.cli.get_dicts_for_compilation()
+    options = {**options, 'allow_raw_cwl': True}
+    graph = GraphReps(graphviz.Digraph(name='cluster_p08'), nx.DiGraph(), GraphData('p08'))
+    info = sophios.compiler.compile_workflow(YamlTree(StepId('p08', 'global'), bare),
+                                             options, graph_settings, tag_paths,
+                                             [], [graph], {}, {}, {}, {},
+                                             tools_cwl, True, relative_run_path=True, testing=True)
+    assert info.rose.data.compiled_cwl['class'] == 'Workflow'
