@@ -58,11 +58,18 @@ point of this document:
 |---|---|---|
 | **Sophios-owned** | Consumes it; never appears in the output | `!ii`, `!&`, `!*`, `!cwl`, the `wic:` block |
 | **Interpreted CWL** | Reads it *and acts on it* | `scatter`, `scatterMethod`, `when`, inline `run` |
-| **Passthrough CWL** | Copies it out unchanged | `$namespaces`, `$schemas`, `requirements`, `hints`, everything else |
+| **Passthrough CWL** | Copies it out unchanged¹ | `$namespaces`, `$schemas`, `requirements`, `hints`, everything else |
 
 The interpreted set is closed and listed in §4.3. **Anything not in it is
 passthrough, by definition.** That rule is what makes the leak a contract
 rather than a surprise.
+
+¹ With one measured exception: Sophios adds its own `edam` binding to
+`$namespaces` and its EDAM ontology entry to `$schemas` in every emitted
+workflow. `$schemas` is append-only, so user entries survive. A user binding of
+the `edam` prefix specifically is replaced by the canonical one — the `edam`
+prefix is effectively reserved. Every other key survives byte-identically, and
+a property enforces exactly this statement (`tests/core/test_leak_boundary.py`).
 
 ---
 
