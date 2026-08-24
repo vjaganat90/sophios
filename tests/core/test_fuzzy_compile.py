@@ -8,6 +8,7 @@ import pytest
 
 import sophios
 import sophios.ast
+from sophios.lang.diagnostics import SophiosError
 import sophios.cli
 import sophios.plugins
 import sophios.utils
@@ -70,7 +71,11 @@ class TestFuzzyCompile(unittest.TestCase):
             sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings,
                                               yaml_tag_paths, [], [graph], {}, {}, {}, {},
                                               tools_cwl, True, relative_run_path=True, testing=True)
-        except BaseException as e:
+        except SophiosError as e:
+            # P22 and P23 in one stroke: the library reported instead of
+            # exiting, and what it reported is non-empty and structured.
+            assert len(e.diagnostics) > 0
+        except Exception as e:
             expected_messages = (
                 'Error! Multiple definitions of &',
                 'Error! Unbound literal variable ~',
@@ -94,12 +99,11 @@ class TestFuzzyCompile(unittest.TestCase):
             )
             # Certain constraints are conditionally dependent on values and are
             # not easily encoded in the schema, so catch them here.
-            # Moreover, although we check for the existence of input files in
-            # stage_input_files, we cannot encode file existence in json schema
-            # to check the python_script script: tag before compile time.
-            if isinstance(e, SystemExit) and e.code == 1:
-                pass
-            elif any(msg in str(e) for msg in expected_messages):
+            # The SystemExit arm is gone because the library no longer exits:
+            # what used to be a whitelisted process death is the SophiosError
+            # arm above (CR-104). `except Exception` rather than BaseException
+            # for the same reason — a SystemExit now IS a test failure.
+            if any(msg in str(e) for msg in expected_messages):
                 pass
             else:
                 raise e

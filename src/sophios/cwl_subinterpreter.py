@@ -263,11 +263,6 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
 
-    failed = False  # Your analysis goes here
-    if failed:
-        print(f'{cwl_tool} failed!')
-        sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
