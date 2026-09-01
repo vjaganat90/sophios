@@ -138,6 +138,8 @@ Connection variants make boundary-to-boundary dangling edges unrepresentable. Ke
 
 Serialized IR declares a schema version and representation kind. Hydration validates all invariants. Schema evolution is backward-compatible or is accompanied by an explicit migration; it never relies on best-effort dictionary loading.
 
+Additive extensions — new typed token or segment kinds — bump the schema version. Serialization always writes the current version. Hydration accepts the current version plus earlier versions whose value spaces are strict subsets of the current model; every other version is rejected.
+
 ---
 
 ## 6. Semantic lowering contracts
@@ -145,6 +147,8 @@ Serialized IR declares a schema version and representation kind. Hydration valid
 ### Commands
 
 CWL command construction is normalized before rendering. Ordering follows the pinned CWL version, including defaults and tie-breaking. Command parts remain typed as literal data or interpolation references; quoting is decided per token or segment, never by scanning a completed string for `$`.
+
+**Boolean flags (approved Phase 2 lowering).** A non-optional `boolean` input with an `inputBinding` and no `valueFrom` lowers to a typed conditional flag token that references the input by name and carries a non-empty prefix. At runtime, `true` renders the shell-quoted prefix as exactly one argv word and `false` renders nothing; a boolean binding without a prefix contributes nothing for either value. Flag tokens are valid only in command token position — never in globs or stream targets — and only against `val` ports. `valueFrom` on a boolean binding and absent optional booleans keep their existing rejection states.
 
 Shell operators exist only under an explicitly supported shell-mode lowering. `ShellCommandRequirement`, `shellQuote: false`, `InitialWorkDirRequirement`, and unapproved expression forms are rejected until that lowering exists.
 
@@ -245,6 +249,10 @@ Phase 2 may add executable scatter and nested workflows, absent-option lowering,
 Each addition requires a separate lowering decision, executable-model extension, compatibility plan, negative boundary tests, and focused real-Nextflow proof. Scatter methods, collection cardinality, empty collections, nested namespacing, subworkflow I/O, shell security, expression scope, and schema migration are resolved before implementation.
 
 Phase 2 does not authorize arbitrary Groovy parsing.
+
+Approved Phase 2 lowerings to date:
+
+- Boolean `inputBinding` flags (§6, Commands).
 
 ### Phase 3 — Native inference, advanced execution, and service delivery
 
