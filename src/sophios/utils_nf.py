@@ -156,8 +156,9 @@ def _ports(raw_ports: Any, *, outputs: bool) -> list[NfPort]:
 
 
 _INPUT_EXPRESSION = re.compile(
-    r"\$\(\s*inputs\.([A-Za-z_][A-Za-z0-9_]*)(?:\.(?:path|basename))?\s*\)"
+    r"\$\(\s*inputs\.([A-Za-z_][A-Za-z0-9_]*)(?:\.path)?\s*\)"
 )
+_BASENAME_EXPRESSION = re.compile(r"\$\(\s*inputs\.[A-Za-z_][A-Za-z0-9_]*\.basename\s*\)")
 
 
 def _template(value: Any, *, context: str) -> NfTemplate:
@@ -170,6 +171,10 @@ def _template(value: Any, *, context: str) -> NfTemplate:
             pass
         case _:
             raise ValueError(f"unsupported CWL command value {value!r}")
+    if _BASENAME_EXPRESSION.search(text):
+        raise ValueError(
+            f"{context} uses $(inputs.<name>.basename); basename lowering is deferred to Phase 2"
+        )
     segments: list[NfLiteral | NfInputReference] = []
     offset = 0
     for match in _INPUT_EXPRESSION.finditer(text):
@@ -183,7 +188,7 @@ def _template(value: Any, *, context: str) -> NfTemplate:
     if "$" in residual:
         raise ValueError(
             f"{context} contains an unsupported CWL expression; Phase 1 supports only "
-            "$(inputs.<name>), optionally followed by .path or .basename"
+            "$(inputs.<name>), optionally followed by .path"
         )
     return NfTemplate(tuple(segments or [NfLiteral(text)]))
 
@@ -940,12 +945,17 @@ def _absent_optional_findings(
         if not isinstance(tool_inputs, Mapping) or not isinstance(step_inputs, Mapping):
             continue
         for raw_name, raw_definition in tool_inputs.items():
-            if not isinstance(raw_definition, Mapping) or not _is_optional(raw_definition.get("type")):
+            if not isinstance(raw_definition, Mapping):
                 continue
             raw_source = step_inputs.get(raw_name)
             if raw_source is None:
-                absent = "default" not in raw_definition
+                # Unwired inputs are only a missingness problem when optional
+                # without a default; required unwired inputs fail compilation.
+                absent = _is_optional(raw_definition.get("type")) and "default" not in raw_definition
             else:
+                # A wired input is absent when any boundary source resolves to
+                # null — including an absent optional *workflow* input feeding
+                # a required tool input.
                 try:
                     sources = _source_values(
                         raw_source,

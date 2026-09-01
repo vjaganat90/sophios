@@ -202,6 +202,8 @@ def test_nextflow_cli_conversion_error_is_concise_and_actionable(
 def _nextflow_executable() -> str:
     executable = shutil.which("nextflow")
     if executable is None:
+        if os.environ.get("SOPHIOS_REQUIRE_NEXTFLOW"):
+            pytest.fail("Nextflow is required (SOPHIOS_REQUIRE_NEXTFLOW is set) but not on PATH")
         pytest.skip("Nextflow executable is not available locally; required CI provisions it")
     return executable
 

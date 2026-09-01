@@ -380,6 +380,34 @@ def test_nf101_t11_rejects_mixed_channel_semantics_for_one_parameter() -> None:
         )
 
 
+@pytest.mark.fast
+def test_nf101_t11_rejects_mixed_path_kinds_for_one_parameter() -> None:
+    file_process = NfProcess("READ_FILE", [NfPort("shared", "path")], [], _command("true"))
+    directory_process = NfProcess(
+        "READ_DIRECTORY",
+        [NfPort("shared", "path", path_kind="directory")],
+        [],
+        _command("true"),
+    )
+    with pytest.raises(ValueError, match="incompatible channel qualifiers"):
+        ExecutableNextflowWorkflow(
+            "wf",
+            [file_process, directory_process],
+            [
+                NfWorkflowInputConnection("shared", "READ_FILE", "shared"),
+                NfWorkflowInputConnection("shared", "READ_DIRECTORY", "shared"),
+            ],
+            {"shared": "input"},
+        )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("qualifier", ["tuple", "env", "stdin", "each"])
+def test_nf101_t11_rejects_qualifiers_without_an_approved_lowering(qualifier: str) -> None:
+    with pytest.raises(ValueError, match="qualifier"):
+        NfPort("reads", qualifier)
+
+
 # T1.2 — five real-boundary and rejection scenarios.
 
 
@@ -933,6 +961,46 @@ def test_nf101_t13_rejects_collisions_between_source_and_default_params() -> Non
 
 
 @pytest.mark.fast
+def test_nf101_t13_rejects_basename_input_expressions() -> None:
+    tool = _tool(
+        "BASENAME",
+        inputs={"source": {"type": "File"}},
+        outputs={
+            "result": {
+                "type": "File",
+                "outputBinding": {"glob": "$(inputs.source.basename).txt"},
+            }
+        },
+    )
+    rose = _synthetic_rose(
+        _workflow(
+            [{"id": "BASENAME", "in": {"source": "source"}, "out": ["result"], "run": "BASENAME.cwl"}],
+            inputs={"source": {"type": "File"}},
+            outputs={"result": {"type": "File", "outputSource": "BASENAME/result"}},
+        ),
+        [tool],
+        workflow_inputs={"source": {"class": "File", "path": "input.txt"}},
+    )
+    with pytest.raises(ValueError, match="basename"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_nf101_t13_rejects_absent_optional_workflow_input_feeding_required_input() -> None:
+    tool = _tool("REQUIRED", inputs={"message": {"type": "string"}})
+    rose = _synthetic_rose(
+        _workflow(
+            [{"id": "REQUIRED", "in": {"message": "message"}, "out": [], "run": "REQUIRED.cwl"}],
+            inputs={"message": {"type": ["null", "string"]}},
+        ),
+        [tool],
+        workflow_inputs={},
+    )
+    with pytest.raises(ValueError, match="absent optional"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
 def test_nf101_t13_rejects_output_glob_outside_typed_input_subset() -> None:
     tool = _tool(
         "BAD_GLOB",
@@ -1353,8 +1421,20 @@ def test_nf102_t21_rejects_invalid_private_ir_before_writing_artifacts(tmp_path:
 def _nextflow_executable() -> str:
     executable = shutil.which("nextflow")
     if executable is None:
+        if os.environ.get("SOPHIOS_REQUIRE_NEXTFLOW"):
+            pytest.fail("Nextflow is required (SOPHIOS_REQUIRE_NEXTFLOW is set) but not on PATH")
         pytest.skip("Nextflow executable is not available")
     return executable
+
+
+@pytest.mark.fast
+def test_nf104_t41_required_runtime_fails_instead_of_skipping_without_nextflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SOPHIOS_REQUIRE_NEXTFLOW", "1")
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with pytest.raises(pytest.fail.Exception, match="required"):
+        _nextflow_executable()
 
 
 def _run_nextflow(
@@ -2099,6 +2179,31 @@ workflow { PIPELINE() }
     _workflow_cwl, tools = nextflow_to_cwl(parsed)
     assert "ResourceRequirement" not in tools[0]["requirements"]
     assert render_nextflow_document(parsed) == source
+
+
+@pytest.mark.fast
+def test_nf105_t51_partially_opaque_call_yields_no_connections() -> None:
+    source = """nextflow.enable.dsl=2
+process TASK {
+    input:
+    val x
+    val y
+    script:
+    \"\"\"
+    true
+    \"\"\"
+}
+workflow PIPELINE {
+    main:
+    TASK(foo { bar }, plain)
+}
+workflow { PIPELINE() }
+"""
+    parsed = parse_nf_text(source)
+    assert parsed.connections == ()
+    assert "TASK(foo { bar }, plain)" in "\n".join(parsed.opaque_regions)
+    with pytest.raises(ValueError, match="opaque regions"):
+        promote_nextflow_document(parsed)
 
 
 @pytest.mark.fast

@@ -274,7 +274,8 @@ class NfResources:
 class NfPort:
     """A typed Nextflow process port."""
 
-    ALLOWED_QUALIFIERS: ClassVar[frozenset[str]] = frozenset({"path", "val", "tuple", "env", "stdin"})
+    # Phase 1 lowers only these qualifiers; the renderer is total over them.
+    ALLOWED_QUALIFIERS: ClassVar[frozenset[str]] = frozenset({"path", "val"})
 
     name: str
     qualifier: str
@@ -588,11 +589,16 @@ class ExecutableNextflowWorkflow:
                     if from_port not in self.params:
                         raise ValueError(f"connection references unknown workflow input {from_port!r}")
                     destination = self._destination_port(process_by_name, to_process, to_port)
-                    previous = workflow_input_qualifiers.setdefault(from_port, destination.qualifier)
-                    if previous != destination.qualifier:
+                    # path_kind selects the staging policy, so it is part of the
+                    # channel contract: connection order must never pick one.
+                    semantics = destination.qualifier + (
+                        f"[{destination.path_kind}]" if destination.path_kind else ""
+                    )
+                    previous = workflow_input_qualifiers.setdefault(from_port, semantics)
+                    if previous != semantics:
                         raise ValueError(
                             f"workflow input {from_port!r} feeds incompatible channel qualifiers "
-                            f"{previous!r} and {destination.qualifier!r}"
+                            f"{previous!r} and {semantics!r}"
                         )
                     self._record_incoming(incoming, to_process, to_port)
                 case NfProcessConnection(from_process, from_port, to_process, to_port):
