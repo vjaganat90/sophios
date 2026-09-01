@@ -76,11 +76,19 @@ written from validated executable IR. Parsed source alone is never promoted by
 guessing shell or Groovy semantics; changed source, changed parameters, unknown
 content, and invalid or stale IR fail closed.
 
-## Phase 1 limits
+## Boolean flags
+
+A non-optional `boolean` input with an `inputBinding` prefix and no
+`valueFrom` becomes a real command-line flag: `true` contributes the prefix as
+exactly one argument and `false` contributes nothing. A boolean binding
+without a prefix contributes nothing for either value, matching CWL. Absent
+optional booleans still reject until option lowering is approved.
+
+## Current limits
 
 - Workflows must be flat and use `CommandLineTool`-equivalent processes.
-- Boolean `inputBinding` flag semantics and fractional CPU requirements reject
-  before lowering; they are not silently stringified or rounded.
+- Fractional CPU requirements reject before lowering; they are not silently
+  rounded.
 - Scatter is retained as opaque structure; executable scatter is deferred.
 - Nested workflows, arbitrary Groovy, channel operators, `when`, and `exec`
   blocks are not interpreted.

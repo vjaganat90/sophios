@@ -218,17 +218,54 @@ class NfTemplate:
 
 
 @dataclass(frozen=True, slots=True)
+class NfFlag:
+    """Conditional command-line flag contributed by a boolean input.
+
+    Renders the prefix as exactly one argv word when the referenced input is
+    true, and nothing when it is false. Valid only in command token position.
+    """
+
+    name: str
+    prefix: str
+
+    def __post_init__(self) -> None:
+        _validate_ir_identifier(self.name, field_name="flag input reference")
+        if not isinstance(self.prefix, str) or not self.prefix.strip():
+            raise ValueError("flag prefix must be a non-empty string")
+
+    def to_dict(self) -> dict[str, str]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, str]: The token as ``{"kind": "flag", "name": ...,
+                "prefix": ...}``.
+        """
+        return {"kind": "flag", "name": self.name, "prefix": self.prefix}
+
+
+NfCommandToken = NfTemplate | NfFlag
+
+
+def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
+    item = _mapping(value, type_name="NfCommandToken")
+    if item.get("kind") != "flag":
+        return NfTemplate.from_dict(item)
+    _check_fields(item, type_name="NfFlag", required={"kind", "name", "prefix"})
+    return NfFlag(item["name"], item["prefix"])
+
+
+@dataclass(frozen=True, slots=True)
 class NfCommand:
     """Typed argv and approved stream redirections for one process."""
 
-    tokens: Sequence[NfTemplate]
+    tokens: Sequence[NfCommandToken]
     stdin: NfTemplate | None = None
     stdout: NfTemplate | None = None
     stderr: NfTemplate | None = None
 
     def __post_init__(self) -> None:
         tokens = tuple(self.tokens)
-        if not tokens or not all(isinstance(token, NfTemplate) for token in tokens):
+        if not tokens or not all(isinstance(token, (NfTemplate, NfFlag)) for token in tokens):
             raise ValueError("command must contain at least one typed token")
         object.__setattr__(self, "tokens", tokens)
         for name in ("stdin", "stdout", "stderr"):
@@ -273,7 +310,7 @@ class NfCommand:
             return None if raw is None else NfTemplate.from_dict(raw)
 
         return cls(
-            tuple(NfTemplate.from_dict(token) for token in item["tokens"]),
+            tuple(_command_token_from_dict(token) for token in item["tokens"]),
             hydrate(item["stdin"]), hydrate(item["stdout"]), hydrate(item["stderr"]),
         )
 
@@ -444,12 +481,13 @@ class NfProcess:
         if not isinstance(self.command, NfCommand):
             raise TypeError("process command must be an NfCommand")
         input_names = {port.name for port in inputs}
+        flag_names = {token.name for token in self.command.tokens if isinstance(token, NfFlag)}
         templates = [
-            *self.command.tokens,
+            *(token for token in self.command.tokens if isinstance(token, NfTemplate)),
             *(template for template in (self.command.stdin, self.command.stdout, self.command.stderr) if template),
             *(port.glob for port in outputs if port.glob),
         ]
-        references = {
+        references = flag_names | {
             segment.name
             for template in templates
             for segment in template.segments
@@ -458,6 +496,12 @@ class NfProcess:
         if unknown := references - input_names:
             raise ValueError(
                 f"process {self.name!r} templates reference unknown inputs: {', '.join(sorted(unknown))}"
+            )
+        value_names = {port.name for port in inputs if port.qualifier == "val"}
+        if invalid := flag_names - value_names:
+            raise ValueError(
+                f"process {self.name!r} flag tokens must reference val inputs: "
+                f"{', '.join(sorted(invalid))}"
             )
         match self.container:
             case None:
@@ -699,7 +743,10 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 2
+    SCHEMA_VERSION: ClassVar[int] = 3
+    # Earlier versions whose value space is a strict subset of the current
+    # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3})
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str
@@ -887,7 +934,7 @@ class ExecutableNextflowWorkflow:
                 "params",
             },
         )
-        if item["schema_version"] != cls.SCHEMA_VERSION:
+        if item["schema_version"] not in cls.SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError(
                 f"unsupported executable Nextflow schema version {item['schema_version']!r}"
             )

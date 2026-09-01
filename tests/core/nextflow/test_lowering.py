@@ -10,6 +10,7 @@ import pytest
 from sophios import inference
 from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import (
+    NfFlag,
     NfLiteral,
     NfResources,
     NfTemplate,
@@ -93,6 +94,52 @@ def test_composes_command_arguments_bindings_and_redirects() -> None:
     assert "> ${__sophios_shell_quote_9f72e('stdout.txt')}" in command_line
     assert "2> ${__sophios_shell_quote_9f72e('stderr.txt')}" in command_line
     assert process.outputs[0].glob == NfTemplate((NfLiteral("stdout.txt"),))
+
+
+@pytest.mark.fast
+def test_boolean_flag_lowers_to_a_conditional_flag_token() -> None:
+    sort_tool = tool(
+        "SORT",
+        inputs={
+            "reverse": {
+                "type": "boolean",
+                "inputBinding": {"position": 1, "prefix": "-r"},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("SORT", **{"in": {"reverse": "reverse"}})],
+            inputs={"reverse": {"type": "boolean"}},
+        ),
+        [sort_tool],
+        workflow_inputs={"reverse": True},
+    )
+
+    command = cwl_rosetree_to_nextflow(rose).processes[0].command
+
+    assert command.tokens[1] == NfFlag("reverse", "-r")
+
+
+@pytest.mark.fast
+def test_boolean_binding_without_a_prefix_contributes_no_token() -> None:
+    sort_tool = tool(
+        "SORT",
+        inputs={"reverse": {"type": "boolean", "inputBinding": {"position": 1}}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("SORT", **{"in": {"reverse": "reverse"}})],
+            inputs={"reverse": {"type": "boolean"}},
+        ),
+        [sort_tool],
+        workflow_inputs={"reverse": True},
+    )
+
+    command = cwl_rosetree_to_nextflow(rose).processes[0].command
+
+    assert [token for token in command.tokens if isinstance(token, NfFlag)] == []
+    assert len(command.tokens) == 1
 
 
 @pytest.mark.fast

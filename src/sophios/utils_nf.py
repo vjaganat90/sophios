@@ -12,7 +12,9 @@ from .nf_types import (
     ExecutableNextflowWorkflow,
     NF_INTERNAL_IDENTIFIERS,
     NfCommand,
+    NfCommandToken,
     NfConnection,
+    NfFlag,
     NfInputReference,
     NfLiteral,
     NfPort,
@@ -253,8 +255,8 @@ def _argument_items(arguments: list[Any]) -> list[tuple[tuple[int, int, int], tu
 
 def _input_binding_items(
     inputs: Mapping[str, Any],
-) -> list[tuple[tuple[int, int, str], tuple[NfTemplate, ...]]]:
-    items: list[tuple[tuple[int, int, str], tuple[NfTemplate, ...]]] = []
+) -> list[tuple[tuple[int, int, str], tuple[NfCommandToken, ...]]]:
+    items: list[tuple[tuple[int, int, str], tuple[NfCommandToken, ...]]] = []
     for raw_name, definition in inputs.items():
         input_definition = _as_mapping(definition, error=f"CWL input {raw_name!r} must be a mapping")
         match input_definition.get("inputBinding"):
@@ -266,16 +268,28 @@ def _input_binding_items(
                 raise ValueError(f"CWL inputBinding for {raw_name!r} must be a mapping")
         name = _identifier(raw_name, context="input binding name")
         value_from = binding.get("valueFrom")
+        position = _position(binding.get("position"), default=0)
+        if value_from is None and _required_type(input_definition.get("type")) == "boolean":
+            # CWL boolean bindings contribute their prefix, or nothing at all
+            # when the flag is false or no prefix is declared.
+            match binding.get("prefix"):
+                case None:
+                    continue
+                case str() as prefix if prefix:
+                    items.append(((position, 1, str(raw_name)), (NfFlag(name, prefix),)))
+                    continue
+                case _:
+                    raise ValueError(f"CWL command prefix for {raw_name!r} must be a non-empty string")
         value = (
             _template(value_from, context=f"CWL input {raw_name!r} valueFrom")
             if value_from is not None else NfTemplate((NfInputReference(name),))
         )
         tokens = _binding_tokens(binding.get("prefix"), value, separate=binding.get("separate", True))
-        items.append(((_position(binding.get("position"), default=0), 1, str(raw_name)), tokens))
+        items.append(((position, 1, str(raw_name)), tokens))
     return items
 
 
-def _command_items(tool: Mapping[str, Any]) -> tuple[NfTemplate, ...]:
+def _command_items(tool: Mapping[str, Any]) -> tuple[NfCommandToken, ...]:
     arguments = _as_list(tool.get("arguments", []), error="CommandLineTool arguments must be a list")
     inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
     ordered = sorted([*_argument_items(arguments), *_input_binding_items(inputs)])
@@ -284,7 +298,7 @@ def _command_items(tool: Mapping[str, Any]) -> tuple[NfTemplate, ...]:
 
 def _command(tool: Mapping[str, Any]) -> NfCommand:
     base_command = tool.get("baseCommand")
-    tokens: list[NfTemplate] = []
+    tokens: list[NfCommandToken] = []
     match base_command:
         case str() as command if command:
             tokens.append(_template(command, context="CWL baseCommand"))
@@ -715,14 +729,6 @@ def _tool_capability_findings(
                 if binding.get("shellQuote") is False:
                     findings.append(
                         f"{input_binding_path}.shellQuote: shellQuote false is deferred to Phase 2"
-                    )
-                if (
-                    _required_type(raw_definition.get("type")) == "boolean"
-                    and binding.get("valueFrom") is None
-                ):
-                    findings.append(
-                        f"{input_binding_path}: boolean inputBinding flag semantics are "
-                        "deferred to Phase 2"
                     )
         case _:
             pass

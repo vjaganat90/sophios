@@ -14,9 +14,13 @@ from sophios.input_output_nf import (
 )
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfCommand,
+    NfFlag,
+    NfLiteral,
     NfPort,
     NfProcess,
     NfResources,
+    NfTemplate,
     NfWorkflowInputConnection,
 )
 from sophios.utils_nf import cwl_rosetree_to_nextflow
@@ -137,6 +141,27 @@ def test_path_parameter_rendering_is_runtime_shape_independent() -> None:
         "Channel.fromPath(params.source instanceof Map ? params.source.path : "
         "params.source, checkIfExists: true, type: 'file', glob: false)"
     ) in rendered
+
+
+@pytest.mark.serial
+def test_renders_boolean_flag_as_a_conditional_argv_word() -> None:
+    process = NfProcess(
+        "SORT",
+        [NfPort("reverse", "val")],
+        [output_port("result", "sorted.txt")],
+        NfCommand(
+            (NfTemplate((NfLiteral("sort"),)), NfFlag("reverse", "-r")),
+            stdout=NfTemplate((NfLiteral("sorted.txt"),)),
+        ),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [NfWorkflowInputConnection("reverse", "SORT", "reverse")],
+        {"reverse": True},
+    ))
+
+    assert "${reverse ? __sophios_shell_quote_9f72e('-r') : ''}" in rendered
 
 
 @pytest.mark.fast
