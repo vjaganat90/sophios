@@ -119,7 +119,18 @@ def _required_type(cwl_type: Any) -> Any:
 
 
 def cwl_type_to_nf_qualifier(cwl_type: Any) -> str:
-    """Map the documented Phase 1 CWL type subset to a Nextflow qualifier."""
+    """Map the documented Phase 1 CWL type subset to a Nextflow qualifier.
+
+    Args:
+        cwl_type (Any): A CWL type expression; optional forms (``"File?"``,
+            ``["null", ...]``) map like their required type.
+
+    Raises:
+        ValueError: If the type is outside the supported Phase 1 subset.
+
+    Returns:
+        str: ``"path"`` for File/Directory, ``"val"`` for supported scalars.
+    """
     match _required_type(cwl_type):
         case "File" | "Directory":
             return "path"
@@ -1237,7 +1248,23 @@ def _container_policy_findings(sub_trees: list[Any]) -> list[str]:
 
 
 def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
-    """Convert a compiled flat CWL RoseTree without invoking inference again."""
+    """Convert a compiled flat CWL RoseTree without invoking inference again.
+
+    Runs closed-world capability analysis first; every unsupported source
+    semantic is aggregated and rejected before any lowering happens.
+
+    Args:
+        rose_tree (RoseTree): Compiler output whose root holds a compiled
+            CWL ``Workflow`` and whose children hold the compiled tools.
+
+    Raises:
+        TypeError: If the argument is not a ``RoseTree[NodeData]``.
+        ValueError: If capability analysis finds unsupported semantics, or
+            lowering/validation rejects the workflow.
+
+    Returns:
+        ExecutableNextflowWorkflow: The validated executable representation.
+    """
     node_data, sub_trees, workflow = _compiled_workflow(rose_tree)
     steps = _workflow_steps(workflow, child_count=len(sub_trees))
     findings = [

@@ -1,5 +1,6 @@
 """Nextflow symbol rules derived from the pinned Nextflow language grammar."""
 
+from typing import TypeGuard
 from unicodedata import category
 
 
@@ -159,8 +160,20 @@ def _is_java_letter_or_digit(character: str) -> bool:
     return category(character) in _JAVA_LETTER_OR_DIGIT_CATEGORIES
 
 
-def is_nextflow_identifier(value: object) -> bool:
-    """Return whether a value is a callable symbol in the Nextflow grammar."""
+def is_nextflow_identifier(value: object) -> TypeGuard[str]:
+    """Return whether a value is a callable symbol in the Nextflow grammar.
+
+    This is the untrusted-input boundary: it accepts anything and narrows.
+
+    Args:
+        value (object): Candidate identifier; anything other than a non-empty
+            string is never an identifier.
+
+    Returns:
+        TypeGuard[str]: True when the pinned Nextflow grammar accepts the
+            value as a callable symbol; type checkers may then treat the
+            value as ``str``.
+    """
     match value:
         case str() as identifier if identifier and identifier not in NEXTFLOW_RESERVED_WORDS:
             return _is_java_letter(identifier[0]) and all(
@@ -171,7 +184,22 @@ def is_nextflow_identifier(value: object) -> bool:
 
 
 def validate_nextflow_identifier(value: object, *, field_name: str) -> str:
-    """Return a valid Nextflow symbol or raise a grammar-specific error."""
+    """Return a valid Nextflow symbol or raise a grammar-specific error.
+
+    This is the untrusted-input boundary for hydrated and source-derived
+    names: it accepts anything and returns a proven identifier.
+
+    Args:
+        value (object): Candidate identifier to validate.
+        field_name (str): User-facing field name for the error message.
+
+    Raises:
+        ValueError: If the value is not a callable symbol in the pinned
+            Nextflow grammar.
+
+    Returns:
+        str: The validated identifier, unchanged.
+    """
     match value:
         case str() as identifier if is_nextflow_identifier(identifier):
             return identifier
@@ -182,17 +210,28 @@ def validate_nextflow_identifier(value: object, *, field_name: str) -> str:
             )
 
 
-def normalize_nextflow_identifier(value: object) -> str:
-    """Normalize text to a callable identifier using Nextflow grammar symbols."""
-    match value:
-        case str() as source if source:
-            pass
-        case _:
-            raise ValueError("Nextflow identifier source must be a non-empty string")
+def normalize_nextflow_identifier(value: str) -> str:
+    """Normalize text to a callable identifier using Nextflow grammar symbols.
+
+    Characters outside the grammar's letter/digit categories become ``_``,
+    and a leading ``_`` is added when the first character cannot start an
+    identifier or the result is a reserved word.
+
+    Args:
+        value (str): Non-empty source text to normalize.
+
+    Raises:
+        ValueError: If the value is empty or, at runtime, not a string.
+
+    Returns:
+        str: A valid Nextflow identifier derived from the source text.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("Nextflow identifier source must be a non-empty string")
 
     identifier = "".join(
         character if _is_java_letter_or_digit(character) else "_"
-        for character in source
+        for character in value
     )
     if not _is_java_letter(identifier[0]):
         identifier = f"_{identifier}"

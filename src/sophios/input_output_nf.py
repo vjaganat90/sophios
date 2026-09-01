@@ -228,7 +228,18 @@ def _parameter_expression(workflow: ExecutableNextflowWorkflow, name: str) -> st
 
 
 def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
-    """Render a supported workflow as deterministic Nextflow DSL2 source."""
+    """Render a supported workflow as deterministic Nextflow DSL2 source.
+
+    Args:
+        workflow (ExecutableNextflowWorkflow): Validated executable IR; no
+            other representation is accepted.
+
+    Raises:
+        TypeError: If the value is not an ``ExecutableNextflowWorkflow``.
+
+    Returns:
+        str: The complete ``workflow.nf`` text; byte-stable across calls.
+    """
     _require_executable(workflow)
     sections = [
         "nextflow.enable.dsl=2",
@@ -245,13 +256,34 @@ def render_nextflow(workflow: ExecutableNextflowWorkflow) -> str:
 
 
 def render_nextflow_config(workflow: ExecutableNextflowWorkflow) -> str:
-    """Render the deterministic executor configuration."""
+    """Render the deterministic executor configuration.
+
+    Args:
+        workflow (ExecutableNextflowWorkflow): Validated executable IR.
+
+    Raises:
+        TypeError: If the value is not an ``ExecutableNextflowWorkflow``.
+
+    Returns:
+        str: The ``nextflow.config`` text carrying the validated
+            workflow-wide container policy.
+    """
     _require_executable(workflow)
     return f"docker.enabled = {str(workflow.containers_enabled).lower()}\n"
 
 
 def render_nextflow_params(workflow: ExecutableNextflowWorkflow) -> str:
-    """Render workflow parameters as deterministic JSON."""
+    """Render workflow parameters as deterministic JSON.
+
+    Args:
+        workflow (ExecutableNextflowWorkflow): Validated executable IR.
+
+    Raises:
+        TypeError: If the value is not an ``ExecutableNextflowWorkflow``.
+
+    Returns:
+        str: The ``nextflow_params.json`` text with sorted keys.
+    """
     _require_executable(workflow)
     return json.dumps(
         workflow.to_dict()["params"],
@@ -266,7 +298,20 @@ def write_nextflow_artifacts(
     workflow: ExecutableNextflowWorkflow,
     outdir: str | Path,
 ) -> tuple[Path, Path, Path, Path]:
-    """Validate every representation before writing the four artifacts."""
+    """Validate every representation before writing the four artifacts.
+
+    Args:
+        workflow (ExecutableNextflowWorkflow): Validated executable IR.
+        outdir (str | Path): Output directory; created when missing.
+
+    Raises:
+        TypeError: If the value is not an ``ExecutableNextflowWorkflow``.
+
+    Returns:
+        tuple[Path, Path, Path, Path]: Paths to the versioned JSON IR,
+            ``workflow.nf``, ``nextflow.config``, and
+            ``nextflow_params.json``, in that order.
+    """
     serialized = f"{workflow.to_json()}\n"
     script = render_nextflow(workflow)
     config = render_nextflow_config(workflow)
