@@ -2,6 +2,7 @@
 
 import pytest
 
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.wic_types import RoseTree
 
@@ -22,49 +23,26 @@ def unsupported_real_linear_rose() -> RoseTree:
 @pytest.fixture(scope="session")
 def real_supported_rose() -> RoseTree:
     """Compile a wholly supported two-process workflow through the real API."""
-    touch = Step.from_cwl_document(
-        {
-            "id": "TOUCH",
-            "class": "CommandLineTool",
-            "cwlVersion": "v1.2",
-            "baseCommand": "touch",
-            "inputs": {
-                "filename": {
-                    "type": "string",
-                    "inputBinding": {"position": 1},
-                }
-            },
-            "outputs": {
-                "result": {
-                    "type": "File",
-                    "outputBinding": {"glob": "$(inputs.filename)"},
-                }
-            },
-        },
-        process_name="touch",
+    touch_tool = (
+        CommandLineTool(
+            "touch_file",
+            Inputs(filename=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="$(inputs.filename)")),
+        )
+        .base_command("touch")
     )
+    touch = Step(touch_tool, step_name="touch")
     touch.inputs.filename = "message.txt"
-    copy_step = Step.from_cwl_document(
-        {
-            "id": "COPY",
-            "class": "CommandLineTool",
-            "cwlVersion": "v1.2",
-            "baseCommand": "cp",
-            "arguments": [{"position": 2, "valueFrom": "copy.txt"}],
-            "inputs": {
-                "source": {
-                    "type": "File",
-                    "inputBinding": {"position": 1},
-                }
-            },
-            "outputs": {
-                "result": {
-                    "type": "File",
-                    "outputBinding": {"glob": "copy.txt"},
-                }
-            },
-        },
-        process_name="copy",
+
+    copy_tool = (
+        CommandLineTool(
+            "copy_file",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="copy.txt")),
+        )
+        .base_command("cp")
+        .argument("copy.txt", position=2)
     )
+    copy_step = Step(copy_tool, step_name="copy")
     copy_step.inputs.source = touch.outputs.result
     return Workflow([touch, copy_step], "wf")._compile().rose

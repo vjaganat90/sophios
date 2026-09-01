@@ -195,6 +195,23 @@ def single_process_workflow(
     )
 
 
+def require_docker() -> str:
+    """Return a working Docker executable or skip (R11 conditional policy)."""
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("R11 conditional: Docker executable is not installed")
+    daemon = subprocess.run(
+        [docker, "info"],
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    if daemon.returncode != 0:
+        pytest.skip("R11 conditional: Docker daemon is not available")
+    return docker
+
+
 def nextflow_executable() -> str:
     """Locate Nextflow; skip locally, fail where the required CI job runs."""
     executable = shutil.which("nextflow")

@@ -12,6 +12,7 @@ import sys
 import pytest
 
 import sophios.main as sophios_main
+from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import Step, Workflow
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_reader import parse_nf_file, promote_nextflow_document
@@ -35,6 +36,7 @@ from .testkit import (
     nextflow_executable,
     output_port,
     ref,
+    require_docker,
     run_nextflow,
     runtime_workflow,
     single_process_workflow,
@@ -76,29 +78,17 @@ def test_actual_nextflow_golden_path(
 @pytest.mark.serial
 def test_real_compiler_preserves_adversarial_argument(tmp_path: Path) -> None:
     value = "price is $5; touch SHOULD_NOT_EXIST ' \" $(uname)\nsecond line"
-    write = Step.from_cwl_document(
-        {
-            "id": "WRITE",
-            "class": "CommandLineTool",
-            "cwlVersion": "v1.2",
-            "baseCommand": "printf",
-            "arguments": [{"position": 1, "valueFrom": "%s"}],
-            "inputs": {
-                "message": {
-                    "type": "string",
-                    "inputBinding": {"position": 2},
-                }
-            },
-            "stdout": "result.txt",
-            "outputs": {
-                "result": {
-                    "type": "File",
-                    "outputBinding": {"glob": "result.txt"},
-                }
-            },
-        },
-        process_name="write",
+    write_tool = (
+        CommandLineTool(
+            "write_message",
+            Inputs(message=Input(cwl.string, position=2)),
+            Outputs(result=Output(cwl.file, glob="result.txt")),
+        )
+        .base_command("printf")
+        .argument("%s", position=1)
+        .stdout("result.txt")
     )
+    write = Step(write_tool, step_name="write")
     write.inputs.message = value
     workflow = Workflow([write], "wf")._compile().rose
     result = run_nextflow(cwl_rosetree_to_nextflow(workflow), tmp_path)
@@ -312,35 +302,15 @@ def test_symbol_contract_matches_actual_v2_parser(tmp_path: Path) -> None:
 
 
 @pytest.mark.nextflow
+@pytest.mark.docker
 @pytest.mark.serial
 def test_cli_generates_and_executes_nextflow_artifacts(tmp_path: Path) -> None:
-    adapters = tmp_path / "adapters"
-    adapters.mkdir()
-    (adapters / "WRITE.cwl").write_text(
-        """cwlVersion: v1.2
-class: CommandLineTool
-baseCommand: touch
-arguments: [result.txt]
-inputs: {}
-outputs:
-  result:
-    type: File
-    outputBinding:
-      glob: result.txt
-""",
-        encoding="utf-8",
-    )
-    workflow_path = tmp_path / "workflow.wic"
-    workflow_path.write_text(
-        """steps:
-- id: WRITE
-  in: {}
-  out: [result]
-""",
-        encoding="utf-8",
-    )
+    require_docker()
+    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl", step_name="emit")
+    touch.inputs.filename = "result.txt"
+    workflow_path = Workflow([touch], "workflow").write_wic(tmp_path)
     config = {
-        "search_paths_cwl": {"global": [str(adapters)], "gpu": []},
+        "search_paths_cwl": {"global": [str(REPO_ROOT / "cwl_adapters")], "gpu": []},
         "search_paths_wic": {"global": [str(tmp_path)]},
         "renaming_conventions": [],
         "inference_rules": {},
@@ -376,8 +346,12 @@ outputs:
         "nextflow.config",
         "nextflow_params.json",
     }
+    assert (generated / "nextflow.config").read_text(encoding="utf-8") == "docker.enabled = true\n"
     execution = execute_nextflow(generated)
+    if execution.returncode != 0 and "pull" in execution.stdout.lower():
+        pytest.skip("R11 conditional: pinned container image is unavailable offline")
     assert execution.returncode == 0, f"stdout:\n{execution.stdout}\nstderr:\n{execution.stderr}"
+    assert len(list((generated / "work").rglob("result.txt"))) == 1
 
 
 @pytest.mark.nextflow
@@ -479,18 +453,7 @@ def test_json_hydration_preserves_runtime_behavior(tmp_path: Path) -> None:
 @pytest.mark.docker
 @pytest.mark.serial
 def test_docker_container_behavior_or_explicit_skip(tmp_path: Path) -> None:
-    docker = shutil.which("docker")
-    if docker is None:
-        pytest.skip("R11 conditional: Docker executable is not installed")
-    daemon = subprocess.run(
-        [docker, "info"],
-        text=True,
-        capture_output=True,
-        timeout=15,
-        check=False,
-    )
-    if daemon.returncode != 0:
-        pytest.skip("R11 conditional: Docker daemon is not available")
+    require_docker()
     process = NfProcess(
         "CONTAINERIZED",
         [],
