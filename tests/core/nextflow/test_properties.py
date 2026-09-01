@@ -1,5 +1,7 @@
 """Property-based adversarial tests for the executable Nextflow boundary."""
 
+# pylint: disable=missing-function-docstring
+
 from decimal import Decimal
 import json
 import shlex
@@ -28,7 +30,8 @@ from sophios.nf_types import (
     NfTemplate,
     NfWorkflowInputConnection,
 )
-from sophios.utils_nf import _command, _normalized_identifiers
+from sophios.utils_nf import _command as lower_command
+from sophios.utils_nf import _normalized_identifiers
 
 
 SURROGATE_CATEGORIES: tuple[Literal["Cs"], ...] = ("Cs",)
@@ -242,7 +245,7 @@ def test_equal_position_input_bindings_order_by_field_name(order: tuple[str, ...
         name: {"type": "string", "inputBinding": {}}
         for name in order
     }
-    command = _command({"baseCommand": "cmd", "arguments": ["a", "b", "c"], "inputs": inputs})
+    command = lower_command({"baseCommand": "cmd", "arguments": ["a", "b", "c"], "inputs": inputs})
     references = [
         segment.name
         for token in command.tokens
@@ -259,7 +262,7 @@ def test_equal_position_input_bindings_order_by_field_name(order: tuple[str, ...
 
 
 def test_value_from_literal_and_reference_is_one_typed_token() -> None:
-    command = _command({
+    command = lower_command({
         "baseCommand": "cp",
         "arguments": [{"valueFrom": "my report $(inputs.name).txt"}],
         "inputs": {"name": {"type": "string"}},
@@ -269,10 +272,10 @@ def test_value_from_literal_and_reference_is_one_typed_token() -> None:
 
 
 def test_empty_arguments_are_preserved_and_boolean_positions_are_rejected() -> None:
-    command = _command({"baseCommand": "printf", "arguments": [""]})
+    command = lower_command({"baseCommand": "printf", "arguments": [""]})
     assert command.tokens[-1] == NfTemplate((NfLiteral(""),))
     with pytest.raises(ValueError, match="non-integer CWL command position"):
-        _command({"baseCommand": "echo", "arguments": [{"valueFrom": "x", "position": True}]})
+        lower_command({"baseCommand": "echo", "arguments": [{"valueFrom": "x", "position": True}]})
 
 
 @settings(max_examples=60, deadline=None)
