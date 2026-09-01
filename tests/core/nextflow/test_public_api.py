@@ -83,12 +83,8 @@ def test_unknown_python_target_is_rejected() -> None:
 
 
 @pytest.mark.serial
-@pytest.mark.parametrize("builder", [supported_workflow, adapter_workflow])
-def test_to_nextflow_is_the_single_four_artifact_writer(
-    builder: Any,
-    tmp_path: Path,
-) -> None:
-    paths = builder().to_nextflow(tmp_path)
+def test_to_nextflow_is_the_single_four_artifact_writer(tmp_path: Path) -> None:
+    paths = supported_workflow().to_nextflow(tmp_path)
 
     assert [path.name for path in paths] == [
         "nextflow_workflow.json",
@@ -98,6 +94,18 @@ def test_to_nextflow_is_the_single_four_artifact_writer(
     ]
     assert not hasattr(Workflow, "get_nextflow_workflow")
     assert not hasattr(Workflow, "to_nf")
+
+
+@pytest.mark.serial
+def test_to_nextflow_writes_artifacts_for_adapter_workflows(tmp_path: Path) -> None:
+    paths = adapter_workflow().to_nextflow(tmp_path)
+
+    assert [path.name for path in paths] == [
+        "nextflow_workflow.json",
+        "workflow.nf",
+        "nextflow.config",
+        "nextflow_params.json",
+    ]
 
 
 @pytest.mark.fast
