@@ -306,7 +306,9 @@ def test_symbol_contract_matches_actual_v2_parser(tmp_path: Path) -> None:
 @pytest.mark.serial
 def test_cli_generates_and_executes_nextflow_artifacts(tmp_path: Path) -> None:
     require_docker()
-    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl", step_name="emit")
+    # The step name must match the adapter stem so the CLI can resolve
+    # touch.cwl through search_paths_cwl.
+    touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
     touch.inputs.filename = "result.txt"
     workflow_path = Workflow([touch], "workflow").write_wic(tmp_path)
     config = {
