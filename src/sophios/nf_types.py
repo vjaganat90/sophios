@@ -126,6 +126,11 @@ class NfLiteral:
             raise ValueError("template literals cannot contain NUL bytes")
 
     def to_dict(self) -> dict[str, str]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, str]: The segment as ``{"kind": "literal", "value": ...}``.
+        """
         return {"kind": "literal", "value": self.value}
 
 
@@ -139,6 +144,11 @@ class NfInputReference:
         _validate_ir_identifier(self.name, field_name="template input reference")
 
     def to_dict(self) -> dict[str, str]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, str]: The segment as ``{"kind": "input", "name": ...}``.
+        """
         return {"kind": "input", "name": self.name}
 
 
@@ -178,10 +188,28 @@ class NfTemplate:
         object.__setattr__(self, "segments", tuple(canonical))
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The canonical segment list under ``"segments"``.
+        """
         return {"segments": [segment.to_dict() for segment in self.segments]}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
+        """Hydrate and validate a template from a mapping.
+
+        Args:
+            value (Mapping[str, Any]): Serialized template produced by
+                :meth:`to_dict`.
+
+        Raises:
+            TypeError: If the value or its segment list has the wrong shape.
+            ValueError: If a segment kind is unsupported or a field is invalid.
+
+        Returns:
+            Self: The validated template.
+        """
         item = _mapping(value, type_name=cls.__name__)
         _check_fields(item, type_name=cls.__name__, required={"segments"})
         if not isinstance(item["segments"], list):
@@ -209,6 +237,11 @@ class NfCommand:
                 raise TypeError(f"command {name} must be an NfTemplate or None")
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: Serialized argv tokens and stream redirections.
+        """
         return {
             "tokens": [token.to_dict() for token in self.tokens],
             "stdin": self.stdin.to_dict() if self.stdin else None,
@@ -218,6 +251,19 @@ class NfCommand:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
+        """Hydrate and validate a command from a mapping.
+
+        Args:
+            value (Mapping[str, Any]): Serialized command produced by
+                :meth:`to_dict`.
+
+        Raises:
+            TypeError: If the value or its token list has the wrong shape.
+            ValueError: If required fields are missing or tokens are invalid.
+
+        Returns:
+            Self: The validated command.
+        """
         item = _mapping(value, type_name=cls.__name__)
         _check_fields(item, type_name=cls.__name__, required={"tokens", "stdin", "stdout", "stderr"})
         if not isinstance(item["tokens"], list):
@@ -262,10 +308,28 @@ class NfResources:
             raise ValueError("memory_mb must be a positive finite number or None")
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The ``cpus`` and ``memory_mb`` values.
+        """
         return {"cpus": self.cpus, "memory_mb": self.memory_mb}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
+        """Hydrate and validate resources from a mapping.
+
+        Args:
+            value (Mapping[str, Any]): Serialized resources produced by
+                :meth:`to_dict`.
+
+        Raises:
+            TypeError: If the value is not a mapping.
+            ValueError: If required fields are missing or values are invalid.
+
+        Returns:
+            Self: The validated resources.
+        """
         item = _mapping(value, type_name=cls.__name__)
         _check_fields(item, type_name=cls.__name__, required={"cpus", "memory_mb"})
         return cls(item["cpus"], item["memory_mb"])
@@ -302,7 +366,12 @@ class NfPort:
             raise TypeError("port glob must be an NfTemplate or None")
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation."""
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The port's name, qualifier, emit, glob, and
+                path kind.
+        """
         return {
             "name": self.name,
             "qualifier": self.qualifier,
@@ -313,7 +382,19 @@ class NfPort:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and validate a port from a mapping."""
+        """Hydrate and validate a port from a mapping.
+
+        Args:
+            value (Mapping[str, Any]): Serialized port produced by
+                :meth:`to_dict`.
+
+        Raises:
+            TypeError: If the value is not a mapping.
+            ValueError: If required fields are missing or values are invalid.
+
+        Returns:
+            Self: The validated port.
+        """
         item = _mapping(value, type_name=cls.__name__)
         _check_fields(
             item,
@@ -389,7 +470,12 @@ class NfProcess:
             raise TypeError("process resources must be NfResources")
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible representation."""
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The process name, ports, command, container,
+                and resources.
+        """
         return {
             "name": self.name,
             "inputs": [port.to_dict() for port in self.inputs],
@@ -401,7 +487,19 @@ class NfProcess:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and validate a process from a mapping."""
+        """Hydrate and validate a process from a mapping.
+
+        Args:
+            value (Mapping[str, Any]): Serialized process produced by
+                :meth:`to_dict`.
+
+        Raises:
+            TypeError: If the value or its port lists have the wrong shape.
+            ValueError: If required fields are missing or values are invalid.
+
+        Returns:
+            Self: The validated process.
+        """
         item = _mapping(value, type_name=cls.__name__)
         _check_fields(
             item,
@@ -436,6 +534,11 @@ class NfWorkflowInputConnection:
         _validate_ir_identifier(self.to_port, field_name="connection destination port")
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The connection with kind ``"workflow_input"``.
+        """
         return {
             "kind": "workflow_input",
             "from_port": self.from_port,
@@ -460,6 +563,11 @@ class NfProcessConnection:
         _validate_ir_identifier(self.to_port, field_name="connection destination port")
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The connection with kind ``"process"``.
+        """
         return {
             "kind": "process",
             "from_process": self.from_process,
@@ -483,6 +591,11 @@ class NfWorkflowOutputConnection:
         _validate_ir_identifier(self.to_port, field_name="workflow output")
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, Any]: The connection with kind ``"workflow_output"``.
+        """
         return {
             "kind": "workflow_output",
             "from_process": self.from_process,
@@ -498,7 +611,16 @@ def process_dependencies(
     names: Iterable[str],
     connections: Iterable[NfConnection],
 ) -> dict[str, set[str]]:
-    """Map each process name to the process names it depends on."""
+    """Map each process name to the process names it depends on.
+
+    Args:
+        names (Iterable[str]): Every process name in the workflow.
+        connections (Iterable[NfConnection]): Workflow connections; only
+            process-to-process connections contribute dependencies.
+
+    Returns:
+        dict[str, set[str]]: Dependency sets keyed by process name.
+    """
     dependencies: dict[str, set[str]] = {name: set() for name in names}
     for connection in connections:
         if isinstance(connection, NfProcessConnection):
@@ -516,6 +638,19 @@ def topological_order(
 
     Ready names are emitted in batches; ``key`` orders each batch so callers
     that need it get a deterministic order.
+
+    Args:
+        dependencies (Mapping[str, Iterable[str]]): Dependency sets keyed by
+            process name, as built by :func:`process_dependencies`.
+        error (str): Message for the ``ValueError`` raised on a cycle.
+        key (Callable[[str], Any] | None): Optional sort key applied to each
+            ready batch for deterministic output.
+
+    Raises:
+        ValueError: If the dependency graph contains a cycle.
+
+    Returns:
+        list[str]: Every process name in topological order.
     """
     sorter = TopologicalSorter(dependencies)
     try:
@@ -605,7 +740,12 @@ class ExecutableNextflowWorkflow:
 
     @property
     def containers_enabled(self) -> bool:
-        """Return the validated workflow-wide container execution policy."""
+        """Return the validated workflow-wide container execution policy.
+
+        Returns:
+            bool: True when every process declares a container; construction
+                rejects mixed policies, so this is uniform by invariant.
+        """
         return bool(self.processes) and self.processes[0].container is not None
 
     def _validate_graph(self) -> None:
@@ -695,7 +835,12 @@ class ExecutableNextflowWorkflow:
         incoming.add(endpoint)
 
     def to_dict(self) -> dict[str, Any]:
-        """Return the strict versioned executable representation."""
+        """Return the strict versioned executable representation.
+
+        Returns:
+            dict[str, Any]: Schema version, representation kind, name,
+                processes, connections, and params.
+        """
         return {
             "schema_version": self.SCHEMA_VERSION,
             "representation_kind": self.REPRESENTATION_KIND,
@@ -706,12 +851,29 @@ class ExecutableNextflowWorkflow:
         }
 
     def to_json(self) -> str:
-        """Serialize this executable workflow deterministically."""
+        """Serialize this executable workflow deterministically.
+
+        Returns:
+            str: Indented JSON with sorted keys; byte-stable across calls.
+        """
         return json.dumps(self.to_dict(), indent=2, sort_keys=True, allow_nan=False)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
-        """Hydrate and strictly validate a versioned executable workflow."""
+        """Hydrate and strictly validate a versioned executable workflow.
+
+        Args:
+            value (Mapping[str, Any]): Serialized workflow produced by
+                :meth:`to_dict`.
+
+        Raises:
+            TypeError: If the value or its collections have the wrong shape.
+            ValueError: If the schema version, representation kind, fields,
+                or graph invariants are invalid.
+
+        Returns:
+            Self: The validated executable workflow.
+        """
         item = _mapping(value, type_name=cls.__name__)
         _check_fields(
             item,
@@ -748,7 +910,19 @@ class ExecutableNextflowWorkflow:
 
     @classmethod
     def from_json(cls, value: str) -> Self:
-        """Hydrate and validate an executable workflow from JSON text."""
+        """Hydrate and validate an executable workflow from JSON text.
+
+        Args:
+            value (str): JSON text produced by :meth:`to_json`.
+
+        Raises:
+            TypeError: If the value is not a string.
+            ValueError: If the text is not valid JSON or fails
+                :meth:`from_dict` validation.
+
+        Returns:
+            Self: The validated executable workflow.
+        """
         if not isinstance(value, str):
             raise TypeError("ExecutableNextflowWorkflow JSON input must be a string")
         try:

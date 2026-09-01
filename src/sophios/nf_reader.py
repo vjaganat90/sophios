@@ -345,7 +345,24 @@ def _validate_acyclic(workflow: NextflowDocument) -> None:
 
 
 def parse_nf_text(text: str, *, params: Mapping[str, Any] | None = None) -> NextflowDocument:
-    """Parse the supported, generated-style Nextflow DSL2 subset."""
+    """Parse the supported, generated-style Nextflow DSL2 subset.
+
+    Unrecognized syntax is retained as opaque regions, never dropped; the
+    result is structural and carries no executable claim.
+
+    Args:
+        text (str): Nextflow DSL2 source text.
+        params (Mapping[str, Any] | None): Workflow parameter values to
+            record on the document.
+
+    Raises:
+        ValueError: If the source lacks exactly one named workflow, contains
+            duplicate process names, unterminated blocks, unknown call
+            targets, arity mismatches, or a cyclic graph.
+
+    Returns:
+        NextflowDocument: The loss-aware structural representation.
+    """
     lines = text.splitlines()
     process_blocks = _blocks(lines, _PROCESS)
     parsed_processes = [
@@ -403,7 +420,23 @@ def parse_nf_text(text: str, *, params: Mapping[str, Any] | None = None) -> Next
 
 
 def parse_nf_file(path: str | Path) -> NextflowDocument:
-    """Read a Nextflow file and its adjacent generated parameter file when present."""
+    """Read a Nextflow file and its adjacent generated parameter file when present.
+
+    When an adjacent ``nextflow_workflow.json`` IR artifact exists, it is
+    strictly hydrated and bound to the document only if the source and
+    parameters match it exactly.
+
+    Args:
+        path (str | Path): Path to the ``.nf`` source file.
+
+    Raises:
+        ValueError: If parsing fails, the parameter file is not a JSON
+            object, or an adjacent IR artifact does not match the source.
+
+    Returns:
+        NextflowDocument: The structural document, with
+            ``verified_executable`` set when provenance matches.
+    """
     source = Path(path)
     params_path = source.with_name("nextflow_params.json")
     params: Mapping[str, Any] = {}
@@ -428,7 +461,23 @@ def parse_nf_file(path: str | Path) -> NextflowDocument:
 def promote_nextflow_document(
     document: NextflowDocument,
 ) -> ExecutableNextflowWorkflow:
-    """Validate and promote a fully understood document to executable IR."""
+    """Validate and promote a fully understood document to executable IR.
+
+    Promotion is provenance-bound: it requires no opaque regions and exact
+    agreement between the source text, parameters, and the adjacent
+    validated executable IR artifact.
+
+    Args:
+        document (NextflowDocument): Parsed structural document.
+
+    Raises:
+        TypeError: If the value is not a ``NextflowDocument``.
+        ValueError: If the document has opaque regions, lacks a verified
+            executable artifact, or its provenance does not match.
+
+    Returns:
+        ExecutableNextflowWorkflow: The verified executable workflow.
+    """
     if not isinstance(document, NextflowDocument):
         raise TypeError("promotion requires a NextflowDocument")
     if document.opaque_regions:
@@ -453,7 +502,17 @@ def promote_nextflow_document(
 
 
 def render_nextflow_document(document: NextflowDocument) -> str:
-    """Render a structural document losslessly without claiming executability."""
+    """Render a structural document losslessly without claiming executability.
+
+    Args:
+        document (NextflowDocument): Parsed structural document.
+
+    Raises:
+        TypeError: If the value is not a ``NextflowDocument``.
+
+    Returns:
+        str: The exact original source text, opaque regions included.
+    """
     if not isinstance(document, NextflowDocument):
         raise TypeError("structural rendering requires a NextflowDocument")
     return document.source_text
@@ -464,7 +523,18 @@ def _cwl_type(port: NextflowPort) -> Any:
 
 
 def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Convert supported Nextflow structure into CWL workflow/tool dictionaries."""
+    """Convert supported Nextflow structure into CWL workflow/tool dictionaries.
+
+    This is a structural reconstruction: process scripts stay opaque shell
+    text and executable equivalence is not claimed.
+
+    Args:
+        workflow (NextflowDocument): Parsed structural document.
+
+    Returns:
+        tuple[dict[str, Any], list[dict[str, Any]]]: The CWL ``Workflow``
+            dictionary and one ``CommandLineTool`` dictionary per process.
+    """
     tools: list[dict[str, Any]] = []
     for process in workflow.processes:
         requirements: dict[str, Any] = {"ShellCommandRequirement": {}}
@@ -553,7 +623,22 @@ def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[di
 
 
 def import_nextflow(path: str | Path) -> "Workflow":
-    """Import supported Nextflow structure as a public Sophios ``Workflow``."""
+    """Import supported Nextflow structure as a public Sophios ``Workflow``.
+
+    Emits ``UserWarning`` for retained opaque content and for the general
+    structural-import limitation (scripts are opaque; executable
+    equivalence is not guaranteed).
+
+    Args:
+        path (str | Path): Path to the ``.nf`` source file.
+
+    Raises:
+        ValueError: If the source cannot be parsed as the supported subset.
+
+    Returns:
+        Workflow: A Sophios workflow reconstructing the representable
+            processes, connections, and bound parameter values.
+    """
     from .api.python.workflow import Step, Workflow  # Avoid a public API import cycle.
 
     nf_workflow = parse_nf_file(path)
