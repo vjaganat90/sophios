@@ -81,7 +81,7 @@ def test_rejects_every_unconsumed_tool_field_before_lowering() -> None:
 
 @pytest.mark.fast
 @pytest.mark.parametrize("value", [False, True])
-def test_rejects_unlowered_boolean_input_binding_semantics(value: bool) -> None:
+def test_accepts_boolean_flag_bindings_for_both_values(value: bool) -> None:
     flags = tool(
         "FLAGS",
         inputs={
@@ -100,7 +100,30 @@ def test_rejects_unlowered_boolean_input_binding_semantics(value: bool) -> None:
         workflow_inputs={"verbose": value},
     )
 
-    with pytest.raises(ValueError, match="boolean inputBinding flag semantics"):
+    assert cwl_rosetree_to_nextflow(rose).params == {"verbose": value}
+
+
+@pytest.mark.fast
+def test_rejects_absent_optional_boolean_flag() -> None:
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": ["null", "boolean"],
+                "inputBinding": {"position": 1, "prefix": "--verbose"},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("FLAGS", **{"in": {"verbose": "verbose"}})],
+            inputs={"verbose": {"type": ["null", "boolean"]}},
+        ),
+        [flags],
+        workflow_inputs={"verbose": None},
+    )
+
+    with pytest.raises(ValueError, match="absent optional"):
         cwl_rosetree_to_nextflow(rose)
 
 

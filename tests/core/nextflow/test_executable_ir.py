@@ -10,6 +10,8 @@ import pytest
 from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identifier
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
+    NfCommand,
+    NfFlag,
     NfLiteral,
     NfPort,
     NfProcess,
@@ -66,14 +68,14 @@ def test_executable_schema_declares_version_and_kind() -> None:
     workflow = ExecutableNextflowWorkflow("wf", [], [], {})
     payload = workflow.to_dict()
 
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["representation_kind"] == "executable"
 
     payload["schema_version"] = 1
     with pytest.raises(ValueError, match="schema version"):
         ExecutableNextflowWorkflow.from_dict(payload)
 
-    payload["schema_version"] = 2
+    payload["schema_version"] = 3
     payload["representation_kind"] = "structural"
     with pytest.raises(ValueError, match="representation kind"):
         ExecutableNextflowWorkflow.from_dict(payload)
@@ -147,6 +149,60 @@ def test_uses_nextflow_identifier_symbols() -> None:
 def test_rejects_qualifiers_without_an_approved_lowering(qualifier: str) -> None:
     with pytest.raises(ValueError, match="qualifier"):
         NfPort("reads", qualifier)
+
+
+@pytest.mark.fast
+def test_flag_token_survives_hydration() -> None:
+    process = NfProcess(
+        "SORT",
+        [NfPort("reverse", "val")],
+        [output_port("result", "sorted.txt")],
+        NfCommand((NfTemplate((NfLiteral("sort"),)), NfFlag("reverse", "-r"))),
+    )
+    assert NfProcess.from_dict(process.to_dict()) == process
+    assert process.command.tokens[1].to_dict() == {
+        "kind": "flag",
+        "name": "reverse",
+        "prefix": "-r",
+    }
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("prefix", ["", "   "])
+def test_flag_requires_a_non_empty_prefix(prefix: str) -> None:
+    with pytest.raises(ValueError, match="prefix"):
+        NfFlag("reverse", prefix)
+
+
+@pytest.mark.fast
+def test_flag_must_reference_a_declared_value_input() -> None:
+    command = NfCommand((NfTemplate((NfLiteral("sort"),)), NfFlag("reverse", "-r")))
+    with pytest.raises(ValueError, match="unknown inputs"):
+        NfProcess("SORT", [], [], command)
+    with pytest.raises(ValueError, match="flag.*val"):
+        NfProcess("SORT", [NfPort("reverse", "path")], [], command)
+
+
+@pytest.mark.fast
+def test_flags_are_unrepresentable_outside_command_position() -> None:
+    with pytest.raises(TypeError, match="typed literal or input references"):
+        NfTemplate((cast(Any, NfFlag("reverse", "-r")),))
+
+
+@pytest.mark.fast
+def test_hydration_accepts_earlier_subset_schema_versions() -> None:
+    payload = ExecutableNextflowWorkflow(
+        "wf", [NfProcess("P", [], [], command("true"))], [], {}
+    ).to_dict()
+    assert payload["schema_version"] == 3
+
+    payload["schema_version"] = 2
+    assert ExecutableNextflowWorkflow.from_dict(payload).to_dict()["schema_version"] == 3
+
+    for unsupported in (1, 4):
+        payload["schema_version"] = unsupported
+        with pytest.raises(ValueError, match="schema version"):
+            ExecutableNextflowWorkflow.from_dict(payload)
 
 
 @pytest.mark.fast

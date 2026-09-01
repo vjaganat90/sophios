@@ -10,6 +10,7 @@ from .nf_types import (
     ExecutableNextflowWorkflow,
     NF_SHELL_QUOTE_HELPER,
     NfConnection,
+    NfFlag,
     NfInputReference,
     NfLiteral,
     NfPort,
@@ -76,6 +77,14 @@ def _render_template(template: Any) -> str:
     return f"${{{NF_SHELL_QUOTE_HELPER}({_template_expression(template)})}}"
 
 
+def _render_command_token(token: Any) -> str:
+    """Render one argv token; flags collapse to nothing when their input is false."""
+    if isinstance(token, NfFlag):
+        quoted = f"{NF_SHELL_QUOTE_HELPER}({_groovy_literal(token.prefix)})"
+        return f"${{{token.name} ? {quoted} : ''}}"
+    return _render_template(token)
+
+
 def _render_glob(template: Any) -> str:
     if all(isinstance(segment, NfLiteral) for segment in template.segments):
         return _groovy_literal("".join(segment.value for segment in template.segments))
@@ -117,7 +126,7 @@ def _render_process(process: NfProcess) -> str:
         lines.extend(["", "    output:"])
         lines.extend(f"    {_process_output(port)}" for port in process.outputs)
 
-    command = " ".join(_render_template(token) for token in process.command.tokens)
+    command = " ".join(_render_command_token(token) for token in process.command.tokens)
     for operator, stream in (("<", process.command.stdin), (">", process.command.stdout), ("2>", process.command.stderr)):
         if stream is not None:
             command += f" {operator} {_render_template(stream)}"
