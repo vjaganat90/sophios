@@ -5,8 +5,6 @@ from sophios.input_output_nf import (
     render_nextflow_config,
     render_nextflow_params,
     write_nextflow_artifacts,
-    write_nextflow_files,
-    write_nextflow_json,
 )
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
@@ -61,6 +59,4 @@ __all__ = [
     "render_nextflow_config",
     "render_nextflow_params",
     "write_nextflow_artifacts",
-    "write_nextflow_files",
-    "write_nextflow_json",
 ]

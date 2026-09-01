@@ -17,6 +17,8 @@ from .nf_types import (
     NfProcessConnection,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
+    process_dependencies,
+    topological_order,
 )
 
 
@@ -41,41 +43,18 @@ def _write_text(path: Path, value: str) -> Path:
     return path
 
 
-def write_nextflow_json(workflow: ExecutableNextflowWorkflow, outdir: str | Path) -> Path:
-    """Write the stable JSON representation of a Nextflow workflow."""
-    _require_executable(workflow)
-    return _write_text(Path(outdir) / NEXTFLOW_JSON, f"{workflow.to_json()}\n")
+_CONTROL_ESCAPES = {code: f"\\u{code:04x}" for code in (*range(32), 127)}
+_GROOVY_LITERAL_TABLE = {ord("\\"): "\\\\", ord("'"): "\\'", **_CONTROL_ESCAPES}
+_GSTRING_FRAGMENT_TABLE = {ord("\\"): "\\\\", ord('"'): '\\"', ord("$"): "\\$", **_CONTROL_ESCAPES}
 
 
 def _groovy_literal(value: str) -> str:
-    escaped: list[str] = []
-    for character in value:
-        if character == "\\":
-            escaped.append("\\\\")
-        elif character == "'":
-            escaped.append("\\'")
-        elif ord(character) < 32 or ord(character) == 127:
-            escaped.append(f"\\u{ord(character):04x}")
-        else:
-            escaped.append(character)
-    return f"'{''.join(escaped)}'"
+    return f"'{value.translate(_GROOVY_LITERAL_TABLE)}'"
 
 
 def _groovy_gstring_fragment(value: str) -> str:
     """Escape literal data embedded beside typed GString references."""
-    escaped: list[str] = []
-    for character in value:
-        if character == "\\":
-            escaped.append("\\\\")
-        elif character == '"':
-            escaped.append('\\"')
-        elif character == "$":
-            escaped.append("\\$")
-        elif ord(character) < 32 or ord(character) == 127:
-            escaped.append(f"\\u{ord(character):04x}")
-        else:
-            escaped.append(character)
-    return "".join(escaped)
+    return value.translate(_GSTRING_FRAGMENT_TABLE)
 
 
 def _template_expression(template: Any) -> str:
@@ -116,17 +95,10 @@ def _render_number(value: int | float) -> str:
     return format(Decimal(str(value)), "f")
 
 
-def _process_output(port: NfPort, process: NfProcess) -> str:
-    emit = port.emit or port.name
-    if port.qualifier != "path":
-        raise ValueError(
-            f"invalid executable Nextflow workflow: process {process.name!r} output "
-            f"{port.name!r} uses unsupported qualifier {port.qualifier!r}"
-        )
-    if port.glob is None:
-        raise ValueError(f"invalid executable output {process.name}.{port.name}: missing glob")
-    target = _render_glob(port.glob)
-    return f"{port.qualifier} {target}, emit: {emit}"
+def _process_output(port: NfPort) -> str:
+    # NfProcess guarantees every output is a path port with a typed glob.
+    assert port.glob is not None
+    return f"path {_render_glob(port.glob)}, emit: {port.emit or port.name}"
 
 
 def _render_process(process: NfProcess) -> str:
@@ -143,7 +115,7 @@ def _render_process(process: NfProcess) -> str:
         lines.extend(f"    {port.qualifier} {port.name}" for port in process.inputs)
     if process.outputs:
         lines.extend(["", "    output:"])
-        lines.extend(f"    {_process_output(port, process)}" for port in process.outputs)
+        lines.extend(f"    {_process_output(port)}" for port in process.outputs)
 
     command = " ".join(_render_template(token) for token in process.command.tokens)
     for operator, stream in (("<", process.command.stdin), (">", process.command.stdout), ("2>", process.command.stderr)):
@@ -160,23 +132,12 @@ def _process_map(workflow: ExecutableNextflowWorkflow) -> dict[str, NfProcess]:
 
 
 def _incoming_connections(workflow: ExecutableNextflowWorkflow) -> dict[tuple[str, str], NfConnection]:
-    incoming: dict[tuple[str, str], NfConnection] = {}
-    for connection in workflow.connections:
-        match connection:
-            case NfWorkflowInputConnection(_, to_process, to_port) | NfProcessConnection(
-                _, _, to_process, to_port
-            ):
-                pass
-            case NfWorkflowOutputConnection():
-                continue
-        key = (to_process, to_port)
-        if key in incoming:
-            raise ValueError(
-                f"Nextflow Phase 1 supports one source per process input; "
-                f"{to_process}.{to_port} has more than one"
-            )
-        incoming[key] = connection
-    return incoming
+    # The executable IR rejects multiple sources per input at construction.
+    return {
+        (connection.to_process, connection.to_port): connection
+        for connection in workflow.connections
+        if isinstance(connection, (NfWorkflowInputConnection, NfProcessConnection))
+    }
 
 
 def _source_expression(connection: NfConnection, processes: Mapping[str, NfProcess]) -> str:
@@ -194,34 +155,20 @@ def _source_expression(connection: NfConnection, processes: Mapping[str, NfProce
 def _ordered_processes(workflow: ExecutableNextflowWorkflow) -> list[NfProcess]:
     """Return processes in stable topological order and reject cycles."""
     position = {process.name: index for index, process in enumerate(workflow.processes)}
-    dependencies: dict[str, set[str]] = {
-        process.name: set() for process in workflow.processes
-    }
-    for connection in workflow.connections:
-        if isinstance(connection, NfProcessConnection):
-            dependencies[connection.to_process].add(connection.from_process)
-
-    ordered: list[NfProcess] = []
-    remaining = set(dependencies)
-    while remaining:
-        ready = sorted(
-            (name for name in remaining if not (dependencies[name] & remaining)),
-            key=position.__getitem__,
-        )
-        if not ready:
-            raise ValueError("Nextflow workflow connections contain a cycle")
-        for name in ready:
-            ordered.append(workflow.processes[position[name]])
-            remaining.remove(name)
-    return ordered
+    names = topological_order(
+        process_dependencies(position, workflow.connections),
+        error="Nextflow workflow connections contain a cycle",
+        key=position.__getitem__,
+    )
+    return [workflow.processes[position[name]] for name in names]
 
 
 def _workflow_input_names(workflow: ExecutableNextflowWorkflow) -> list[str]:
-    names: list[str] = []
-    for connection in workflow.connections:
-        if isinstance(connection, NfWorkflowInputConnection) and connection.from_port not in names:
-            names.append(connection.from_port)
-    return names
+    return list(dict.fromkeys(
+        connection.from_port
+        for connection in workflow.connections
+        if isinstance(connection, NfWorkflowInputConnection)
+    ))
 
 
 def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
@@ -235,13 +182,12 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
 
     lines.append("    main:")
     for process in _ordered_processes(workflow):
-        arguments: list[str] = []
-        for port in process.inputs:
-            connection = incoming.get((process.name, port.name))
-            if connection is None:
-                raise ValueError(f"process input {process.name}.{port.name} is not connected")
-            arguments.append(_source_expression(connection, processes))
-        lines.append(f"    {process.name}({', '.join(arguments)})")
+        # The executable IR guarantees every process input is connected.
+        arguments = ", ".join(
+            _source_expression(incoming[(process.name, port.name)], processes)
+            for port in process.inputs
+        )
+        lines.append(f"    {process.name}({arguments})")
 
     workflow_outputs = [
         connection
@@ -314,19 +260,6 @@ def render_nextflow_params(workflow: ExecutableNextflowWorkflow) -> str:
         ensure_ascii=False,
         allow_nan=False,
     ) + "\n"
-
-
-def write_nextflow_files(
-    workflow: ExecutableNextflowWorkflow,
-    outdir: str | Path,
-) -> tuple[Path, Path, Path]:
-    """Write ``workflow.nf``, ``nextflow.config``, and the parameters file."""
-    output = Path(outdir)
-    return (
-        _write_text(output / NEXTFLOW_SCRIPT, render_nextflow(workflow)),
-        _write_text(output / NEXTFLOW_CONFIG, render_nextflow_config(workflow)),
-        _write_text(output / NEXTFLOW_PARAMS, render_nextflow_params(workflow)),
-    )
 
 
 def write_nextflow_artifacts(

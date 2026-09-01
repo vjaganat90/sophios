@@ -1,7 +1,8 @@
 """Validated executable intermediate-representation types for Nextflow DSL2."""
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from graphlib import CycleError, TopologicalSorter
 import json
 import math
 from types import MappingProxyType
@@ -493,6 +494,42 @@ class NfWorkflowOutputConnection:
 NfConnection = NfWorkflowInputConnection | NfProcessConnection | NfWorkflowOutputConnection
 
 
+def process_dependencies(
+    names: Iterable[str],
+    connections: Iterable[NfConnection],
+) -> dict[str, set[str]]:
+    """Map each process name to the process names it depends on."""
+    dependencies: dict[str, set[str]] = {name: set() for name in names}
+    for connection in connections:
+        if isinstance(connection, NfProcessConnection):
+            dependencies[connection.to_process].add(connection.from_process)
+    return dependencies
+
+
+def topological_order(
+    dependencies: Mapping[str, Iterable[str]],
+    *,
+    error: str,
+    key: Callable[[str], Any] | None = None,
+) -> list[str]:
+    """Order process names topologically or raise ``ValueError`` on a cycle.
+
+    Ready names are emitted in batches; ``key`` orders each batch so callers
+    that need it get a deterministic order.
+    """
+    sorter = TopologicalSorter(dependencies)
+    try:
+        sorter.prepare()
+    except CycleError as exc:
+        raise ValueError(error) from exc
+    ordered: list[str] = []
+    while sorter.is_active():
+        batch = sorter.get_ready()
+        ordered.extend(sorted(batch, key=key) if key else batch)
+        sorter.done(*batch)
+    return ordered
+
+
 def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
     item = _mapping(value, type_name="NfConnection")
     match item.get("kind"):
@@ -612,12 +649,7 @@ class ExecutableNextflowWorkflow:
                         raise ValueError(f"workflow contains duplicate output emit name {to_port!r}")
                     workflow_outputs.add(to_port)
 
-        remaining = set(dependencies)
-        while remaining:
-            ready = {name for name in remaining if not (dependencies[name] & remaining)}
-            if not ready:
-                raise ValueError("workflow connections contain a cycle")
-            remaining -= ready
+        topological_order(dependencies, error="workflow connections contain a cycle")
         expected_inputs = {
             (process.name, port.name)
             for process in self.processes

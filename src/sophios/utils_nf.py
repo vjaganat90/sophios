@@ -242,10 +242,7 @@ def _argument_items(arguments: list[Any]) -> list[tuple[tuple[int, int, int], tu
 
 def _input_binding_items(
     inputs: Mapping[str, Any],
-    *,
-    start: int,
 ) -> list[tuple[tuple[int, int, str], tuple[NfTemplate, ...]]]:
-    del start
     items: list[tuple[tuple[int, int, str], tuple[NfTemplate, ...]]] = []
     for raw_name, definition in inputs.items():
         input_definition = _as_mapping(definition, error=f"CWL input {raw_name!r} must be a mapping")
@@ -270,7 +267,7 @@ def _input_binding_items(
 def _command_items(tool: Mapping[str, Any]) -> tuple[NfTemplate, ...]:
     arguments = _as_list(tool.get("arguments", []), error="CommandLineTool arguments must be a list")
     inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
-    ordered = sorted([*_argument_items(arguments), *_input_binding_items(inputs, start=0)])
+    ordered = sorted([*_argument_items(arguments), *_input_binding_items(inputs)])
     return tuple(token for _key, tokens in ordered for token in tokens)
 
 
@@ -511,6 +508,18 @@ _STEP_CONSUMED_FIELDS = frozenset({
 _STEP_INPUT_CONSUMED_FIELDS = frozenset({"source"})
 
 
+def _default_value_findings(definition: Mapping[str, Any], *, path: str) -> list[str]:
+    """Validate a declared scalar default against the Phase 1 value subset."""
+    if "default" not in definition:
+        return []
+    default = definition["default"]
+    if default is None or isinstance(default, (Mapping, list)):
+        return [f"{path}.default: Phase 1 supports JSON scalar defaults only"]
+    if not _phase1_value_matches(definition.get("type"), default):
+        return [f"{path}.default: value does not match its supported CWL type"]
+    return []
+
+
 def _unconsumed_field_findings(
     value: Mapping[str, Any],
     *,
@@ -680,19 +689,7 @@ def _tool_capability_findings(
                         path=input_path,
                     )
                 )
-                if "default" in raw_definition and (
-                    raw_definition["default"] is None
-                    or isinstance(raw_definition["default"], (Mapping, list))
-                ):
-                    findings.append(
-                        f"{input_path}.default: Phase 1 supports JSON scalar defaults only"
-                    )
-                elif "default" in raw_definition and not _phase1_value_matches(
-                    raw_definition.get("type"), raw_definition["default"]
-                ):
-                    findings.append(
-                        f"{input_path}.default: value does not match its supported CWL type"
-                    )
+                findings.extend(_default_value_findings(raw_definition, path=input_path))
                 binding = raw_definition.get("inputBinding")
                 if not isinstance(binding, Mapping):
                     continue
@@ -829,18 +826,8 @@ def _workflow_capability_findings(
                         )
                     )
                     has_default = "default" in definition
-                    default = definition.get("default")
                     cwl_type = definition.get("type")
-                    if has_default and (
-                        default is None or isinstance(default, (Mapping, list))
-                    ):
-                        findings.append(
-                            f"{input_path}.default: Phase 1 supports JSON scalar defaults only"
-                        )
-                    elif has_default and not _phase1_value_matches(cwl_type, default):
-                        findings.append(
-                            f"{input_path}.default: value does not match its supported CWL type"
-                        )
+                    findings.extend(_default_value_findings(definition, path=input_path))
                 else:
                     has_default = False
                     cwl_type = definition
