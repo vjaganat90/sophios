@@ -420,6 +420,57 @@ def test_four_step_checked_in_adapter_workflow_executes_end_to_end(
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+def test_mixed_adapter_and_builder_workflow_executes_end_to_end(tmp_path: Path) -> None:
+    """One workflow mixing an imported adapter with tool_builder steps runs end to end.
+
+    Deliberate exception to the one-idiom-per-test rule: composing both public
+    construction surfaces in a single executed workflow is the claim under test.
+    """
+    message = "mixed construction, one backend"
+    emit = Step(clt_path=REPO_ROOT / "cwl_adapters" / "echo.cwl", step_name="emit")
+    emit.inputs.message = message
+
+    copy_tool = (
+        CommandLineTool(
+            "copy_file",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="copy.txt")),
+        )
+        .base_command("cp")
+        .argument("copy.txt", position=2)
+    )
+    duplicate = Step(copy_tool, step_name="duplicate")
+    duplicate.inputs.source = emit.outputs.stdout
+
+    count_tool = (
+        CommandLineTool(
+            "count_bytes",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="count.txt")),
+        )
+        .base_command("wc", "-c")
+        .stdout("count.txt")
+    )
+    count = Step(count_tool, step_name="count")
+    count.inputs.source = emit.outputs.stdout
+
+    workflow = Workflow([emit, duplicate, count], "nextflow_mixed_e2e")
+    workflow.outputs.copy = duplicate.outputs.result
+    workflow.outputs.count = count.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    copies = list((tmp_path / "work").rglob("copy.txt"))
+    assert [path.read_text(encoding="utf-8") for path in copies] == [f"{message}\n"]
+    counts = list((tmp_path / "work").rglob("count.txt"))
+    assert len(counts) == 1
+    counted_bytes = int(counts[0].read_text(encoding="utf-8").split()[0])
+    assert counted_bytes == len(message) + 1
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_reader_writer_runtime_roundtrip(tmp_path: Path) -> None:
     original_dir = tmp_path / "original"
     regenerated_dir = tmp_path / "regenerated"
