@@ -220,8 +220,6 @@ def _parse_process(name: str, body: list[str]) -> tuple[NextflowProcess, tuple[s
                 unparsed.append(stripped)
             else:
                 memory = candidate
-        elif stripped.startswith("// TODO: scatter"):
-            unparsed.append(stripped)
         else:
             unparsed.append(stripped)
 
@@ -288,25 +286,31 @@ def _parse_workflow(
                     f"workflow call {process.name} supplies {len(arguments)} inputs; "
                     f"the process declares {len(process.inputs)}"
                 )
+            # One unparsable argument makes the whole call opaque: recording a
+            # partial connection set would silently misrepresent the topology.
+            call_connections: list[NfConnection] = []
             for port, argument in zip(process.inputs, arguments, strict=True):
                 source = _PROCESS_OUTPUT.match(argument)
                 if source is None:
                     if any(token in argument for token in ("(", ")", "{", "}")):
-                        unparsed.append(stripped)
-                        continue
-                    connections.append(
+                        break
+                    call_connections.append(
                         NfWorkflowInputConnection(argument, process.name, port.name)
                     )
                     continue
                 source_process = process_by_name.get(source.group(1))
                 if source_process is None:
                     raise ValueError(f"workflow references unknown process {source.group(1)!r}")
-                connections.append(NfProcessConnection(
+                call_connections.append(NfProcessConnection(
                     source_process.name,
                     _output_name(source_process, source.group(2)),
                     process.name,
                     port.name,
                 ))
+            else:
+                connections.extend(call_connections)
+                continue
+            unparsed.append(stripped)
             continue
         if section == "emit":
             if "=" in stripped:
