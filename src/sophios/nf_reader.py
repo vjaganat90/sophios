@@ -17,6 +17,8 @@ from .nf_types import (
     NfProcessConnection,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
+    process_dependencies,
+    topological_order,
 )
 from .input_output_nf import NF_SHELL_QUOTE_FUNCTION, render_nextflow
 
@@ -333,16 +335,13 @@ def _parse_workflow(
 
 
 def _validate_acyclic(workflow: NextflowDocument) -> None:
-    dependencies: dict[str, set[str]] = {process.name: set() for process in workflow.processes}
-    for connection in workflow.connections:
-        if isinstance(connection, NfProcessConnection):
-            dependencies[connection.to_process].add(connection.from_process)
-    remaining = set(dependencies)
-    while remaining:
-        ready = {name for name in remaining if not (dependencies[name] & remaining)}
-        if not ready:
-            raise ValueError("imported Nextflow workflow contains a cycle")
-        remaining -= ready
+    topological_order(
+        process_dependencies(
+            (process.name for process in workflow.processes),
+            workflow.connections,
+        ),
+        error="imported Nextflow workflow contains a cycle",
+    )
 
 
 def parse_nf_text(text: str, *, params: Mapping[str, Any] | None = None) -> NextflowDocument:
