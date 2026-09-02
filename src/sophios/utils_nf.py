@@ -730,6 +730,15 @@ def _tool_capability_findings(
                     findings.append(
                         f"{input_binding_path}.shellQuote: shellQuote false is deferred to Phase 2"
                     )
+                if (
+                    _required_type(raw_definition.get("type")) == "boolean"
+                    and binding.get("valueFrom") is not None
+                ):
+                    findings.append(
+                        f"{input_binding_path}.valueFrom: valueFrom on a boolean inputBinding is "
+                        "deferred to Phase 2; CWL applies boolean flag semantics to the "
+                        "valueFrom result, which has no approved lowering"
+                    )
         case _:
             pass
 
@@ -980,6 +989,98 @@ def _absent_optional_findings(
                     else "resolves to an absent required value"
                 )
                 findings.append(f"steps[{step_index}].run.inputs.{raw_name}: {detail}")
+    return findings
+
+
+def _is_flag_binding(definition: Mapping[str, Any]) -> bool:
+    """Return whether a tool input will lower to a conditional flag token."""
+    match definition.get("inputBinding"):
+        case Mapping() as binding:
+            pass
+        case _:
+            return False
+    return (
+        _required_type(definition.get("type")) == "boolean"
+        and binding.get("valueFrom") is None
+        and isinstance(binding.get("prefix"), str)
+        and bool(binding.get("prefix"))
+    )
+
+
+def _source_types(
+    workflow: Mapping[str, Any],
+    steps: list[Mapping[str, Any]],
+    sub_trees: list[Any],
+) -> dict[str, Any]:
+    """Map every wireable source name to the CWL type it carries."""
+    types: dict[str, Any] = {}
+    match workflow.get("inputs", {}):
+        case Mapping() as inputs:
+            for raw_name, definition in inputs.items():
+                declared = definition.get("type") if isinstance(definition, Mapping) else definition
+                types[str(raw_name)] = declared
+        case _:
+            pass
+    for step, child in zip(steps, sub_trees, strict=True):
+        match step.get("id"), child:
+            case str() as raw_id, RoseTree(data=NodeData(compiled_cwl=Mapping() as tool)):
+                pass
+            case _:
+                continue
+        outputs = tool.get("outputs", {})
+        if not isinstance(outputs, Mapping):
+            continue
+        for raw_port, definition in outputs.items():
+            declared = definition.get("type") if isinstance(definition, Mapping) else definition
+            for step_key in (raw_id, raw_id.rsplit("#", maxsplit=1)[-1]):
+                types[f"{step_key}/{raw_port}"] = declared
+    return types
+
+
+def _flag_source_findings(
+    workflow: Mapping[str, Any],
+    steps: list[Mapping[str, Any]],
+    sub_trees: list[Any],
+) -> list[str]:
+    """Require a boolean source for every input lowered to a flag token.
+
+    A flag renders as a Groovy ternary over its channel value, so a
+    non-boolean source would let Groovy truthiness decide the flag: a staged
+    path is always truthy and the strings ``"false"`` and ``"0"`` are too.
+    """
+    source_types = _source_types(workflow, steps, sub_trees)
+    findings: list[str] = []
+    for step_index, (step, child) in enumerate(zip(steps, sub_trees, strict=True)):
+        match child:
+            case RoseTree(data=NodeData(compiled_cwl=Mapping() as tool)):
+                pass
+            case _:
+                continue
+        tool_inputs = tool.get("inputs", {})
+        step_inputs = step.get("in", {})
+        if not isinstance(tool_inputs, Mapping) or not isinstance(step_inputs, Mapping):
+            continue
+        for raw_name, definition in tool_inputs.items():
+            if not isinstance(definition, Mapping) or not _is_flag_binding(definition):
+                continue
+            raw_source = step_inputs.get(raw_name)
+            if raw_source is None:
+                continue
+            try:
+                sources = _source_values(
+                    raw_source,
+                    context=f"step input {step_index}.{raw_name}",
+                )
+            except ValueError:
+                continue
+            for source in sources:
+                declared = source_types.get(source, source_types.get(str(source)))
+                if declared is not None and _required_type(declared) == "boolean":
+                    continue
+                findings.append(
+                    f"steps[{step_index}].in.{raw_name}: a boolean flag input requires a "
+                    f"boolean source; {source!r} declares {declared!r}"
+                )
     return findings
 
 
@@ -1283,6 +1384,7 @@ def cwl_rosetree_to_nextflow(rose_tree: RoseTree) -> ExecutableNextflowWorkflow:
     ]
     findings.extend(_workflow_capability_findings(workflow, node_data, steps))
     findings.extend(_absent_optional_findings(workflow, node_data, steps, sub_trees))
+    findings.extend(_flag_source_findings(workflow, steps, sub_trees))
     findings.extend(_container_policy_findings(sub_trees))
     _raise_capability_findings(findings)
     processes = [
