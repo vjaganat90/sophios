@@ -104,6 +104,96 @@ def test_accepts_boolean_flag_bindings_for_both_values(value: bool) -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize("value", [False, True])
+def test_rejects_value_from_on_a_boolean_binding(value: bool) -> None:
+    """CWL applies boolean semantics after valueFrom; Phase 2 has no such lowering."""
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {
+                    "position": 1,
+                    "prefix": "--verbose",
+                    "valueFrom": "$(inputs.verbose)",
+                },
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("FLAGS", **{"in": {"verbose": "verbose"}})],
+            inputs={"verbose": {"type": "boolean"}},
+        ),
+        [flags],
+        workflow_inputs={"verbose": value},
+    )
+
+    with pytest.raises(ValueError, match=r"valueFrom.*boolean"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_file_output_wired_into_a_boolean_flag() -> None:
+    """A staged path is always truthy in Groovy, so the flag would never clear."""
+    producer = tool("MAKE", outputs={"out": {"type": "File", "outputBinding": {"glob": "f.txt"}}})
+    consumer = tool(
+        "SORT",
+        inputs={"reverse": {"type": "boolean", "inputBinding": {"position": 1, "prefix": "-r"}}},
+    )
+    rose = synthetic_rose(
+        workflow_doc([
+            step("MAKE", out=["out"]),
+            step("SORT", **{"in": {"reverse": "MAKE/out"}}),
+        ]),
+        [producer, consumer],
+    )
+
+    with pytest.raises(ValueError, match=r"reverse.*boolean source"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("supplied", ["false", "0", ""])
+def test_rejects_string_source_wired_into_a_boolean_flag(supplied: str) -> None:
+    """Groovy truthiness of a string would decide the flag, not the source value."""
+    consumer = tool(
+        "SORT",
+        inputs={"reverse": {"type": "boolean", "inputBinding": {"position": 1, "prefix": "-r"}}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("SORT", **{"in": {"reverse": "flagval"}})],
+            inputs={"flagval": {"type": "string"}},
+        ),
+        [consumer],
+        workflow_inputs={"flagval": supplied},
+    )
+
+    with pytest.raises(ValueError, match=r"reverse.*boolean source"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_accepts_a_boolean_source_wired_into_a_boolean_flag() -> None:
+    """The supported wiring stays supported: boolean source into a flag input."""
+    consumer = tool(
+        "SORT",
+        inputs={"reverse": {"type": "boolean", "inputBinding": {"position": 1, "prefix": "-r"}}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("SORT", **{"in": {"reverse": "flagval"}})],
+            inputs={"flagval": {"type": "boolean"}},
+        ),
+        [consumer],
+        workflow_inputs={"flagval": False},
+    )
+
+    assert cwl_rosetree_to_nextflow(rose).params == {"flagval": False}
+
+
+@pytest.mark.fast
 def test_rejects_absent_optional_boolean_flag() -> None:
     flags = tool(
         "FLAGS",
