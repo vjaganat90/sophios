@@ -747,6 +747,9 @@ class ExecutableNextflowWorkflow:
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
     SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3})
+    # Each additive token or segment kind declares the version that
+    # introduced it, so the subset property is enforced rather than assumed.
+    KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType({"flag": 3})
     REPRESENTATION_KIND: ClassVar[str] = "executable"
 
     name: str
@@ -938,6 +941,7 @@ class ExecutableNextflowWorkflow:
             raise ValueError(
                 f"unsupported executable Nextflow schema version {item['schema_version']!r}"
             )
+        cls._reject_newer_kinds(item, declared=item["schema_version"])
         if item["representation_kind"] != cls.REPRESENTATION_KIND:
             raise ValueError(
                 f"unsupported Nextflow representation kind {item['representation_kind']!r}"
@@ -954,6 +958,25 @@ class ExecutableNextflowWorkflow:
                 raise TypeError(
                     "ExecutableNextflowWorkflow processes and connections must be lists"
                 )
+
+    @classmethod
+    def _reject_newer_kinds(cls, value: Any, *, declared: int) -> None:
+        """Reject a payload carrying a kind newer than its declared version."""
+        match value:
+            case Mapping() as mapping:
+                introduced = cls.KIND_SCHEMA_VERSIONS.get(str(mapping.get("kind")))
+                if introduced is not None and declared < introduced:
+                    raise ValueError(
+                        f"{mapping['kind']!r} requires executable Nextflow schema version "
+                        f"{introduced}, but the payload declares schema version {declared}"
+                    )
+                for item in mapping.values():
+                    cls._reject_newer_kinds(item, declared=declared)
+            case list() as items:
+                for item in items:
+                    cls._reject_newer_kinds(item, declared=declared)
+            case _:
+                pass
 
     @classmethod
     def from_json(cls, value: str) -> Self:

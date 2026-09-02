@@ -26,7 +26,7 @@ from sophios.nf_types import (
 from sophios.utils_nf import cwl_rosetree_to_nextflow
 from sophios.wic_types import RoseTree
 
-from .testkit import command, output_port, runtime_workflow
+from .testkit import command, flag_workflow, output_port, runtime_workflow
 
 
 @pytest.mark.serial
@@ -162,6 +162,18 @@ def test_renders_boolean_flag_as_a_conditional_argv_word() -> None:
     ))
 
     assert "${reverse ? __sophios_shell_quote_9f72e('-r') : ''}" in rendered
+
+
+@pytest.mark.serial
+def test_flag_workflow_artifacts_are_byte_stable(tmp_path: Path) -> None:
+    workflow = flag_workflow()
+    paths = write_nextflow_artifacts(workflow, tmp_path)
+    first = {path.name: path.read_bytes() for path in paths}
+
+    write_nextflow_artifacts(workflow, tmp_path)
+
+    assert {path.name: path.read_bytes() for path in paths} == first
+    assert render_nextflow(workflow) == render_nextflow(workflow)
 
 
 @pytest.mark.fast

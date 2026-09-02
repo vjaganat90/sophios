@@ -13,6 +13,7 @@ from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfCommand,
+    NfFlag,
     NfInputReference,
     NfLiteral,
     NfPort,
@@ -172,6 +173,33 @@ def runtime_workflow() -> ExecutableNextflowWorkflow:
             NfWorkflowOutputConnection("COPY", "copy", "result"),
         ],
         {"message": "hello from Sophios"},
+    )
+
+
+def flag_workflow() -> ExecutableNextflowWorkflow:
+    """A one-process pipeline whose command carries a conditional flag token."""
+    process = NfProcess(
+        "SORT",
+        [NfPort("reverse", "val"), NfPort("source", "path")],
+        [output_port("result", "sorted.txt")],
+        NfCommand(
+            (
+                template("sort"),
+                NfFlag("reverse", "-r"),
+                template(ref("source")),
+            ),
+            stdout=template("sorted.txt"),
+        ),
+    )
+    return ExecutableNextflowWorkflow(
+        "PIPELINE",
+        [process],
+        [
+            NfWorkflowInputConnection("reverse", "SORT", "reverse"),
+            NfWorkflowInputConnection("source", "SORT", "source"),
+            NfWorkflowOutputConnection("SORT", "result", "result"),
+        ],
+        {"reverse": True, "source": "lines.txt"},
     )
 
 
