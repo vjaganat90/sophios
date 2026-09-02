@@ -246,14 +246,16 @@ def test_equal_position_input_bindings_order_by_field_name(order: tuple[str, ...
         for name in order
     }
     command = lower_command({"baseCommand": "cmd", "arguments": ["a", "b", "c"], "inputs": inputs})
+    templates = [token for token in command.tokens if isinstance(token, NfTemplate)]
+    assert len(templates) == len(command.tokens), "string bindings never lower to flag tokens"
     references = [
         segment.name
-        for token in command.tokens
+        for token in templates
         for segment in token.segments
         if isinstance(segment, NfInputReference)
     ]
     literals: list[str] = []
-    for token in command.tokens[:4]:
+    for token in templates[:4]:
         segment = token.segments[0]
         assert isinstance(segment, NfLiteral)
         literals.append(segment.value)
