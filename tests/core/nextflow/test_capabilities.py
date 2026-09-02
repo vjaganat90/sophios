@@ -10,7 +10,7 @@ import pytest
 
 from sophios.api.python.workflow import CompiledWorkflow
 from sophios.input_output_nf import render_nextflow
-from sophios.nf_types import NfResources
+from sophios.nf_types import NfFlag, NfLiteral, NfResources, NfTemplate
 from sophios.utils_nf import cwl_rosetree_to_nextflow
 from sophios.wic_types import RoseTree
 
@@ -609,3 +609,56 @@ def test_rejects_unknown_connection_source() -> None:
     )
     with pytest.raises(ValueError, match="unknown source process"):
         cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_separate_without_a_prefix() -> None:
+    """cwltool raises for separate without prefix, so the backend must not accept it."""
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {"position": 1, "separate": False},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("FLAGS", **{"in": {"verbose": "verbose"}})],
+            inputs={"verbose": {"type": "boolean"}},
+        ),
+        [flags],
+        workflow_inputs={"verbose": True},
+    )
+
+    with pytest.raises(ValueError, match="separate cannot be specified without a prefix"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_a_command_of_only_flags_still_runs_a_program() -> None:
+    """A flag-only argv would render an empty script that silently exits zero."""
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {"position": 1, "prefix": "--verbose"},
+            }
+        },
+        baseCommand=None,
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("FLAGS", **{"in": {"verbose": "verbose"}})],
+            inputs={"verbose": {"type": "boolean"}},
+        ),
+        [flags],
+        workflow_inputs={"verbose": True},
+    )
+
+    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+
+    assert tokens[0] == NfTemplate((NfLiteral("true"),))
+    assert tokens[1] == NfFlag("verbose", "--verbose")

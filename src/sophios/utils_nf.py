@@ -226,6 +226,9 @@ def _position(value: Any, *, default: int) -> int:
 def _binding_tokens(prefix: Any, value: NfTemplate, *, separate: Any = True) -> tuple[NfTemplate, ...]:
     match prefix:
         case None:
+            if separate is not None and separate is not True:
+                # cwltool raises for separate without prefix, type-independently.
+                raise ValueError("CWL separate cannot be specified without a prefix")
             return (value,)
         case str() as text:
             prefix_template = _template(text, context="CWL command prefix")
@@ -274,6 +277,8 @@ def _input_binding_items(
             # when the flag is false or no prefix is declared.
             match binding.get("prefix"):
                 case None:
+                    if binding.get("separate") is not None:
+                        raise ValueError("CWL separate cannot be specified without a prefix")
                     continue
                 case str() as prefix if prefix:
                     items.append(((position, 1, str(raw_name)), (NfFlag(name, prefix),)))
@@ -315,8 +320,9 @@ def _command(tool: Mapping[str, Any]) -> NfCommand:
             raise ValueError("CommandLineTool baseCommand must be a string or list of strings")
 
     tokens.extend(_command_items(tool))
-    if not tokens:
-        tokens.append(_template("true", context="empty CWL command"))
+    if not any(isinstance(token, NfTemplate) for token in tokens):
+        # A command made only of conditional flags has nothing to execute.
+        tokens.insert(0, _template("true", context="empty CWL command"))
 
     def stream(name: str) -> NfTemplate | None:
         return None if tool.get(name) is None else _template(tool[name], context=f"CWL {name}")
