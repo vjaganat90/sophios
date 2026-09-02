@@ -206,6 +206,28 @@ def test_hydration_accepts_earlier_subset_schema_versions() -> None:
 
 
 @pytest.mark.fast
+def test_hydration_rejects_a_kind_newer_than_its_declared_version() -> None:
+    """A version is a claim about the value space, so it has to be enforced."""
+    payload = ExecutableNextflowWorkflow(
+        "wf",
+        [NfProcess(
+            "SORT",
+            [NfPort("reverse", "val")],
+            [],
+            NfCommand((NfTemplate((NfLiteral("sort"),)), NfFlag("reverse", "-r"))),
+        )],
+        [NfWorkflowInputConnection("reverse", "SORT", "reverse")],
+        {"reverse": True},
+    ).to_dict()
+
+    assert ExecutableNextflowWorkflow.from_dict(payload).to_dict() == payload
+
+    payload["schema_version"] = 2
+    with pytest.raises(ValueError, match="flag.*schema version 2"):
+        ExecutableNextflowWorkflow.from_dict(payload)
+
+
+@pytest.mark.fast
 def test_rejects_duplicate_process_names() -> None:
     process = NfProcess("P", [], [], command("true"))
     with pytest.raises(ValueError, match="duplicate process"):

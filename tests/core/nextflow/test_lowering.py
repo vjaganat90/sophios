@@ -11,6 +11,7 @@ from sophios import inference
 from sophios.input_output_nf import render_nextflow
 from sophios.nf_types import (
     NfFlag,
+    NfInputReference,
     NfLiteral,
     NfResources,
     NfTemplate,
@@ -119,6 +120,37 @@ def test_boolean_flag_lowers_to_a_conditional_flag_token() -> None:
     command = cwl_rosetree_to_nextflow(rose).processes[0].command
 
     assert command.tokens[1] == NfFlag("reverse", "-r")
+
+
+@pytest.mark.fast
+def test_flag_tokens_take_their_cwl_position_among_other_bindings() -> None:
+    """A flag is ordered by position like any other binding, not appended."""
+    sort_tool = tool(
+        "SORT",
+        inputs={
+            "source": {"type": "File", "inputBinding": {"position": 3}},
+            "reverse": {"type": "boolean", "inputBinding": {"position": 2, "prefix": "-r"}},
+        },
+        arguments=[{"position": 1, "valueFrom": "--stable"}],
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("SORT", **{"in": {"source": "source", "reverse": "reverse"}})],
+            inputs={"source": {"type": "File"}, "reverse": {"type": "boolean"}},
+        ),
+        [sort_tool],
+        workflow_inputs={
+            "source": {"class": "File", "path": "in.txt"},
+            "reverse": True,
+        },
+    )
+
+    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+
+    assert tokens[0] == NfTemplate((NfLiteral("SORT"),))
+    assert tokens[1] == NfTemplate((NfLiteral("--stable"),))
+    assert tokens[2] == NfFlag("reverse", "-r")
+    assert tokens[3] == NfTemplate((NfInputReference("source"),))
 
 
 @pytest.mark.fast

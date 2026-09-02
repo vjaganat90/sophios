@@ -10,7 +10,11 @@ from typing import Any, cast
 import pytest
 
 from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
-from sophios.input_output_nf import render_nextflow, write_nextflow_artifacts
+from sophios.input_output_nf import (
+    render_nextflow,
+    render_nextflow_params,
+    write_nextflow_artifacts,
+)
 from sophios.nf_reader import (
     NextflowDocument,
     NextflowPort,
@@ -30,7 +34,7 @@ from sophios.nf_types import (
     NfWorkflowOutputConnection,
 )
 
-from .testkit import command, output_port, ref, runtime_workflow, template
+from .testkit import command, flag_workflow, output_port, ref, runtime_workflow, template
 
 
 @pytest.mark.fast
@@ -50,6 +54,37 @@ def test_generated_source_roundtrips_through_reader(tmp_path: Path) -> None:
     assert promote_nextflow_document(parsed) == expected
     with pytest.raises(TypeError, match="requires ExecutableNextflowWorkflow"):
         render_nextflow(cast(Any, parsed))
+
+
+@pytest.mark.fast
+def test_flag_artifacts_parse_and_promote(tmp_path: Path) -> None:
+    """Promotion is byte-identity bound, so a new token shape must round-trip."""
+    expected = flag_workflow()
+    write_nextflow_artifacts(expected, tmp_path)
+
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+
+    assert parsed.opaque_regions == ()
+    assert promote_nextflow_document(parsed) == expected
+
+
+@pytest.mark.fast
+def test_prior_schema_version_artifacts_still_promote(tmp_path: Path) -> None:
+    """A v2-era artifact pair keeps promoting; renderer output is the contract."""
+    workflow = runtime_workflow()
+    payload = workflow.to_dict()
+    payload["schema_version"] = 2
+    (tmp_path / "nextflow_workflow.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (tmp_path / "workflow.nf").write_text(render_nextflow(workflow), encoding="utf-8")
+    (tmp_path / "nextflow_params.json").write_text(
+        render_nextflow_params(workflow), encoding="utf-8"
+    )
+
+    parsed = parse_nf_file(tmp_path / "workflow.nf")
+
+    assert promote_nextflow_document(parsed) == workflow
 
 
 @pytest.mark.fast
