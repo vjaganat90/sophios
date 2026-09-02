@@ -140,6 +140,8 @@ Serialized IR declares a schema version and representation kind. Hydration valid
 
 Additive extensions — new typed token or segment kinds — bump the schema version. Serialization always writes the current version. Hydration accepts the current version plus earlier versions whose value spaces are strict subsets of the current model; every other version is rejected.
 
+Subset acceptance is enforced, not documentary: each additive token or segment kind declares the version that introduced it, and hydration rejects a payload that carries a kind newer than its declared `schema_version`. Version acceptance alone is not a compatibility claim — the promotion path compares rendered output byte-for-byte against stored source, so renderer output for previously representable models is the binding compatibility surface, and changing it invalidates existing artifact pairs regardless of the version number.
+
 ---
 
 ## 6. Semantic lowering contracts
@@ -148,7 +150,13 @@ Additive extensions — new typed token or segment kinds — bump the schema ver
 
 CWL command construction is normalized before rendering. Ordering follows the pinned CWL version, including defaults and tie-breaking. Command parts remain typed as literal data or interpolation references; quoting is decided per token or segment, never by scanning a completed string for `$`.
 
-**Boolean flags (approved Phase 2 lowering).** A non-optional `boolean` input with an `inputBinding` and no `valueFrom` lowers to a typed conditional flag token that references the input by name and carries a non-empty prefix. At runtime, `true` renders the shell-quoted prefix as exactly one argv word and `false` renders nothing; a boolean binding without a prefix contributes nothing for either value. Flag tokens are valid only in command token position — never in globs or stream targets — and only against `val` ports. `valueFrom` on a boolean binding and absent optional booleans keep their existing rejection states.
+**Boolean flags (approved Phase 2 lowering).** A `boolean` input with an `inputBinding` and no `valueFrom` lowers to a typed conditional flag token that references the input by name and carries a non-empty prefix. At runtime, `true` renders the shell-quoted prefix as exactly one argv word and `false` renders nothing; a boolean binding without a prefix contributes nothing for either value. Flag tokens are valid only in command token position — never in globs or stream targets — and only against `val` ports. An optional boolean lowers the same way when a value is present; an absent optional value keeps rejecting under the option-lowering rule above.
+
+The rendered flag is a conditional over its channel value, so the lowering is sound only when that value is a JSON boolean at runtime. Capability analysis therefore requires every input consumed by a flag token to resolve to a boolean-typed source, whether that source is a workflow input or a producing process output port. Truthiness of a staged path or of a string such as `"false"` must never be allowed to decide a flag.
+
+`valueFrom` on a boolean `inputBinding` is rejected. CWL evaluates `valueFrom` and then applies boolean flag semantics to the result, so a lowering would have to reproduce that ordering; until one is approved, the construct fails closed rather than emitting the prefix beside a rendered value.
+
+**Diagnostics and security for this lowering.** A rejected flag construct names the source path and the deferred capability, and independent findings aggregate like every other capability diagnostic. An empty prefix is a source error and is reported; an absent prefix is valid CWL and contributes nothing. The prefix is data, never syntax: it is emitted through the generated shell-quoting helper, so it reaches the process as exactly one argv word and cannot introduce shell operators, redirections, or command substitution.
 
 Shell operators exist only under an explicitly supported shell-mode lowering. `ShellCommandRequirement`, `shellQuote: false`, `InitialWorkDirRequirement`, and unapproved expression forms are rejected until that lowering exists.
 
@@ -244,7 +252,7 @@ The Phase 1 reader recognizes the generated DSL2 subset. Unknown content remains
 
 ### Phase 2 — Semantic expansion and composition
 
-Phase 2 may add executable scatter and nested workflows, absent-option lowering, File/array behavior, shell-mode command construction, `InitialWorkDirRequirement`, richer output capture and expression handling, and any required channel adapters.
+Phase 2 may add executable scatter and nested workflows, absent-option lowering, File/array behavior, command-construction expansion such as conditional flag tokens, shell-mode command construction, `InitialWorkDirRequirement`, richer output capture and expression handling, and any required channel adapters.
 
 Each addition requires a separate lowering decision, executable-model extension, compatibility plan, negative boundary tests, and focused real-Nextflow proof. Scatter methods, collection cardinality, empty collections, nested namespacing, subworkflow I/O, shell security, expression scope, and schema migration are resolved before implementation.
 
