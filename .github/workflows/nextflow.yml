@@ -15,10 +15,6 @@ jobs:
       NXF_ANSI_LOG: "false"
       NXF_OFFLINE: "true"
       NXF_VER: "26.04.2"
-      # A PATH regression must fail runtime tests here, never skip them.
-      SOPHIOS_REQUIRE_NEXTFLOW: "1"
-      # ubuntu-latest ships Docker; a regression here must fail, never skip.
-      SOPHIOS_REQUIRE_DOCKER: "1"
 
     steps:
       - uses: actions/checkout@v5
@@ -47,7 +43,7 @@ jobs:
       - name: Run Nextflow conformance tests
         run: python -m pytest tests/core/nextflow -m 'nextflow and not docker' -q
 
-      - name: Run conditional Docker conformance
+      - name: Run Docker conformance
         run: python -m pytest tests/core/nextflow -m docker -q
 
       - name: Run the Python 3.12 compatibility suite

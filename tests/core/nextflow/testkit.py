@@ -5,12 +5,9 @@ that exercise validation failure construct invalid values directly.
 """
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, cast
-
-import pytest
 
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_types import (
@@ -195,37 +192,6 @@ def single_process_workflow(
     )
 
 
-def require_docker() -> str:
-    """Return a working Docker executable; skip locally, fail where required."""
-    docker = shutil.which("docker")
-    if docker is None:
-        if os.environ.get("SOPHIOS_REQUIRE_DOCKER"):
-            pytest.fail("Docker is required (SOPHIOS_REQUIRE_DOCKER is set) but not installed")
-        pytest.skip("R11 conditional: Docker executable is not installed")
-    daemon = subprocess.run(
-        [docker, "info"],
-        text=True,
-        capture_output=True,
-        timeout=15,
-        check=False,
-    )
-    if daemon.returncode != 0:
-        if os.environ.get("SOPHIOS_REQUIRE_DOCKER"):
-            pytest.fail("Docker is required (SOPHIOS_REQUIRE_DOCKER is set) but the daemon is unavailable")
-        pytest.skip("R11 conditional: Docker daemon is not available")
-    return docker
-
-
-def nextflow_executable() -> str:
-    """Locate Nextflow; skip locally, fail where the required CI job runs."""
-    executable = shutil.which("nextflow")
-    if executable is None:
-        if os.environ.get("SOPHIOS_REQUIRE_NEXTFLOW"):
-            pytest.fail("Nextflow is required (SOPHIOS_REQUIRE_NEXTFLOW is set) but not on PATH")
-        pytest.skip("Nextflow executable is not available locally; required CI provisions it")
-    return executable
-
-
 def execute_nextflow(
     directory: Path,
     *,
@@ -239,7 +205,7 @@ def execute_nextflow(
         "NXF_HOME": str(directory / ".nxf-home"),
         "NXF_OFFLINE": "true",
     })
-    run_command = [nextflow_executable(), "run"]
+    run_command = ["nextflow", "run"]
     if preview:
         run_command.append("-preview")
     run_command.extend([

@@ -5,7 +5,6 @@
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 
@@ -33,10 +32,8 @@ from .testkit import (
     REPO_ROOT,
     command,
     execute_nextflow,
-    nextflow_executable,
     output_port,
     ref,
-    require_docker,
     run_nextflow,
     runtime_workflow,
     single_process_workflow,
@@ -49,16 +46,6 @@ FOUR_STEP_MESSAGES = (
     "a literal costs $5",
     "literal && text is not shell syntax",
 )
-
-
-@pytest.mark.fast
-def test_required_runtime_fails_instead_of_skipping_without_nextflow(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("SOPHIOS_REQUIRE_NEXTFLOW", "1")
-    monkeypatch.setattr(shutil, "which", lambda _name: None)
-    with pytest.raises(pytest.fail.Exception, match="required"):
-        nextflow_executable()
 
 
 @pytest.mark.nextflow
@@ -273,7 +260,7 @@ def test_symbol_contract_matches_actual_v2_parser(tmp_path: Path) -> None:
         "NXF_SYNTAX_PARSER": "v2",
     })
     accepted_result = subprocess.run(
-        [nextflow_executable(), "run", "-preview", script.name],
+        ["nextflow", "run", "-preview", script.name],
         cwd=tmp_path,
         env=run_env,
         text=True,
@@ -290,7 +277,7 @@ def test_symbol_contract_matches_actual_v2_parser(tmp_path: Path) -> None:
             encoding="utf-8",
         )
         rejected = subprocess.run(
-            [nextflow_executable(), "run", "-preview", script.name],
+            ["nextflow", "run", "-preview", script.name],
             cwd=tmp_path,
             env=run_env,
             text=True,
@@ -305,7 +292,6 @@ def test_symbol_contract_matches_actual_v2_parser(tmp_path: Path) -> None:
 @pytest.mark.docker
 @pytest.mark.serial
 def test_cli_generates_and_executes_nextflow_artifacts(tmp_path: Path) -> None:
-    require_docker()
     # The step name must match the adapter stem so the CLI can resolve
     # touch.cwl through search_paths_cwl.
     touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
@@ -350,13 +336,6 @@ def test_cli_generates_and_executes_nextflow_artifacts(tmp_path: Path) -> None:
     }
     assert (generated / "nextflow.config").read_text(encoding="utf-8") == "docker.enabled = true\n"
     execution = execute_nextflow(generated)
-    if execution.returncode != 0 and "pull" in execution.stdout.lower():
-        if os.environ.get("SOPHIOS_REQUIRE_DOCKER"):
-            pytest.fail(
-                "Docker is required (SOPHIOS_REQUIRE_DOCKER is set) but the pinned "
-                f"container image could not be pulled:\nstdout:\n{execution.stdout}"
-            )
-        pytest.skip("R11 conditional: pinned container image is unavailable offline")
     assert execution.returncode == 0, f"stdout:\n{execution.stdout}\nstderr:\n{execution.stderr}"
     assert len(list((generated / "work").rglob("result.txt"))) == 1
 
@@ -510,8 +489,7 @@ def test_json_hydration_preserves_runtime_behavior(tmp_path: Path) -> None:
 @pytest.mark.nextflow
 @pytest.mark.docker
 @pytest.mark.serial
-def test_docker_container_behavior_or_explicit_skip(tmp_path: Path) -> None:
-    require_docker()
+def test_docker_container_behavior(tmp_path: Path) -> None:
     process = NfProcess(
         "CONTAINERIZED",
         [],
@@ -521,6 +499,4 @@ def test_docker_container_behavior_or_explicit_skip(tmp_path: Path) -> None:
     )
     workflow = single_process_workflow(process, params={}, output_port_name="result")
     result = run_nextflow(workflow, tmp_path)
-    if result.returncode != 0 and "pull" in result.stdout.lower():
-        pytest.skip("R11 conditional: pinned container image is unavailable offline")
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
