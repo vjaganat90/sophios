@@ -17,6 +17,8 @@ jobs:
       NXF_VER: "26.04.2"
       # A PATH regression must fail runtime tests here, never skip them.
       SOPHIOS_REQUIRE_NEXTFLOW: "1"
+      # ubuntu-latest ships Docker; a regression here must fail, never skip.
+      SOPHIOS_REQUIRE_DOCKER: "1"
 
     steps:
       - uses: actions/checkout@v5

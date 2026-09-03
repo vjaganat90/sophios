@@ -196,9 +196,11 @@ def single_process_workflow(
 
 
 def require_docker() -> str:
-    """Return a working Docker executable or skip (R11 conditional policy)."""
+    """Return a working Docker executable; skip locally, fail where required."""
     docker = shutil.which("docker")
     if docker is None:
+        if os.environ.get("SOPHIOS_REQUIRE_DOCKER"):
+            pytest.fail("Docker is required (SOPHIOS_REQUIRE_DOCKER is set) but not installed")
         pytest.skip("R11 conditional: Docker executable is not installed")
     daemon = subprocess.run(
         [docker, "info"],
@@ -208,6 +210,8 @@ def require_docker() -> str:
         check=False,
     )
     if daemon.returncode != 0:
+        if os.environ.get("SOPHIOS_REQUIRE_DOCKER"):
+            pytest.fail("Docker is required (SOPHIOS_REQUIRE_DOCKER is set) but the daemon is unavailable")
         pytest.skip("R11 conditional: Docker daemon is not available")
     return docker
 
