@@ -4,7 +4,7 @@ class: CommandLineTool
 
 requirements:
   DockerRequirement:
-    dockerPull: docker.io/bash:4.4
+    dockerPull: docker.io/library/ubuntu:24.04
   InlineJavascriptRequirement: {}
 
 baseCommand: touch
