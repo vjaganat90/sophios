@@ -495,7 +495,7 @@ def test_docker_container_behavior(tmp_path: Path) -> None:
         [],
         [output_port("result", "result.txt")],
         command("touch", "result.txt"),
-        container="ubuntu:24.04",
+        container="debian:bookworm-slim",
     )
     workflow = single_process_workflow(process, params={}, output_port_name="result")
     result = run_nextflow(workflow, tmp_path)
