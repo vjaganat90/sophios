@@ -946,10 +946,11 @@ def _absent_optional_findings(
             if not isinstance(raw_definition, Mapping):
                 continue
             raw_source = step_inputs.get(raw_name)
+            optional = _is_optional(raw_definition.get("type"))
             if raw_source is None:
                 # Unwired inputs are only a missingness problem when optional
                 # without a default; required unwired inputs fail compilation.
-                absent = _is_optional(raw_definition.get("type")) and "default" not in raw_definition
+                absent = optional and "default" not in raw_definition
             else:
                 # A wired input is absent when any boundary source resolves to
                 # null — including an absent optional *workflow* input feeding
@@ -967,10 +968,12 @@ def _absent_optional_findings(
                     for source in boundary_sources
                 )
             if absent:
-                findings.append(
-                    f"steps[{step_index}].run.inputs.{raw_name}: absent optional values are "
-                    "deferred to Phase 2"
+                detail = (
+                    "absent optional values are deferred to Phase 2"
+                    if optional
+                    else "resolves to an absent required value"
                 )
+                findings.append(f"steps[{step_index}].run.inputs.{raw_name}: {detail}")
     return findings
 
 
