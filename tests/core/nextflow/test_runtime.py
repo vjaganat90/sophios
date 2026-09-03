@@ -351,6 +351,11 @@ def test_cli_generates_and_executes_nextflow_artifacts(tmp_path: Path) -> None:
     assert (generated / "nextflow.config").read_text(encoding="utf-8") == "docker.enabled = true\n"
     execution = execute_nextflow(generated)
     if execution.returncode != 0 and "pull" in execution.stdout.lower():
+        if os.environ.get("SOPHIOS_REQUIRE_DOCKER"):
+            pytest.fail(
+                "Docker is required (SOPHIOS_REQUIRE_DOCKER is set) but the pinned "
+                f"container image could not be pulled:\nstdout:\n{execution.stdout}"
+            )
         pytest.skip("R11 conditional: pinned container image is unavailable offline")
     assert execution.returncode == 0, f"stdout:\n{execution.stdout}\nstderr:\n{execution.stderr}"
     assert len(list((generated / "work").rglob("result.txt"))) == 1
