@@ -312,6 +312,7 @@ def write_nextflow_artifacts(
             ``workflow.nf``, ``nextflow.config``, and
             ``nextflow_params.json``, in that order.
     """
+    _require_executable(workflow)
     serialized = f"{workflow.to_json()}\n"
     script = render_nextflow(workflow)
     config = render_nextflow_config(workflow)
