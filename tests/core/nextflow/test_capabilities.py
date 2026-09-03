@@ -394,7 +394,7 @@ def test_rejects_absent_optional_workflow_input_feeding_required_input() -> None
         [required],
         workflow_inputs={},
     )
-    with pytest.raises(ValueError, match="absent optional"):
+    with pytest.raises(ValueError, match="absent required"):
         cwl_rosetree_to_nextflow(rose)
 
 
