@@ -11,6 +11,7 @@ from sophios.nf_symbols import is_nextflow_identifier, normalize_nextflow_identi
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfCommand,
+    NfCommandToken,
     NfFlag,
     NfLiteral,
     NfPort,
@@ -177,7 +178,6 @@ def test_flag_requires_a_non_empty_prefix(prefix: str) -> None:
 @pytest.mark.fast
 def test_public_module_exports_flag_and_command_token() -> None:
     from sophios.api.python import nextflow
-    from sophios.nf_types import NfCommandToken
 
     assert nextflow.NfFlag is NfFlag
     assert nextflow.NfCommandToken is NfCommandToken
@@ -187,11 +187,11 @@ def test_public_module_exports_flag_and_command_token() -> None:
 
 @pytest.mark.fast
 def test_flag_must_reference_a_declared_value_input() -> None:
-    command = NfCommand((NfTemplate((NfLiteral("sort"),)), NfFlag("reverse", "-r")))
+    flag_command = NfCommand((NfTemplate((NfLiteral("sort"),)), NfFlag("reverse", "-r")))
     with pytest.raises(ValueError, match="unknown inputs"):
-        NfProcess("SORT", [], [], command)
+        NfProcess("SORT", [], [], flag_command)
     with pytest.raises(ValueError, match="flag.*val"):
-        NfProcess("SORT", [NfPort("reverse", "path")], [], command)
+        NfProcess("SORT", [NfPort("reverse", "path")], [], flag_command)
 
 
 @pytest.mark.fast
