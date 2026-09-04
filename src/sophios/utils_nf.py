@@ -226,7 +226,7 @@ def _position(value: Any, *, default: int) -> int:
 def _binding_tokens(prefix: Any, value: NfTemplate, *, separate: Any = True) -> tuple[NfTemplate, ...]:
     match prefix:
         case None:
-            if separate is not None and separate is not True:
+            if not separate:
                 # cwltool raises for separate without prefix, type-independently.
                 raise ValueError("CWL separate cannot be specified without a prefix")
             return (value,)
@@ -277,10 +277,10 @@ def _input_binding_items(
             # when the flag is false or no prefix is declared.
             match binding.get("prefix"):
                 case None:
-                    if binding.get("separate") is not None:
+                    if not binding.get("separate", True):
                         raise ValueError("CWL separate cannot be specified without a prefix")
                     continue
-                case str() as prefix if prefix:
+                case str() as prefix if prefix.strip():
                     items.append(((position, 1, str(raw_name)), (NfFlag(name, prefix),)))
                     continue
                 case _:
@@ -1078,7 +1078,15 @@ def _flag_source_findings(
                     context=f"step input {step_index}.{raw_name}",
                 )
             except ValueError:
-                continue
+                if isinstance(raw_source, Mapping) and ("default" in raw_source or "source" in raw_source):
+                    # {"default": ...} is rejected by the absent-optional
+                    # findings pass; {"source": ..., <extra>} is rejected by
+                    # _source_values itself during lowering. Neither needs a
+                    # boolean-source finding on top. Any other shape that
+                    # reaches here is unrecognized and must not be silently
+                    # exempted from the boolean-source requirement.
+                    continue
+                raise
             for source in sources:
                 declared = source_types.get(source, source_types.get(str(source)))
                 if declared is not None and _required_type(declared) == "boolean":
