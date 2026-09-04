@@ -78,7 +78,7 @@ content, and invalid or stale IR fail closed.
 
 ## Boolean flags
 
-A non-optional `boolean` input with an `inputBinding` prefix and no
+A `boolean` input with an `inputBinding` prefix and no
 `valueFrom` becomes a real command-line flag: `true` contributes the prefix as
 exactly one argument and `false` contributes nothing. A boolean binding
 without a prefix contributes nothing for either value, matching CWL. Absent
