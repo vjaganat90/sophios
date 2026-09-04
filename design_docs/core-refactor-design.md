@@ -258,15 +258,40 @@ A step-input value is currently a singleton dict with a magic key, dispatched by
 a `match` whose cases sit 143 lines apart. The sum type already exists; it is
 merely untyped. Made explicit:
 
-| Surface | AST node | Meaning |
-|---|---|---|
-| `!ii v` | `InlineLiteral(v)` | Literal value, never an edge |
-| `!& n` | `EdgeDef(n)` | Explicit edge definition site |
-| `!* n` | `EdgeRef(n)` | Explicit edge call site |
-| `!cwl e` | `RawCwlRef(e)` | **New.** Opaque CWL reference, passed through unresolved |
-| bare `s` | `UnresolvedName(s)` | Must resolve to a workflow input, else diagnostic |
+| Surface | AST node | Position | Meaning |
+|---|---|---|---|
+| `!ii v` | `InlineLiteral(v)` | `in:` | Literal value, never an edge |
+| `!* n` | `EdgeRef(n)` | `in:` | Explicit edge call site |
+| `!cwl e` | `RawCwlRef(e)` | `in:` | **New.** Opaque CWL reference, passed through unresolved |
+| bare `s` | `UnresolvedName(s)` | `in:` | Must resolve to a workflow input, else diagnostic |
+| `!& n` | `EdgeDef(n)` | **`out:` only** | Explicit edge definition site |
 
 Every node carries a source span. That is what buys the diagnostics.
+
+**Position is part of the type.** `EdgeDef` is reachable only through
+`OutputBinding.edge_def`; `InputValue` is the union of the four forms above and
+does not contain it. This is not a restriction added to the language — it is the
+language, finally written down. An edge is defined where its value comes into
+being, which is an output, and consumed where a value is needed, which is an
+input. Every `source:` CWL admits is a workflow input or `step/output`; a step's
+input port has no address, so an edge anchored there would have nothing for
+`!*` to resolve to.
+
+The first cut of this AST put all five forms in `InputValue`, mirroring YAML's
+willingness to anchor any node. The parser accepted `in: {f: !& n}` with no
+diagnostic and the compiler's input `match` had no case for it, so the value
+fell through to the raw-CWL default and earned `wic011` — advice to add `!ii`
+for a construct that was already correct and documented. Two lists of legal
+forms, in two files, with nothing linking them: the same shape as the
+`lang_version` validator gap. Recorded as CE-13, found by a generator derived
+from these types rather than from examples someone had seen work, and closed by
+narrowing the union so the position is a type error rather than a runtime
+fallthrough (`wic019`).
+
+The general rule this sets: **a form the union admits and no consumer
+implements is a promise the language cannot keep.** Where a form is genuinely
+pending — `!cwl` — the implementation-status table names it and a test asserts
+it still fails, so the exclusion cannot outlive its cause.
 
 **`--allow_raw_cwl`** operates on step-input *values*, a different axis from the
 key-level leak boundary. At baseline a bare string not found in `inputs:`

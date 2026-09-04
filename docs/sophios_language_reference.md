@@ -181,18 +181,21 @@ out:
 - file: !& file_touch     # names it and defines an edge
 ```
 
+**This is the only place `!&` is legal.** An edge is defined where its value
+comes into being, and that is an output; §4.1.1 says why, and what to write
+instead if you meant to consume an edge.
+
 ---
 
 ## 4. Input values
 
-### 4.1 The five forms
+### 4.1 The four forms
 
-A step input is exactly one of these. There is no sixth form.
+A step input is exactly one of these. There is no fifth form.
 
 | Form | Written | Means |
 |---|---|---|
 | Inline literal | `f: !ii empty.txt` | A literal value. Never an edge. |
-| Edge definition | `f: !& name` | Defines an explicit edge at this point |
 | Edge reference | `f: !* name` | Consumes an edge defined elsewhere |
 | Raw CWL reference | `f: !cwl step/out` | Opaque to Sophios; passed through unresolved. **Not yet usable — awaits the Spec 3 compiler migration** |
 | Unresolved name | `f: some_input` | Must resolve to a workflow input |
@@ -214,18 +217,43 @@ the same as writing `!ii` — because a collection cannot name a workflow input,
 so a literal is its only possible meaning. The tag is still the recommended
 spelling: it states the intent instead of leaving it to be inferred.
 
-A tag outside the four above (`!foo`) is an error, not a fifth-and-a-half
+A tag outside the four above (`!foo`) is an error, not a fourth-and-a-half
 form. The loader has always rejected such documents, and the syntax layer
 must never accept more than the language it specifies.
 
-An **untagged mapping or sequence** in input position is an inline literal —
-the same as writing `!ii` — because a collection cannot name a workflow input,
-so a literal is its only possible meaning. The tag is still the recommended
-spelling: it states the intent instead of leaving it to be inferred.
+### 4.1.1 `!&` is not an input form
 
-A tag outside the four above (`!foo`) is an error, not a fifth-and-a-half
-form. The loader has always rejected such documents, and the syntax layer
-must never accept more than the language it specifies.
+`!&` defines an edge, and an edge is defined where its value comes into being
+— on an **output** (§3.3). Writing it in input position is an error
+(`wic019`), not a fifth form:
+
+```yaml
+in:
+  f: !& name        # error: !& defines an edge and belongs on an out: entry
+```
+
+Two reasons, and they agree.
+
+**A name has to name something.** Every `source:` Sophios emits is either a
+workflow input or `step/output` — those are the only two addresses CWL has. A
+step's *input port* has no address, so an edge anchored there would have
+nothing for `!*` to point at; resolving it would mean chasing back to whatever
+feeds that input, which is what you would have written in the first place.
+
+**Anchors define, aliases consume.** The notation is borrowed from YAML, where
+`&` names a node and `*` refers to one. Here the pairing follows the direction
+of dataflow: an output is where a value originates, so that is where it earns
+a name; an input is where a value arrives, already named upstream. Anchoring
+at a sink names something that is by definition already named.
+
+YAML itself permits an anchor on any node. Sophios is narrower than YAML here,
+deliberately — this is a language, not a schema over arbitrary YAML, and a
+construct that cannot be given a meaning is not one the grammar should admit.
+The parser reports the position with a span rather than leaving the compiler to
+guess at intent much later.
+
+If you meant to *consume* an edge, you want `!*`. If you meant to name this
+step's output, the `!&` belongs in its `out:` list.
 
 ### 4.2 Every name is bound once
 
@@ -297,7 +325,7 @@ and a **desugared** form, and they are equivalent:
 | Construct | Tagged | Desugared |
 |---|---|---|
 | Inline literal | `!ii value` | `{wic_inline_input: value}` |
-| Edge definition | `!& name` | `{wic_anchor: name}` |
+| Edge definition (`out:` only — §4.1.1) | `!& name` | `{wic_anchor: name}` |
 | Edge reference | `!* name` | `{wic_alias: name}` |
 | Raw CWL reference | `!cwl expr` | `{wic_raw_cwl: expr}` |
 
