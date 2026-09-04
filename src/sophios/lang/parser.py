@@ -333,8 +333,23 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     because a constructor that re-emitted its own tag would fire again on
     reload. An untagged scalar is an `UnresolvedName`, which resolution later
     binds to a workflow input or reports on.
+
+    `!&`/`wic_anchor` — in either spelling — is checked first and separately:
+    it is a known tag, just in the wrong position (§4.1.1), so it must be
+    diagnosed as `wic019` rather than mistaken for `wic009 UNKNOWN_TAG` or
+    silently accepted as an inline literal.
     """
     span = SourceSpan.of(file, node)
+
+    edge = _out_edge_def(node, file, diags)
+    if edge is not None:
+        diags.error(
+            Code.EDGE_DEF_IN_INPUT,
+            "'!&' defines an edge, and an edge is defined on an output, not an input (§4.1.1); "
+            "use '!*' here to consume an edge, or move '!&' to this step's out: list to define one",
+            span,
+        )
+        return UnresolvedName(edge.name, span)
 
     build = Forms.TAGGED.get(node.tag)
     if build is not None:
@@ -383,18 +398,20 @@ class Forms:  # pylint: disable=too-few-public-methods  # a namespace, not a typ
     recorded. Both tables are read-only views.
     """
 
-    #: Tagged spellings — what people write.
+    #: Tagged spellings — what people write. `!&` (`Tag.ANCHOR`) is
+    #: deliberately absent: it is legal only on an `out:` entry, and
+    #: `_input_value` checks for it — via `_out_edge_def` — before this table
+    #: is ever consulted, so it never reaches here as an input (§4.1.1).
     TAGGED: Final[Mapping[str, Builder]] = MappingProxyType({
         Tag.INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_literal(n, f, d), s, text=_literal_text(n)),
-        Tag.ANCHOR: lambda n, f, d, s: EdgeDef(_name_text(n, f, d), s),
         Tag.ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
         Tag.RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
     })
 
-    #: Desugared spellings — what tooling emits.
+    #: Desugared spellings — what tooling emits. `wic_anchor` (`Key.ANCHOR`)
+    #: is absent for the same reason as `Tag.ANCHOR` above.
     DESUGARED: Final[Mapping[str, Builder]] = MappingProxyType({
         Key.INLINE_INPUT: lambda n, f, d, s: InlineLiteral(_opaque(n, f, d), s),
-        Key.ANCHOR: lambda n, f, d, s: EdgeDef(_name_text(n, f, d), s),
         Key.ALIAS: lambda n, f, d, s: EdgeRef(_name_text(n, f, d), s),
         Key.RAW_CWL: lambda n, f, d, s: RawCwlRef(_name_text(n, f, d), s),
     })
@@ -612,6 +629,11 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
         # the tag silently. Scalar `!ii` routes the same way; collection `!ii`
         # is handled below, on the materialised content, because its builder
         # would call back into this walk on the very same node.
+        #
+        # `!&` buried in otherwise-opaque content is still not an input form
+        # (§4.1.1): `_input_value` reports `wic019` for it here exactly as it
+        # would at the top of an `in:` binding, rather than letting it become
+        # an `EdgeDef` — a node `OpaqueCwl` no longer admits.
         return _input_value(node, file, diags)
 
     content: OpaqueCwl

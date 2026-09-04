@@ -28,7 +28,11 @@ scalar_payload_texts = st.sampled_from([
 ])
 
 #: Construct leaves that may appear nested inside an `!ii` payload.
-construct_payload_texts = st.sampled_from(['!* e', '!& d', '!cwl a/b', '{wic_anchor: n}'])
+#: `!& d` and `{wic_anchor: n}` are absent: `OpaqueCwl` contains `InputValue`,
+#: which no longer admits `EdgeDef`, so an anchor nested in a literal payload
+#: is reported (wic019) exactly as one in input position is. An anchor is
+#: only meaningful on an `out:` entry, where nothing can be nested inside it.
+construct_payload_texts = st.sampled_from(['!* e', '!cwl a/b', '{wic_alias: n}'])
 
 #: Recursive payload text over the closed OpaqueCwl union: scalars, nested
 #: constructs, and flow collections of both. Derived from what the type
@@ -62,21 +66,21 @@ def input_lines(draw: st.DrawFn, name: str | None = None, indent: str = '      '
     """
     # pylint: disable=too-many-return-statements  # one return per surface form
     name = draw(identifiers) if name is None else name
-    form = draw(st.sampled_from(['ii', 'anchor', 'alias', 'cwl', 'bare',
-                                 'ii_desugared', 'anchor_desugared', 'alias_desugared', 'cwl_desugared']))
+    # No 'anchor' form: `!&` defines an edge and is legal only on an `out:`
+    # entry (reference §4.1.1), so an input carrying one is not a well-formed
+    # document. `_out_lines` below still generates both of its spellings, so
+    # edge definitions stay covered where they belong.
+    form = draw(st.sampled_from(['ii', 'alias', 'cwl', 'bare',
+                                 'ii_desugared', 'alias_desugared', 'cwl_desugared']))
     match form:
         case 'ii':
             return f'{indent}{name}: !ii {draw(opaque_payload_texts)}'
-        case 'anchor':
-            return f'{indent}{name}: !& {draw(identifiers)}'
         case 'alias':
             return f'{indent}{name}: !* {draw(identifiers)}'
         case 'cwl':
             return f'{indent}{name}: !cwl {draw(identifiers)}/{draw(identifiers)}'
         case 'ii_desugared':
             return f'{indent}{name}: {{wic_inline_input: {draw(desugared_payload_texts)}}}'
-        case 'anchor_desugared':
-            return f'{indent}{name}: {{wic_anchor: {draw(identifiers)}}}'
         case 'alias_desugared':
             return f'{indent}{name}: {{wic_alias: {draw(identifiers)}}}'
         case 'cwl_desugared':

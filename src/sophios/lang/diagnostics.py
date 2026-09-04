@@ -50,6 +50,7 @@ class Code(StrEnum):
     MISSING_INPUT_FILE = 'wic016'
     UNKNOWN_LANG_VERSION = 'wic017'
     LANG_VERSION_CONFLICT = 'wic018'
+    EDGE_DEF_IN_INPUT = 'wic019'
     RECURSIVE_ALIAS = 'wic030'
 
 

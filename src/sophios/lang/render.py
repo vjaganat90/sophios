@@ -130,7 +130,17 @@ class _Writer:
         """One `out:` entry: a bare name, or a name bound to an edge."""
         if binding.edge_def is None:
             return binding.name
-        return {binding.name: self.input_value(binding.edge_def)}
+        return {binding.name: self.edge_def(binding.edge_def)}
+
+    def edge_def(self, edge: EdgeDef) -> Any:
+        """Spell an `!&` edge definition — legal only on an `out:` entry (§4.1.1).
+
+        `EdgeDef` is not a member of `InputValue`, so this is a sibling of
+        `input_value` rather than one of its cases: the only caller is
+        `output`, and `plain`'s walk over `OpaqueCwl` never reaches an
+        `EdgeDef` either, for the same reason.
+        """
+        return _Tagged(Tag.ANCHOR, edge.name) if self.mode == 'tagged' else {Key.ANCHOR: edge.name}
 
     def sidecar(self, sidecar: WicSidecar) -> Any:
         """A `wic:` block, restoring its `(index, name)` step keys.
@@ -153,8 +163,6 @@ class _Writer:
         match value:
             case InlineLiteral():
                 return self._literal(value)
-            case EdgeDef(name=name):
-                return _Tagged(Tag.ANCHOR, name) if self.mode == 'tagged' else {Key.ANCHOR: name}
             case EdgeRef(name=name):
                 return _Tagged(Tag.ALIAS, name) if self.mode == 'tagged' else {Key.ALIAS: name}
             case RawCwlRef(expression=expression):
@@ -182,7 +190,7 @@ class _Writer:
         if isinstance(literal.value, (list, dict)):
             return _Tagged(Tag.INLINE_INPUT, self.plain(literal.value))
 
-        if isinstance(literal.value, (InlineLiteral, EdgeDef, EdgeRef, RawCwlRef, UnresolvedName)):
+        if isinstance(literal.value, (InlineLiteral, EdgeRef, RawCwlRef, UnresolvedName)):
             # A construct as the direct payload has no tagged spelling — two
             # tags cannot share a node — so the desugared form carries it.
             return {Key.INLINE_INPUT: self.plain(literal.value)}
@@ -202,7 +210,7 @@ class _Writer:
         forgotten node kind reaches the dumper as a live dataclass.
         """
         match value:
-            case InlineLiteral() | EdgeDef() | EdgeRef() | RawCwlRef() | UnresolvedName():
+            case InlineLiteral() | EdgeRef() | RawCwlRef() | UnresolvedName():
                 return self.input_value(value)
             case dict():
                 return {k: self.plain(v) for k, v in value.items()}

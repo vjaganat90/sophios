@@ -31,7 +31,7 @@ class Shape(StrEnum):
     INTERNAL = 'internal'
     #: The node's own name, carried by its position rather than a key.
     IDENTITY = 'identity'
-    #: `in:` — a mapping of input name to one of the five input forms.
+    #: `in:` — a mapping of input name to one of the four input forms.
     INPUT_BINDINGS = 'input_bindings'
     #: `out:` — a sequence of bare names or single-key edge bindings.
     OUTPUT_BINDINGS = 'output_bindings'
@@ -111,7 +111,14 @@ class InlineLiteral:
 
 @dataclass(frozen=True, slots=True)
 class EdgeDef:
-    """`!& name` — an explicit edge definition site."""
+    """`!& name` — an explicit edge definition site.
+
+    Legal only where a value comes into being: an output. Reachable only
+    through `OutputBinding.edge_def` — it is not a member of `InputValue`, so
+    it cannot appear on an input, nested inside a literal, or anywhere else
+    `OpaqueCwl` reaches. `!&` written in input position is not this node; the
+    parser reports it as `wic019` instead (§4.1.1).
+    """
 
     name: str = surface(Shape.IDENTITY)
     span: SourceSpan = surface(Shape.INTERNAL)
@@ -149,10 +156,15 @@ class UnresolvedName:
     span: SourceSpan = surface(Shape.INTERNAL)
 
 
-#: The complete set of forms a step input may take. Closed by construction:
+#: The complete set of forms a step input may take — exactly the four forms
+#: of §4.1: a literal, an edge reference, a raw CWL reference, or an
+#: unresolved name. There is no fifth. Position is part of the type: `EdgeDef`
+#: is deliberately not a member, because an edge is defined where its value
+#: comes into being, which is an output, not an input (§4.1.1) — it is
+#: reachable only through `OutputBinding.edge_def`. Closed by construction:
 #: the parser produces nothing outside this union, so exhaustive `match`
 #: statements over it stay exhaustive.
-InputValue: TypeAlias = InlineLiteral | EdgeDef | EdgeRef | RawCwlRef | UnresolvedName
+InputValue: TypeAlias = InlineLiteral | EdgeRef | RawCwlRef | UnresolvedName
 
 #: CWL that Sophios does not interpret and passes through unchanged — but no
 #: longer `Any`: a closed recursive union of exactly what YAML's safe schema

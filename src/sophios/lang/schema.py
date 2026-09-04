@@ -217,22 +217,25 @@ def _wic_block() -> dict[str, Any]:
 
 
 def _input_value() -> dict[str, Any]:
-    """One of the five input forms (§4.1).
+    """One of the four input forms (§4.1). There is no fifth.
 
     Unconstrained on purpose. A mapping whose single key is a construct key is
     a construct; any other value is an inline literal or an unresolved name,
     and the parser accepts all of them. `construct` is referenced so editors
-    can offer the four keys as completions.
+    can offer the three input-position keys as completions — `wic_anchor` is
+    not among them: `!&` defines an edge, which is legal only on an `out:`
+    entry (§4.1.1), so `Forms.DESUGARED` — and therefore this schema — never
+    offers it in input position.
     """
     return {
-        'description': 'An inline literal, edge definition, edge reference, '
+        'description': 'An inline literal, edge reference, '
                        'raw CWL reference, or unresolved name (§4.1).',
         'anyOf': [{'$ref': '#/$defs/construct'}, {}],
     }
 
 
 def _construct() -> dict[str, Any]:
-    """A desugared Sophios construct: a single-key mapping.
+    """A desugared Sophios construct valid in input position: a single-key mapping.
 
     Derived from the parser's dispatch table, so a construct added there
     appears here without anyone remembering to update a schema.
