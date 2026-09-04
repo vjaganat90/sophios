@@ -30,6 +30,7 @@ PARSE: Final[dict[Code, str]] = {
     Code.UNKNOWN_TAG: 'top: !foo bar\n',
     Code.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
     Code.RECURSIVE_ALIAS: 'top: &a [*a]\n',
+    Code.EDGE_DEF_IN_INPUT: 'steps:\n- id: s\n  in:\n    f: !& e\n',
 }
 
 #: Codes provoked through the compiler or its helpers. Callables raise

@@ -184,7 +184,6 @@ def test_corpus_is_not_empty() -> None:
 @pytest.mark.fast
 @given(
     st.sampled_from([('!ii', 'wic_inline_input', InlineLiteral),
-                     ('!&', 'wic_anchor', EdgeDef),
                      ('!*', 'wic_alias', EdgeRef),
                      ('!cwl', 'wic_raw_cwl', RawCwlRef)]),
     identifiers,
@@ -208,6 +207,26 @@ def test_surface_forms_are_equivalent(form: tuple[str, str, type], payload: str)
     right = sugared.document.steps[0].inputs[0][1]
     assert isinstance(left, expected) and isinstance(right, expected)
     assert _payload(left) == _payload(right)
+
+
+@pytest.mark.fast
+@given(identifiers)
+@FAST
+def test_the_two_spellings_of_an_edge_definition_agree_on_an_output(payload: str) -> None:
+    """`!&` has the same two spellings as its siblings, in the one position it
+    is legal (§4.1.1). Tested separately rather than as a fourth row above,
+    because that table quantifies over *input* position and an anchor there is
+    now `wic019` — the case does not disappear, it moves to where it belongs.
+    """
+    tagged = parse(f'steps:\n- id: s\n  out:\n  - f: !& {payload}\n', 'a.wic')
+    sugared = parse(f'steps:\n- id: s\n  out:\n  - f:\n      wic_anchor: {payload}\n', 'b.wic')
+    assert tagged.ok and sugared.ok
+    assert tagged.document is not None and sugared.document is not None
+
+    left = tagged.document.steps[0].outputs[0].edge_def
+    right = sugared.document.steps[0].outputs[0].edge_def
+    assert isinstance(left, EdgeDef) and isinstance(right, EdgeDef)
+    assert left.name == right.name == payload
 
 
 def _payload(value: InputValue) -> Any:
@@ -290,6 +309,15 @@ class Reported(NamedTuple):
 
 
 REPORTED: Final[tuple[Reported, ...]] = (
+    Reported('an edge definition in input position names the position (§4.1.1)',
+             'steps:\n- id: s\n  in:\n    f: !& e\n',
+             Code.EDGE_DEF_IN_INPUT, 4, message_contains='out:'),
+    Reported('the desugared spelling is reported the same way',
+             'steps:\n- id: s\n  in:\n    f: {wic_anchor: e}\n',
+             Code.EDGE_DEF_IN_INPUT, 4, message_contains='out:'),
+    Reported('an anchor nested in a literal payload is reported too',
+             'steps:\n- id: s\n  in:\n    f: !ii {k: !& e}\n',
+             Code.EDGE_DEF_IN_INPUT, 4, message_contains='out:'),
     Reported('a collection step key is reported, not stringified',
              'steps:\n  ? [a, b]\n  : {}\n', Code.EXPECTED_SCALAR, 2,
              message_contains='mapping keys must be scalars'),
@@ -400,7 +428,10 @@ def test_python_api_emits_documents_this_parser_accepts() -> None:
     'top: !foo bar\n',
     'top: !foo {a: 1}\n',
     'top: !foo [1, 2]\n',
-    'steps:\n- id: s\n  in:\n    a: !foo {wic_anchor: x}\n',
+    # A still-legal desugared key: the claim is that !foo reports wic009 even
+    # when it wraps a construct, and wic_anchor in input position is now itself
+    # an error (wic019), which would confound the probe.
+    'steps:\n- id: s\n  in:\n    a: !foo {wic_alias: x}\n',
 ], ids=['input-pos', 'scalar', 'mapping', 'sequence', 'over-desugared'])
 def test_unknown_tags_report_wic009(source: str) -> None:
     """The code contract: an unknown tag reports wic009, in every position.
