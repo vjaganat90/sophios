@@ -637,6 +637,127 @@ def test_rejects_separate_without_a_prefix() -> None:
 
 
 @pytest.mark.fast
+def test_accepts_separate_true_without_a_prefix_on_a_boolean_binding() -> None:
+    """cwltool accepts separate: true without a prefix; only a falsy separate rejects."""
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {"position": 1, "separate": True},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("FLAGS", **{"in": {"verbose": "verbose"}})],
+            inputs={"verbose": {"type": "boolean"}},
+        ),
+        [flags],
+        workflow_inputs={"verbose": True},
+    )
+
+    assert cwl_rosetree_to_nextflow(rose).params == {"verbose": True}
+
+
+@pytest.mark.fast
+def test_rejects_separate_null_without_a_prefix_on_a_boolean_binding() -> None:
+    """cwltool's own .get("separate", True) only defaults an absent key; separate: null still rejects."""
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {"position": 1, "separate": None},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("FLAGS", **{"in": {"verbose": "verbose"}})],
+            inputs={"verbose": {"type": "boolean"}},
+        ),
+        [flags],
+        workflow_inputs={"verbose": True},
+    )
+
+    with pytest.raises(ValueError, match="separate cannot be specified without a prefix"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_separate_null_without_a_prefix_on_a_string_binding() -> None:
+    """The general _binding_tokens path rejects separate: null the same way the boolean path does."""
+    echo = tool(
+        "ECHO",
+        inputs={
+            "message": {
+                "type": "string",
+                "inputBinding": {"position": 1, "separate": None},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("ECHO", **{"in": {"message": "message"}})],
+            inputs={"message": {"type": "string"}},
+        ),
+        [echo],
+        workflow_inputs={"message": "hi"},
+    )
+
+    with pytest.raises(ValueError, match="separate cannot be specified without a prefix"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_whitespace_only_prefix_on_a_boolean_binding() -> None:
+    """A blank prefix must hit the named capability diagnostic, not NfFlag's own invariant."""
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {"position": 1, "prefix": "   "},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("FLAGS", **{"in": {"verbose": "verbose"}})],
+            inputs={"verbose": {"type": "boolean"}},
+        ),
+        [flags],
+        workflow_inputs={"verbose": True},
+    )
+
+    with pytest.raises(ValueError, match="CWL command prefix for 'verbose' must be a non-empty string"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("raw_source", [[], 42])
+def test_rejects_a_flag_input_wired_to_an_unrecognized_source_shape(raw_source: Any) -> None:
+    """A shape _source_values cannot read must still fail closed, not silently skip the boolean-source check."""
+    flags = tool(
+        "FLAGS",
+        inputs={
+            "verbose": {
+                "type": "boolean",
+                "inputBinding": {"position": 1, "prefix": "--verbose"},
+            }
+        },
+    )
+    rose = synthetic_rose(
+        workflow_doc([step("FLAGS", **{"in": {"verbose": raw_source}})]),
+        [flags],
+    )
+
+    with pytest.raises(ValueError):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
 def test_a_command_of_only_flags_still_runs_a_program() -> None:
     """A flag-only argv would render an empty script that silently exits zero."""
     flags = tool(
