@@ -1078,13 +1078,11 @@ def _flag_source_findings(
                     context=f"step input {step_index}.{raw_name}",
                 )
             except ValueError:
-                if isinstance(raw_source, Mapping) and ("default" in raw_source or "source" in raw_source):
-                    # {"default": ...} is rejected by the absent-optional
-                    # findings pass; {"source": ..., <extra>} is rejected by
-                    # _source_values itself during lowering. Neither needs a
-                    # boolean-source finding on top. Any other shape that
-                    # reaches here is unrecognized and must not be silently
-                    # exempted from the boolean-source requirement.
+                if isinstance(raw_source, Mapping):
+                    # Every mapping shape _source_values rejects is already
+                    # reported, by path, by the unconsumed-fields pass. A
+                    # non-mapping shape is genuinely unrecognized and must not
+                    # be silently exempted from the boolean-source requirement.
                     continue
                 raise
             for source in sources:
