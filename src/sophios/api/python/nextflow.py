@@ -9,7 +9,9 @@ from sophios.input_output_nf import (
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NfCommand,
+    NfCommandToken,
     NfConnection,
+    NfFlag,
     NfInputReference,
     NfLiteral,
     NfPort,
@@ -36,7 +38,9 @@ from sophios.nf_reader import (
 __all__ = [
     "ExecutableNextflowWorkflow",
     "NfCommand",
+    "NfCommandToken",
     "NfConnection",
+    "NfFlag",
     "NfInputReference",
     "NfLiteral",
     "NfPort",
