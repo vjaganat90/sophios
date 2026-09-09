@@ -529,7 +529,7 @@ def test_shell_literal_rejects_non_string_text() -> None:
 
 @pytest.mark.fast
 def test_shell_literals_are_unrepresentable_outside_command_position() -> None:
-    with pytest.raises(TypeError, match="typed literal or input references"):
+    with pytest.raises(TypeError, match="template segments must be one of"):
         NfTemplate((cast(Any, NfShellLiteral(">>")),))
 
 
