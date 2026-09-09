@@ -181,6 +181,12 @@ def _process_output(port: NfPort) -> str:
     return f"path {_render_glob(port.glob)}{literal}, emit: {port.emit or port.name}"
 
 
+def _process_input(port: NfPort) -> str:
+    if port.stage_as is not None:
+        return f"{port.qualifier} {port.name}, stageAs: {_groovy_literal(port.stage_as)}"
+    return f"{port.qualifier} {port.name}"
+
+
 def _render_process(process: NfProcess) -> str:
     lines = [f"process {process.name} {{"]
     if process.container is not None:
@@ -192,7 +198,7 @@ def _render_process(process: NfProcess) -> str:
 
     if process.inputs:
         lines.extend(["", "    input:"])
-        lines.extend(f"    {port.qualifier} {port.name}" for port in process.inputs)
+        lines.extend(f"    {_process_input(port)}" for port in process.inputs)
     if process.outputs:
         lines.extend(["", "    output:"])
         lines.extend(f"    {_process_output(port)}" for port in process.outputs)

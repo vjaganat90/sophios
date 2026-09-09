@@ -102,6 +102,27 @@ def test_renders_supported_process_metadata() -> None:
 
 
 @pytest.mark.serial
+def test_renders_stage_as_rename_and_bare_input_declarations() -> None:
+    process = NfProcess(
+        "STAGE",
+        [NfPort("source", "path", stage_as="renamed.txt"), NfPort("other", "path")],
+        [output_port("report", "report.txt")],
+        NfCommand((NfTemplate((NfLiteral("cat"),)), NfTemplate((NfLiteral("renamed.txt"),)))),
+    )
+    rendered = render_nextflow(ExecutableNextflowWorkflow(
+        "WF",
+        [process],
+        [
+            NfWorkflowInputConnection("source", "STAGE", "source"),
+            NfWorkflowInputConnection("other", "STAGE", "other"),
+        ],
+        {"source": "input.txt", "other": "input2.txt"},
+    ))
+    assert "path source, stageAs: 'renamed.txt'" in rendered
+    assert "path other\n" in rendered
+
+
+@pytest.mark.serial
 def test_renders_resources_without_numeric_semantic_loss() -> None:
     process = NfProcess(
         "TASK",

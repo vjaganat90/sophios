@@ -181,6 +181,45 @@ whose `valueFrom` references any input — directly, or via a `.path`/
 let workflow input data or a chosen file name be interpreted as shell
 syntax, which is exactly the boundary this lowering must not cross.
 
+## Staging with InitialWorkDirRequirement
+
+Nextflow already stages every `File`/`Directory` input under its own
+original name, so a `listing` entry that only asks for that — the bare
+`$(inputs.<name>)` shorthand, or a `Dirent` whose `entryname` is absent or
+`$(inputs.<name>.basename)` — is a no-op and is accepted:
+
+```yaml
+requirements:
+  InitialWorkDirRequirement:
+    listing:
+    - $(inputs.source)
+```
+
+Staging under a different, literal name is supported too:
+
+```yaml
+requirements:
+  InitialWorkDirRequirement:
+    listing:
+    - entry: $(inputs.source)
+      entryname: renamed.txt
+arguments:
+- cat
+- renamed.txt
+```
+
+The renamed port stays bound to its own variable but stages under the
+literal name via Nextflow's `stageAs` option. A renamed input's own `.name`
+reports the staged name, not its original CWL basename, so the same input
+cannot also be referenced elsewhere in that tool's command, stream targets,
+or output globs — the command must address the staged file by the literal
+name directly, as above.
+
+`writable: true`, an `entry` that isn't a bare reference to one File or
+Directory input (inline content construction), an `entryname` that is any
+other expression, a listing entry naming a `val`-qualifier or array-typed
+input, and two inputs staged under the same literal name are all rejected.
+
 ## Current limits
 
 - Workflows must be flat and use `CommandLineTool`-equivalent processes.
