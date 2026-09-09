@@ -23,6 +23,7 @@ from .nf_types import (
     NfProcess,
     NfProcessConnection,
     NfResources,
+    NfShellLiteral,
     NfTemplate,
     NfTemplateSegment,
     NfWorkflowInputConnection,
@@ -290,14 +291,69 @@ def _binding_tokens(prefix: Any, value: NfTemplate, *, separate: Any = True) -> 
             raise ValueError("CWL command prefix must be a string")
 
 
-def _argument_items(arguments: list[Any]) -> list[tuple[tuple[int, int, int], tuple[NfTemplate, ...]]]:
-    items: list[tuple[tuple[int, int, int], tuple[NfTemplate, ...]]] = []
+def _shell_literal_value(
+    raw_name: Any,
+    binding: Mapping[str, Any],
+    *,
+    shell_mode: bool,
+) -> NfShellLiteral:
+    """Lower one shellQuote:false binding to its one supported shape.
+
+    Approved only under ShellCommandRequirement, for a prefix-free binding
+    whose valueFrom is a CWL-author literal with no input reference: the
+    input's own runtime value must never be rendered unquoted, so a binding
+    with no valueFrom, a prefix, or an input-referencing valueFrom is
+    rejected here rather than silently losing its quoting.
+    """
+    if not shell_mode:
+        raise ValueError(
+            f"shellQuote false for {raw_name!r} requires ShellCommandRequirement "
+            "in requirements or hints"
+        )
+    if binding.get("prefix") is not None:
+        raise ValueError(
+            f"shellQuote false for {raw_name!r} does not support a prefix; "
+            "the raw literal must be the binding's whole value"
+        )
+    if binding.get("separate") is False:
+        raise ValueError("CWL separate cannot be specified without a prefix")
+    value_from = binding.get("valueFrom")
+    if value_from is None:
+        raise ValueError(
+            f"shellQuote false for {raw_name!r} has no valueFrom; a plain "
+            "input value is never rendered unquoted"
+        )
+    template = _template(value_from, context=f"CWL shellQuote false value for {raw_name!r}")
+    literal_parts: list[str] = []
+    for segment in template.segments:
+        if not isinstance(segment, NfLiteral):
+            raise ValueError(
+                f"shellQuote false for {raw_name!r} references an input; only a "
+                "CWL-author literal with no input reference may be rendered unquoted"
+            )
+        literal_parts.append(segment.value)
+    return NfShellLiteral("".join(literal_parts))
+
+
+def _argument_items(
+    arguments: list[Any],
+    *,
+    shell_mode: bool,
+) -> list[tuple[tuple[int, int, int], tuple[NfCommandToken, ...]]]:
+    items: list[tuple[tuple[int, int, int], tuple[NfCommandToken, ...]]] = []
     for index, argument in enumerate(arguments):
         match argument:
             case {"valueFrom": value_from}:
-                value = _template(value_from, context="CWL argument valueFrom")
-                tokens = _binding_tokens(argument.get("prefix"), value, separate=argument.get("separate", True))
                 item_position = _position(argument.get("position"), default=0)
+                if argument.get("shellQuote") is False:
+                    tokens: tuple[NfCommandToken, ...] = (
+                        _shell_literal_value(f"arguments[{index}]", argument, shell_mode=shell_mode),
+                    )
+                else:
+                    value = _template(value_from, context="CWL argument valueFrom")
+                    tokens = _binding_tokens(
+                        argument.get("prefix"), value, separate=argument.get("separate", True)
+                    )
             case Mapping():
                 raise ValueError("mapped CWL arguments must contain valueFrom")
             case _:
@@ -367,6 +423,8 @@ def _array_binding(
 
 def _input_binding_items(
     inputs: Mapping[str, Any],
+    *,
+    shell_mode: bool,
 ) -> list[tuple[tuple[int, int, str], tuple[NfCommandToken, ...]]]:
     items: list[tuple[tuple[int, int, str], tuple[NfCommandToken, ...]]] = []
     for raw_name, definition in inputs.items():
@@ -382,6 +440,11 @@ def _input_binding_items(
         value_from = binding.get("valueFrom")
         position = _position(binding.get("position"), default=0)
         required_type = _required_type(input_definition.get("type"))
+        if binding.get("shellQuote") is False:
+            items.append(
+                ((position, 1, str(raw_name)), (_shell_literal_value(raw_name, binding, shell_mode=shell_mode),))
+            )
+            continue
         if _is_array_type(required_type):
             items.append(
                 ((position, 1, str(raw_name)), (_array_binding(raw_name, name, required_type, binding),))
@@ -416,7 +479,11 @@ def _input_binding_items(
 def _command_items(tool: Mapping[str, Any]) -> tuple[NfCommandToken, ...]:
     arguments = _as_list(tool.get("arguments", []), error="CommandLineTool arguments must be a list")
     inputs = _as_mapping(tool.get("inputs", {}), error="CommandLineTool inputs must be a mapping")
-    ordered = sorted([*_argument_items(arguments), *_input_binding_items(inputs)])
+    shell_mode = _requirement(tool, "ShellCommandRequirement") is not None
+    ordered = sorted([
+        *_argument_items(arguments, shell_mode=shell_mode),
+        *_input_binding_items(inputs, shell_mode=shell_mode),
+    ])
     return tuple(token for _key, tokens in ordered for token in tokens)
 
 
@@ -574,10 +641,10 @@ _SUPPORTED_REQUIREMENTS = frozenset({
     "DockerRequirement",
     "InlineJavascriptRequirement",
     "ResourceRequirement",
+    "ShellCommandRequirement",
 })
 _DEFERRED_REQUIREMENTS = {
     "InitialWorkDirRequirement": "in-place staging is deferred to Phase 2",
-    "ShellCommandRequirement": "shell-mode command lowering is deferred to Phase 2",
 }
 
 _INERT_DOCUMENTATION_FIELDS = frozenset({"doc", "label"})
@@ -629,6 +696,7 @@ _SUPPORTED_REQUIREMENT_FIELDS = {
         "ramMax",
         "ramMin",
     }),
+    "ShellCommandRequirement": frozenset({"class"}),
 }
 _WORKFLOW_CONSUMED_FIELDS = frozenset({
     "$namespaces",
@@ -952,6 +1020,7 @@ def _tool_capability_findings(
                             path=requirement_path,
                         )
                     )
+    shell_mode_active = _requirement(tool, "ShellCommandRequirement") is not None
     match tool.get("inputs", {}):
         case Mapping() as inputs:
             findings.extend(
@@ -985,12 +1054,14 @@ def _tool_capability_findings(
                     )
                 )
                 if binding.get("shellQuote") is False:
-                    findings.append(
-                        f"{input_binding_path}.shellQuote: shellQuote false is deferred to Phase 2"
-                    )
+                    try:
+                        _shell_literal_value(raw_name, binding, shell_mode=shell_mode_active)
+                    except ValueError as exc:
+                        findings.append(f"{input_binding_path}.shellQuote: {exc}")
                 if (
                     _required_type(raw_definition.get("type")) == "boolean"
                     and binding.get("valueFrom") is not None
+                    and binding.get("shellQuote") is not False
                 ):
                     try:
                         _boolean_flag_reference(
@@ -1017,10 +1088,12 @@ def _tool_capability_findings(
                     )
                 )
                 if argument.get("shellQuote") is False:
-                    findings.append(
-                        f"{argument_path}.shellQuote: "
-                        "shellQuote false is deferred to Phase 2"
-                    )
+                    try:
+                        _shell_literal_value(
+                            f"arguments[{argument_index}]", argument, shell_mode=shell_mode_active
+                        )
+                    except ValueError as exc:
+                        findings.append(f"{argument_path}.shellQuote: {exc}")
         case _:
             pass
 

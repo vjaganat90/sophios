@@ -319,7 +319,36 @@ class NfArrayBinding:
         return {"kind": "array", "name": self.name, "prefix": self.prefix}
 
 
-NfCommandToken = NfTemplate | NfFlag | NfArrayBinding
+@dataclass(frozen=True, slots=True)
+class NfShellLiteral:
+    """Raw, unquoted shell text from an approved ``shellQuote: false`` binding.
+
+    Renders exactly as written, bypassing the generated shell-quoting
+    helper. Valid only in command token position, and only for a binding
+    whose text is entirely CWL-author literal: no input reference of any
+    kind ever reaches this token, so unquoting it never exposes runtime
+    data as shell syntax.
+    """
+
+    text: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.text, str):
+            raise TypeError("shell literal text must be a string")
+        if "\x00" in self.text:
+            raise ValueError("shell literal text cannot contain NUL bytes")
+
+    def to_dict(self) -> dict[str, str]:
+        """Return a JSON-compatible representation.
+
+        Returns:
+            dict[str, str]: The token as ``{"kind": "shell_literal",
+                "text": ...}``.
+        """
+        return {"kind": "shell_literal", "text": self.text}
+
+
+NfCommandToken = NfTemplate | NfFlag | NfArrayBinding | NfShellLiteral
 
 
 def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
@@ -331,6 +360,9 @@ def _command_token_from_dict(value: Mapping[str, Any]) -> NfCommandToken:
         case "array":
             _check_fields(item, type_name="NfArrayBinding", required={"kind", "name", "prefix"})
             return NfArrayBinding(item["name"], item["prefix"])
+        case "shell_literal":
+            _check_fields(item, type_name="NfShellLiteral", required={"kind", "text"})
+            return NfShellLiteral(item["text"])
         case _:
             return NfTemplate.from_dict(item)
 
@@ -347,7 +379,7 @@ class NfCommand:
     def __post_init__(self) -> None:
         tokens = tuple(self.tokens)
         if not tokens or not all(
-            isinstance(token, (NfTemplate, NfFlag, NfArrayBinding)) for token in tokens
+            isinstance(token, (NfTemplate, NfFlag, NfArrayBinding, NfShellLiteral)) for token in tokens
         ):
             raise ValueError("command must contain at least one typed token")
         object.__setattr__(self, "tokens", tokens)
@@ -868,14 +900,14 @@ def _connection_from_dict(value: Mapping[str, Any]) -> NfConnection:
 class ExecutableNextflowWorkflow:
     """Closed, immutable, versioned executable representation of a DSL2 workflow."""
 
-    SCHEMA_VERSION: ClassVar[int] = 5
+    SCHEMA_VERSION: ClassVar[int] = 6
     # Earlier versions whose value space is a strict subset of the current
     # model hydrate unchanged; serialization always writes SCHEMA_VERSION.
-    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5})
+    SUPPORTED_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({2, 3, 4, 5, 6})
     # Each additive token or segment kind declares the version that
     # introduced it, so the subset property is enforced rather than assumed.
     KIND_SCHEMA_VERSIONS: ClassVar[Mapping[str, int]] = MappingProxyType(
-        {"flag": 3, "basename": 4, "array": 5}
+        {"flag": 3, "basename": 4, "array": 5, "shell_literal": 6}
     )
     # Version an additive non-kind-tagged field was introduced in, keyed by
     # the field name it appears under. is_array predates a "kind" tag on

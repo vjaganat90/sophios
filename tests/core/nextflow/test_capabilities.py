@@ -10,7 +10,7 @@ import pytest
 
 from sophios.api.python.workflow import CompiledWorkflow
 from sophios.input_output_nf import render_nextflow
-from sophios.nf_types import NfFlag, NfLiteral, NfResources, NfTemplate
+from sophios.nf_types import NfFlag, NfLiteral, NfResources, NfShellLiteral, NfTemplate
 from sophios.utils_nf import cwl_rosetree_to_nextflow
 from sophios.wic_types import RoseTree, Yaml
 
@@ -39,8 +39,8 @@ def test_real_unsupported_rosetree_aggregates_capability_errors(
     with pytest.raises(ValueError) as error:
         cwl_rosetree_to_nextflow(unsupported_real_linear_rose)
     message = str(error.value)
-    assert "steps[1].run.requirements.ShellCommandRequirement" in message
     assert "steps[1].run.requirements.InitialWorkDirRequirement" in message
+    assert "steps[1].run.inputs.str.inputBinding.shellQuote" in message
     assert "steps[1].run.inputs.file.inputBinding.shellQuote" in message
     assert "steps[2].run.outputs.output.type" in message
     assert "steps[2].run.outputs.output.outputBinding.loadContents" in message
@@ -1182,3 +1182,118 @@ def test_rejects_array_value_with_a_mismatched_item_type() -> None:
     rose = _array_rose("string", ["a", 1])
     with pytest.raises(ValueError, match="does not match its supported CWL type"):
         cwl_rosetree_to_nextflow(rose)
+
+
+def _shell_tool(arguments: list[Any], *, shell_command: bool = True) -> Yaml:
+    extra: dict[str, Any] = {"arguments": arguments}
+    if shell_command:
+        extra["requirements"] = {"ShellCommandRequirement": {}}
+    return tool(
+        "SHELL",
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+        **extra,
+    )
+
+
+def _shell_rose(arguments: list[Any], *, shell_command: bool = True) -> RoseTree:
+    return synthetic_rose(
+        workflow_doc(
+            [step("SHELL", out=["result"])],
+            outputs={"result": {"type": "File", "outputSource": "SHELL/result"}},
+        ),
+        [_shell_tool(arguments, shell_command=shell_command)],
+    )
+
+
+@pytest.mark.fast
+def test_accepts_shell_command_requirement_with_no_shell_quote_false() -> None:
+    """ShellCommandRequirement alone changes nothing: no shellQuote:false, nothing to reject."""
+    rose = _shell_rose(["hello"])
+    converted = cwl_rosetree_to_nextflow(rose)
+    assert converted.processes[0].command.tokens[0] == NfTemplate((NfLiteral("SHELL"),))
+
+
+@pytest.mark.fast
+def test_rejects_shell_quote_false_without_shell_command_requirement() -> None:
+    rose = _shell_rose([{"valueFrom": ">>", "shellQuote": False}], shell_command=False)
+    with pytest.raises(ValueError, match="requires ShellCommandRequirement"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_shell_quote_false_with_no_value_from() -> None:
+    rose = _shell_rose([{"shellQuote": False}])
+    with pytest.raises(ValueError, match="has no valueFrom"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_shell_quote_false_with_a_prefix() -> None:
+    rose = _shell_rose([{"valueFrom": ">>", "shellQuote": False, "prefix": "-x"}])
+    with pytest.raises(ValueError, match="does not support a prefix"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+def _shell_tool_with_input(value_from: str) -> Yaml:
+    return tool(
+        "SHELL",
+        inputs={"message": {"type": "string"}},
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+        requirements={"ShellCommandRequirement": {}},
+        arguments=[{"valueFrom": value_from, "shellQuote": False}],
+    )
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    "value_from",
+    ["$(inputs.message)", "prefix-$(inputs.message)-suffix", "$(inputs.message.basename)"],
+    ids=["bare", "embedded", "basename-suffix"],
+)
+def test_rejects_shell_quote_false_referencing_an_input(value_from: str) -> None:
+    """Unquoting a value derived from any input -- directly or via a suffix -- is the boundary."""
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("SHELL", **{"in": {"message": "message"}, "out": ["result"]})],
+            inputs={"message": {"type": "string"}},
+            outputs={"result": {"type": "File", "outputSource": "SHELL/result"}},
+        ),
+        [_shell_tool_with_input(value_from)],
+        workflow_inputs={"message": "hi"},
+    )
+    with pytest.raises(ValueError, match="references an input"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_shell_quote_false_input_binding_with_no_value_from() -> None:
+    """The real append.cwl adapter's shape: shellQuote:false on a plain, no-valueFrom inputBinding."""
+    append_tool = tool(
+        "APPEND",
+        inputs={
+            "text": {
+                "type": "string",
+                "inputBinding": {"shellQuote": False, "position": 1, "prefix": "echo"},
+            }
+        },
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+        requirements={"ShellCommandRequirement": {}},
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("APPEND", **{"in": {"text": "text"}, "out": ["result"]})],
+            inputs={"text": {"type": "string"}},
+            outputs={"result": {"type": "File", "outputSource": "APPEND/result"}},
+        ),
+        [append_tool],
+        workflow_inputs={"text": "Hello"},
+    )
+    with pytest.raises(ValueError, match="does not support a prefix"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_accepts_literal_shell_quote_false_binding() -> None:
+    rose = _shell_rose([{"valueFrom": ">>", "shellQuote": False}, "out.txt"])
+    converted = cwl_rosetree_to_nextflow(rose)
+    assert NfShellLiteral(">>") in converted.processes[0].command.tokens
