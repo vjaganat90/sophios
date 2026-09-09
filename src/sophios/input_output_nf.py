@@ -18,6 +18,7 @@ from .nf_types import (
     NfPort,
     NfProcess,
     NfProcessConnection,
+    NfShellLiteral,
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
     process_dependencies,
@@ -95,6 +96,16 @@ def _render_array_binding(token: NfArrayBinding) -> str:
     return f"${{{token.name}.isEmpty() ? '' : {joined}}}"
 
 
+def _render_shell_literal(token: NfShellLiteral) -> str:
+    """Render one approved shellQuote:false literal exactly as written, unquoted.
+
+    Bypasses the shell-quoting helper entirely: the text is a CWL-author
+    literal with no input reference, proven by capability analysis before
+    this token can exist, so only the enclosing GString needs escaping.
+    """
+    return _groovy_gstring_fragment(token.text)
+
+
 def _render_command_token(token: Any) -> str:
     """Render one argv token; flags and array bindings collapse away when falsy/empty."""
     if isinstance(token, NfFlag):
@@ -102,6 +113,8 @@ def _render_command_token(token: Any) -> str:
         return f"${{{token.name} ? {quoted} : ''}}"
     if isinstance(token, NfArrayBinding):
         return _render_array_binding(token)
+    if isinstance(token, NfShellLiteral):
+        return _render_shell_literal(token)
     return _render_template(token)
 
 

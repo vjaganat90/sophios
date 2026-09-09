@@ -154,6 +154,33 @@ present, valid value — distinct from an absent optional value above.
 not supported, nor are the shorthand `File[]` type form, nested arrays, a
 per-item `inputBinding`, or array-typed outputs.
 
+## Shell mode
+
+`ShellCommandRequirement` alone changes nothing: every command token is
+already individually shell-quoted and joined into one line, matching CWL's
+own shell-mode quoting. `shellQuote: false` opts one binding out of quoting
+so it can carry real shell syntax — pipes, redirections, globs — and is
+supported only for a prefix-free binding whose `valueFrom` is a CWL-author
+literal with no input reference at all:
+
+```yaml
+requirements:
+  ShellCommandRequirement: {}
+arguments:
+- printf
+- "%s"
+- $(inputs.message)
+- valueFrom: ">>"
+  shellQuote: false
+- out.txt
+```
+
+`shellQuote: false` on a binding with no `valueFrom`, with a `prefix`, or
+whose `valueFrom` references any input — directly, or via a `.path`/
+`.basename` suffix — is rejected: unquoting a runtime-supplied value would
+let workflow input data or a chosen file name be interpreted as shell
+syntax, which is exactly the boundary this lowering must not cross.
+
 ## Current limits
 
 - Workflows must be flat and use `CommandLineTool`-equivalent processes.
