@@ -758,6 +758,86 @@ def test_basename_derived_output_name_executes(tmp_path: Path) -> None:
 
 @pytest.mark.nextflow
 @pytest.mark.serial
+def test_iwdr_own_basename_listing_executes_unchanged(tmp_path: Path) -> None:
+    """R2.10: the bare $(inputs.<name>) IWDR shorthand is a no-op and still executes."""
+    write_tool = (
+        CommandLineTool(
+            "write_source",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="lines.txt")),
+        )
+        .base_command("echo")
+        .stdout("lines.txt")
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = "own basename staging"
+
+    stage_tool = (
+        CommandLineTool(
+            "stage_own_basename",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("cat")
+        .stdout("out.txt")
+        .initial_workdir(["$(inputs.source)"])
+    )
+    stage_step = Step(stage_tool, step_name="stage_own_basename")
+    stage_step.inputs.source = write.outputs.result
+
+    workflow = Workflow([write, stage_step], "nextflow_iwdr_own_basename")
+    workflow.outputs.result = stage_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("out.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["own basename staging\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
+def test_iwdr_stage_as_rename_executes_and_reaches_the_command(tmp_path: Path) -> None:
+    """R2.11: an IWDR literal rename stages a file under a different name the command hard-codes."""
+    write_tool = (
+        CommandLineTool(
+            "write_source",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="original_name.txt")),
+        )
+        .base_command("echo")
+        .stdout("original_name.txt")
+    )
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = "iwdr staged content"
+
+    stage_tool = CommandLineTool(
+        "stage_and_read",
+        Inputs(source=Input(cwl.file)),
+        Outputs(result=Output(cwl.file, glob="out.txt")),
+    )
+    stage_tool = (
+        stage_tool
+        .stage(stage_tool.inputs.source, entryname="renamed_by_iwdr.txt")
+        .base_command("cat")
+        .argument("renamed_by_iwdr.txt", position=1)
+        .stdout("out.txt")
+    )
+    stage_step = Step(stage_tool, step_name="stage_and_read")
+    stage_step.inputs.source = write.outputs.result
+
+    workflow = Workflow([write, stage_step], "nextflow_iwdr_rename")
+    workflow.outputs.result = stage_step.outputs.result
+
+    workflow.to_nextflow(tmp_path)
+    result = execute_nextflow(tmp_path)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    outputs = list((tmp_path / "work").rglob("out.txt"))
+    assert [path.read_text(encoding="utf-8") for path in outputs] == ["iwdr staged content\n"]
+
+
+@pytest.mark.nextflow
+@pytest.mark.serial
 def test_mixed_adapter_and_builder_workflow_executes_end_to_end(tmp_path: Path) -> None:
     """One workflow mixing an imported adapter with tool_builder steps runs end to end.
 

@@ -39,7 +39,10 @@ def test_real_unsupported_rosetree_aggregates_capability_errors(
     with pytest.raises(ValueError) as error:
         cwl_rosetree_to_nextflow(unsupported_real_linear_rose)
     message = str(error.value)
-    assert "steps[1].run.requirements.InitialWorkDirRequirement" in message
+    # append.cwl's InitialWorkDirRequirement listing ($(inputs.file), staging
+    # under its own basename) is the approved self-staging no-op shape, so it
+    # no longer produces a finding; its two dynamic-value shellQuote:false
+    # bindings still do.
     assert "steps[1].run.inputs.str.inputBinding.shellQuote" in message
     assert "steps[1].run.inputs.file.inputBinding.shellQuote" in message
     assert "steps[2].run.outputs.output.type" in message
@@ -1297,3 +1300,177 @@ def test_accepts_literal_shell_quote_false_binding() -> None:
     rose = _shell_rose([{"valueFrom": ">>", "shellQuote": False}, "out.txt"])
     converted = cwl_rosetree_to_nextflow(rose)
     assert NfShellLiteral(">>") in converted.processes[0].command.tokens
+
+
+def _iwdr_tool(
+    listing: list[Any],
+    *,
+    extra_inputs: Yaml | None = None,
+    arguments: list[Any] | None = None,
+) -> Yaml:
+    inputs: dict[str, Any] = {"source": {"type": "File"}}
+    if extra_inputs:
+        inputs.update(extra_inputs)
+    return tool(
+        "STAGE",
+        inputs=inputs,
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+        requirements={"InitialWorkDirRequirement": {"listing": listing}},
+        arguments=arguments or ["cat", "renamed.txt"],
+        stdout="out.txt",
+    )
+
+
+def _iwdr_rose(listing: list[Any], **kwargs: Any) -> RoseTree:
+    return synthetic_rose(
+        workflow_doc(
+            [step("STAGE", **{"in": {"source": "source"}, "out": ["result"]})],
+            inputs={"source": {"type": "File"}},
+            outputs={"result": {"type": "File", "outputSource": "STAGE/result"}},
+        ),
+        [_iwdr_tool(listing, **kwargs)],
+        workflow_inputs={"source": {"class": "File", "path": "in.txt"}},
+    )
+
+
+@pytest.mark.fast
+def test_accepts_iwdr_bare_shorthand_own_basename() -> None:
+    """The real append.cwl shape: a bare $(inputs.<name>) listing entry is a no-op."""
+    rose = _iwdr_rose(["$(inputs.source)"])
+    converted = cwl_rosetree_to_nextflow(rose)
+    assert converted.processes[0].inputs[0].stage_as is None
+
+
+@pytest.mark.fast
+def test_accepts_iwdr_dirent_self_basename_entryname() -> None:
+    """The tool_builder .stage() default: entryname restates the input's own basename."""
+    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "$(inputs.source.basename)"}])
+    converted = cwl_rosetree_to_nextflow(rose)
+    assert converted.processes[0].inputs[0].stage_as is None
+
+
+@pytest.mark.fast
+def test_accepts_iwdr_dirent_literal_rename() -> None:
+    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "renamed.txt"}])
+    converted = cwl_rosetree_to_nextflow(rose)
+    assert converted.processes[0].inputs[0].stage_as == "renamed.txt"
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_writable_true() -> None:
+    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "renamed.txt", "writable": True}])
+    with pytest.raises(ValueError, match="writable: true"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_inline_content_entry() -> None:
+    rose = _iwdr_rose([{"entry": "literal file content", "entryname": "x.txt"}])
+    with pytest.raises(ValueError, match="inline content construction is deferred"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_computed_entryname() -> None:
+    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "$(inputs.source.path)"}])
+    with pytest.raises(ValueError, match="computed or differently-referencing entryname"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_entryname_with_path_separator() -> None:
+    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "sub/dir.txt"}])
+    with pytest.raises(ValueError, match="path separator"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_undeclared_input() -> None:
+    rose = _iwdr_rose(["$(inputs.nope)"])
+    with pytest.raises(ValueError, match="undeclared input"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_val_typed_target() -> None:
+    rose = _iwdr_rose(["$(inputs.name)"], extra_inputs={"name": {"type": "string"}})
+    with pytest.raises(ValueError, match="non-path input"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_array_typed_target() -> None:
+    rose = _iwdr_rose(
+        ["$(inputs.files)"],
+        extra_inputs={"files": {"type": {"type": "array", "items": "File"}}},
+    )
+    with pytest.raises(ValueError, match="array-typed input"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_unsupported_dirent_field() -> None:
+    rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "x.txt", "foo": 1}])
+    with pytest.raises(ValueError, match="unsupported Dirent fields"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_listing_entry_of_unsupported_shape() -> None:
+    rose = _iwdr_rose([123])
+    with pytest.raises(ValueError, match="bare .* reference or a Dirent mapping"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_listing_that_is_not_a_list() -> None:
+    broken = tool(
+        "STAGE",
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+        requirements={"InitialWorkDirRequirement": {"listing": "not-a-list"}},
+    )
+    rose = synthetic_rose(
+        workflow_doc([step("STAGE", out=["result"])]),
+        [broken],
+    )
+    with pytest.raises(ValueError, match="listing must be a list"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_renamed_input_referenced_elsewhere() -> None:
+    rose = _iwdr_rose(
+        [{"entry": "$(inputs.source)", "entryname": "renamed.txt"}],
+        arguments=["cat", "$(inputs.source)"],
+    )
+    with pytest.raises(ValueError, match="staged under an explicit rename"):
+        cwl_rosetree_to_nextflow(rose)
+
+
+@pytest.mark.fast
+def test_rejects_iwdr_collision_same_literal_name() -> None:
+    collision_tool = tool(
+        "STAGE",
+        inputs={"a": {"type": "File"}, "b": {"type": "File"}},
+        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+        requirements={"InitialWorkDirRequirement": {"listing": [
+            {"entry": "$(inputs.a)", "entryname": "same.txt"},
+            {"entry": "$(inputs.b)", "entryname": "same.txt"},
+        ]}},
+        arguments=["cat", "same.txt"],
+        stdout="out.txt",
+    )
+    rose = synthetic_rose(
+        workflow_doc(
+            [step("STAGE", **{"in": {"a": "a", "b": "b"}, "out": ["result"]})],
+            inputs={"a": {"type": "File"}, "b": {"type": "File"}},
+            outputs={"result": {"type": "File", "outputSource": "STAGE/result"}},
+        ),
+        [collision_tool],
+        workflow_inputs={
+            "a": {"class": "File", "path": "a.txt"},
+            "b": {"class": "File", "path": "b.txt"},
+        },
+    )
+    with pytest.raises(ValueError, match="staged under the same literal name"):
+        cwl_rosetree_to_nextflow(rose)
