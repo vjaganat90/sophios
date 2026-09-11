@@ -53,6 +53,7 @@ class Code(StrEnum):
     MISPLACED_EDGE_DEF = 'wic019'
     LITERAL_TYPE_MISMATCH = 'wic020'
     STEP_WITHOUT_ID = 'wic021'
+    FIXED_POINT_NOT_REACHED = 'wic022'
     RECURSIVE_ALIAS = 'wic030'
 
 
