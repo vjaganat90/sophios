@@ -998,15 +998,14 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                             f"Declare '{arg_var}' with a type that may overlap, or bind "
                             f"'{arg_key}' to a different source.")
 
-                    if 'doc' in inputs_key_dict:
-                        inputs_key_dict['doc'] += '\\n' + in_dict.get('doc', '')
-                    else:
-                        inputs_key_dict['doc'] = in_dict.get('doc', '')
-                    if 'label' in inputs_key_dict:
-                        inputs_key_dict['label'] += '\\n' + \
-                            in_dict.get('label', '')
-                    else:
-                        inputs_key_dict['label'] = in_dict.get('label', '')
+                    # Preserve the user's input block while carrying useful
+                    # documentation from the consuming argument.
+                    for key in ('doc', 'label'):
+                        addition = in_dict.get(key, '')
+                        if not addition:
+                            continue
+                        existing = inputs_key_dict.get(key, '')
+                        inputs_key_dict[key] = f'{existing}\n{addition}' if existing else addition
 
                     if not hashable:
                         pass  # Unhashable values cannot be used as input_mapping keys.
