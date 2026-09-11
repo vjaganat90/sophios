@@ -256,7 +256,7 @@ def _set_iteration_violations(tree: ast.AST) -> list[tuple[int, str]]:
 #: fixing either here would be a change the finding does not name.
 ALLOWED_SET_ITERATIONS: Final[dict[Path, frozenset[int]]] = {
     SRC / 'plugins.py': frozenset({149}),
-    SRC / 'compiler.py': frozenset({350}),
+    SRC / 'compiler.py': frozenset({351}),
 }
 
 

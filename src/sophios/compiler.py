@@ -17,6 +17,7 @@ from .wic_types import (CompilerInfo, CompilerOptions, EnvData, ExplicitEdgeCall
                         NodeData, RoseTree, Tool, Tools, WorkflowInputs, WorkflowInputsFile,
                         WorkflowOutputs, Yaml, YamlTagPaths, YamlTree, StepId)
 from .lang import versions
+from .lang.compatibility import TypeRelation, reference_relation
 from .lang.cwl import CWL_VERSION
 from .lang.diagnostics import Code, SophiosError
 
@@ -497,6 +498,11 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
     graphdata = setup.graphdata
     vars_workflow_output_internal = setup.vars_workflow_output_internal
 
+    # Raw endpoint declarations for explicit edges defined in this document.
+    # Cross-scope definitions are deliberately absent: unavailable information
+    # is UNKNOWN, never grounds for rejecting a user's reference.
+    edge_types: dict[str, Any] = {}
+
     for i, step_key in enumerate(setup.steps_keys):
         step_name_i = utils.step_name_str(setup.yaml_stem, i, step_key)
         stem = Path(step_key).stem
@@ -738,6 +744,10 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                     if not setup.explicit_edge_defs_copy.get(edgedef):
                         # discard anchor / retain string key
                         setup.steps[i]['out'][j] = out_key
+                        source_type = tool_i.cwl['outputs'].get(out_key, {}).get('type')
+                        if setup.steps[i].get('scatter'):
+                            source_type = {'type': 'array', 'items': source_type}
+                        edge_types[edgedef] = source_type
                         setup.explicit_edge_defs_copy.update(
                             {edgedef: (namespaces + [step_name_or_key], out_key)})
                         # Add a 'dummy' value to explicit_edge_calls, because
@@ -785,6 +795,20 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
             match arg_val:
                 case {'wic_alias': _}:
                     arg_val = arg_val[Key.ALIAS]
+
+                    sink_type = in_dict.get('type')
+                    if arg_key in setup.steps[i].get('scatter', []):
+                        sink_type = {'type': 'array', 'items': sink_type}
+                    source_type = edge_types.get(arg_val)
+                    if reference_relation(source_type, sink_type, lang_version=lang_version) \
+                            is TypeRelation.DISJOINT:
+                        raise SophiosError.error(
+                            Code.INCOMPATIBLE_INPUT_REFERENCE,
+                            f"Edge '&{arg_val}' cannot feed '{arg_key}' of step "
+                            f"'{step_key}' in {setup.yaml_stem}.wic: source type "
+                            f'{source_type!r} is disjoint from sink type {sink_type!r}. '
+                            f"Bind '{arg_key}' to an edge whose declared type may overlap.")
+
                     if not setup.explicit_edge_defs_copy.get(arg_val):
                         if is_root and not testing:
                             # Even if is_root, we don't want to raise an Exception
@@ -959,6 +983,20 @@ def compile_workflow_once(yaml_tree_ast: YamlTree,
                             Code.UNRESOLVED_INPUT,
                             f"Warning! Did you forget to use !ii before {arg_var} in {setup.yaml_stem}.wic?",
                             'If you want to compile the workflow anyway, use --allow_raw_cwl')
+
+                    sink_type = in_dict.get('type')
+                    if arg_key in setup.steps[i].get('scatter', []):
+                        sink_type = {'type': 'array', 'items': sink_type}
+                    source_type = inputs_key_dict.get('type')
+                    if reference_relation(source_type, sink_type, lang_version=lang_version) \
+                            is TypeRelation.DISJOINT:
+                        raise SophiosError.error(
+                            Code.INCOMPATIBLE_INPUT_REFERENCE,
+                            f"Input '{arg_var}' cannot feed '{arg_key}' of step "
+                            f"'{step_key}' in {setup.yaml_stem}.wic: source type "
+                            f'{source_type!r} is disjoint from sink type {sink_type!r}. '
+                            f"Declare '{arg_var}' with a type that may overlap, or bind "
+                            f"'{arg_key}' to a different source.")
 
                     if 'doc' in inputs_key_dict:
                         inputs_key_dict['doc'] += '\\n' + in_dict.get('doc', '')
