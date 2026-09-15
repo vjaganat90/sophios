@@ -38,13 +38,13 @@ class _Captured(Exception):
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(('cwl_tool', 'module', 'name', 'tree_arg'), [
-    ('tool', compiler, 'compile_workflow', 0),
-    ('tool.wic', ast, 'read_ast_from_disk', 1),
+@pytest.mark.parametrize(('cwl_tool', 'module', 'name', 'tree_arg', 'config'), [
+    ('tool', compiler, 'compile_workflow', 0, {'id': 'elsewhere', 'in': {}}),
+    ('tool.wic', ast, 'read_ast_from_disk', 1, {'in': {}}),
 ])
 def test_rerun_cwltool_builds_an_id_form_step(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-        cwl_tool: str, module: Any, name: str, tree_arg: int) -> None:
+        cwl_tool: str, module: Any, name: str, tree_arg: int, config: Yaml) -> None:
     """`rerun_cwltool` builds a step `get_steps_keys` can read back, on both branches.
 
     Asserting on literals copied into the test proves nothing about the code:
@@ -53,6 +53,9 @@ def test_rerun_cwltool_builds_an_id_form_step(
     the seam to stub — the CWL runner is never reached, and the cache directory
     is never touched. `_Captured` is not a `FileNotFoundError`, so the
     function's own handler does not swallow it.
+
+    One row's config carries an `id` of its own, so the step the branch builds
+    is only named for the tool if the config cannot overwrite it.
     """
     seen: list[Yaml] = []
 
@@ -63,7 +66,7 @@ def test_rerun_cwltool_builds_an_id_form_step(
     monkeypatch.setattr(module, name, capture)
     with pytest.raises(_Captured):
         cwl_subinterpreter.rerun_cwltool(
-            '', tmp_path, tmp_path, cwl_tool, {'in': {}}, {}, {}, None, tmp_path)
+            '', tmp_path, tmp_path, cwl_tool, config, {}, {}, None, tmp_path)
 
     assert [utils.require_step_id(step) for step in seen[0]['steps']] == [cwl_tool]
 

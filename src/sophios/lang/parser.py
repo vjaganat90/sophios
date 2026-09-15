@@ -102,10 +102,10 @@ def _report_unknown_tags(root: yaml.nodes.Node, file: str, diags: Diagnostics) -
     """Report every tag the language does not own, wherever it appears.
 
     One walk over the composed graph rather than a call at each position that
-    consumes a node. The per-position form is what this replaces, and it had
-    already missed three positions on its first pass and eight on its second —
-    the rule had one home, but every position still had to remember to call it,
-    and a position added later starts uncovered by default.
+    consumes a node. The per-position form is what this replaces, and each pass
+    over it found positions the previous one had missed — the rule had one home,
+    but every position still had to remember to call it, and a position added
+    later starts uncovered by default.
 
     Sophios owns four tags and the loader rejects every other, so the
     specification must never be more permissive than the thing it specifies.
@@ -134,6 +134,18 @@ def _report_unknown_tags(root: yaml.nodes.Node, file: str, diags: Diagnostics) -
                 stack.append(value_node)
 
 
+def _in_reading_order(diags: Diagnostics) -> Diagnostics:
+    """Order diagnostics by position, whichever pass produced them.
+
+    One walk reports tags and the structural pass reports everything else, so
+    without this the two arrive in pass order rather than reading order. Sorted
+    by position, a reader works down the file once; unpositioned diagnostics
+    cannot occur here, since every parse diagnostic carries a span.
+    """
+    return Diagnostics(sorted(
+        diags, key=lambda d: (d.span.start_line, d.span.start_column) if d.span else (0, 0)))
+
+
 def parse(text: str, filename: str = '<string>') -> ParseResult:
     """Parse `.wic` source text into a `Document`.
 
@@ -160,15 +172,10 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
             f'a Sophios document must be a mapping, found {_kind(root)}',
             SourceSpan.of(filename, root),
         )
-        return ParseResult(None, diagnostics)
+        return ParseResult(None, _in_reading_order(diagnostics))
 
     document = _document(root, filename, diagnostics)
-    # One walk reports tags and the structural pass reports everything else, so
-    # without this the two arrive in pass order rather than reading order. Sorted
-    # by position, a reader works down the file once; unpositioned diagnostics
-    # cannot occur here, since every parse diagnostic carries a span.
-    return ParseResult(document, Diagnostics(sorted(
-        diagnostics, key=lambda d: (d.span.start_line, d.span.start_column) if d.span else (0, 0))))
+    return ParseResult(document, _in_reading_order(diagnostics))
 
 
 # --------------------------------------------------------------------------
@@ -464,12 +471,9 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     """
     span = SourceSpan.of(file, node)
 
-    # Tag check first, in the same order `_opaque` uses. A node can be both
-    # unknown-tagged and a misplaced anchor (`!foo {wic_anchor: x}`), and the
-    # two positions must reach the same verdict — checking the anchor first
-    # here would report `wic019` alone in input position while passthrough
-    # reported both, which is the two-surfaces-one-language divergence this
-    # rule exists to prevent.
+    # `_report_unknown_tags` covers the whole graph before this runs, so
+    # `!foo {wic_anchor: x}` earns `wic009` here as it does in every other
+    # position, whatever order this function checks in.
 
     if _is_edge_def(node):
         # The diagnostic comes before the name is read, so a *malformed* name
