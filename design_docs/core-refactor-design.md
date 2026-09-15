@@ -1,7 +1,9 @@
 # Sophios Core Refactor — Design
 
 **Status:** Approved. This design is locked; changes require a new revision.
-**Baseline:** `master` at `6570369`
+**Baseline:** the compiler as it stood before Spec 0 (`master` at `6570369`).
+Present-tense descriptions of existing behaviour below refer to that state, not
+to any later one; the hash is given so a reader can check them against it.
 **Scope:** Four specs, delivered in order. Each is independently shippable.
 
 ## Naming
@@ -343,13 +345,14 @@ spellings — an array whose items carry `id`, and a mapping keyed by step name
 — and Sophios's grammar admits exactly those.
 
 A third form, a *sequence of single-key mappings*, was listed in the reference
-and worked — until the May 2024 normal-form refactor (`9758e81`) made the
-compiler read a step's name from `id:` and rewrote every tutorial out of it,
-leaving the reference describing a form the compiler no longer read. That
-break is ratified rather than reverted: the key is not lifted into `id` when
-the container is already an array, so `cwltool` fails the same document the
-same way, for the same reason. The form was removed from the language rather
-than implemented, and the parser reports it (`wic006`).
+and worked — until an earlier normal-form refactor made the compiler read a
+step's name from `id:` and rewrote every tutorial out of it, leaving the
+reference describing a form the compiler no longer read; the language reference
+records which change that was. That break is ratified rather than reverted: the
+key is not lifted into `id` when the container is already an array, so
+`cwltool` fails the same document the same way, for the same reason. The form
+was removed from the language rather than implemented, and the parser reports
+it (`wic006`).
 
 Implementing it instead would have cost a real diagnostic. In list position a
 single-key mapping is ambiguous — `- in: {…}` is a forgotten step id, and
@@ -503,9 +506,7 @@ step was replaced by a different tool of the same arity.
   verbatim and the corpus uses that spelling. Both direct compilation and
   `write_wic()` therefore obtain output references from the same document
   builder, which knows only the concrete form; there is no caller-selectable
-  flag, because a second spelling would be a second language. The property
-  first shipped as
-  `xfail(strict=True)`, so the production correction had to turn it green.
+  flag, because a second spelling would be a second language.
 - **Idempotence** — compiling one input twice agrees. Not trivial: the compiler
   mutates a module global, the tool registry, and four structures threaded
   through the recursion.
