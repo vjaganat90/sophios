@@ -84,7 +84,7 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
         if Path(cwl_tool).suffix == '.wic':
             yaml_path = cwl_tool
             wic_steps = {'steps': {f'(1, {cwl_tool})': {'wic': {'steps': args_vals_new}}}}
-            root_yaml_tree = {'wic': wic_steps, 'steps': [{cwl_tool: None}]}
+            root_yaml_tree = {'wic': wic_steps, 'steps': [{'id': cwl_tool}]}
             # TODO: Support other namespaces
             plugin_ns = 'global'  # wic['wic'].get('namespace', 'global')
             step_id = StepId(yaml_path, plugin_ns)
@@ -94,7 +94,9 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
             yaml_tree = ast.python_script_generate_cwl(yaml_tree, Path(''), tools_cwl)
             yml = yaml_tree.yml
         else:
-            yml = {'steps': [{cwl_tool: args_vals_new}]}
+            # id last: a config: tag carrying its own 'id' would otherwise win the
+            # spread and silently retarget the step at a different tool.
+            yml = {'steps': [{**args_vals_new, 'id': cwl_tool}]}
 
         # Measure compile time
         time_initial = time.time()

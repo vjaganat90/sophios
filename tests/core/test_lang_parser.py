@@ -495,6 +495,44 @@ def test_a_named_entry_reports_what_the_mapping_form_reports(claim: str, source:
     assert rejected == [Code.MISSING_STEP_ID, *baseline], claim
 
 
+#: A tag on a node that makes up the document's *structure*, rather than on a
+#: key or an input value. The loader rejects all four, so accepting them is the
+#: specification being more permissive than the thing it specifies.
+STRUCTURAL_TAGS: Final = (
+    ('the root document', '--- !foo\nsteps: []\n'),
+    ('the steps: node', 'steps: !foo {}\n'),
+    ('one sequence entry', 'steps:\n- !foo {id: s}\n'),
+    ('a step body in mapping form', 'steps:\n  touch: !foo {in: {}}\n'),
+    ('the in: mapping', 'steps:\n- id: s\n  in: !foo {f: !ii 1}\n'),
+    ('the out: node', 'steps:\n- id: s\n  out: !foo [a]\n'),
+    ('a scalar out: entry', 'steps:\n- id: s\n  out: [!foo a]\n'),
+    ('a mapping out: entry', 'steps:\n- id: s\n  out:\n  - !foo {a: !& e}\n'),
+    ('the wic: node', 'wic: !foo {}\nsteps: []\n'),
+    ('wic: steps:', 'wic:\n  steps: !foo {}\nsteps: []\n'),
+    ('a sidecar step value', "wic:\n  steps:\n    '(1, s)': !foo {wic: {}}\nsteps:\n- id: s\n"),
+    ('the nested wic: wrapper', "wic:\n  steps:\n    '(1, s)':\n      wic: !foo {}\nsteps:\n- id: s\n"),
+)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('claim', 'source'), STRUCTURAL_TAGS, ids=[c for c, _ in STRUCTURAL_TAGS])
+def test_an_unknown_tag_on_a_structural_node_is_reported(claim: str, source: str) -> None:
+    """Every tag the language does not own is reported, structure included.
+
+    A call at each position that consumes a node is how a position gets missed:
+    the first pass covered three, left three uncovered, and a second pass found
+    eight more. One walk over the composed graph has no positions to track, so a
+    shape added later is covered by default. Each case asserts both halves — the
+    parser reports and the loader raises — since the failure here is the parser
+    being more permissive than the thing it specifies.
+    """
+    result = parse(source, 'tagged.wic')
+    assert not result.ok, claim
+    assert Code.UNKNOWN_TAG in [d.code for d in result.diagnostics], claim
+    with pytest.raises(yaml.YAMLError):
+        yaml.load(source, Loader=wic_loader())
+
+
 @pytest.mark.fast
 def test_a_collection_key_is_not_quoted_back_as_a_node_repr() -> None:
     """Only a scalar key is a name the message can offer back.
@@ -505,9 +543,10 @@ def test_a_collection_key_is_not_quoted_back_as_a_node_repr() -> None:
     plain message instead.
     """
     result = parse('steps:\n- ? [a]\n  : 1\n', 'collection_key.wic')
-    assert [d.code for d in result.diagnostics] == [Code.EXPECTED_SCALAR, Code.MISSING_STEP_ID]
-    assert 'ScalarNode' not in result.diagnostics[1].message
-    assert result.diagnostics[1].message == 'a step in a sequence needs an id:'
+    # Position order: the step's own span opens before the key's.
+    assert [d.code for d in result.diagnostics] == [Code.MISSING_STEP_ID, Code.EXPECTED_SCALAR]
+    assert 'ScalarNode' not in result.diagnostics[0].message
+    assert result.diagnostics[0].message == 'a step in a sequence needs an id:'
 
 
 @pytest.mark.fast
