@@ -80,15 +80,33 @@ def _pytest_runs(workflow: Path) -> list[tuple[list[str], str | None, str | None
                 if start < 0:
                     continue
                 after = tokens[start + 1:]
-                # A directory argument is a path too. Reading only `.py` tokens
-                # made `pytest tests/contrib` look like "no path named", which
-                # this file treats as the whole rootdir — so one such run would
-                # mark every marked test under tests/core as covered, which is
-                # the single failure this file exists to catch.
-                files = [t for t in after
-                         if not t.startswith('-') and (REPO_ROOT / t).exists()]
+                files = _paths_of(after)
                 runs.append((files, _flag(after, '-m'), _flag(after, '-k')))
     return runs
+
+
+def _paths_of(tokens: list[str]) -> list[str]:
+    """The path arguments of a pytest invocation.
+
+    A directory argument is a path too: reading only `.py` tokens made
+    `pytest tests/contrib` look like an invocation that named none, which this
+    file treats as the whole rootdir.
+
+    A bare word may instead be a flag's value — `--cwl_runner cwltool` — so only
+    tokens shaped like paths are considered, and one that does not resolve
+    raises rather than being dropped. Dropping the last of them leaves no paths
+    at all, which reads as the whole rootdir again: the same silent pass, by a
+    different route. A node id keeps only its file part.
+    """
+    paths: list[str] = []
+    for token in tokens:
+        if token.startswith('-') or not ('/' in token or '.py' in token):
+            continue
+        path = token.split('::', 1)[0]
+        if not (REPO_ROOT / path).exists():
+            raise ValueError(f'pytest invocation names a path that does not exist: {token!r}')
+        paths.append(path)
+    return paths
 
 
 def _excluded_markers(expression: str | None) -> frozenset[str]:
@@ -288,3 +306,18 @@ def test_an_unreadable_k_expression_raises_rather_than_guessing() -> None:
     is a silent wrong answer."""
     with pytest.raises(ValueError, match='unreadable pytest -k expression'):
         _keyword_admits('test_a or test_b', 'test_a')
+
+
+@pytest.mark.fast
+def test_a_path_that_does_not_resolve_raises_rather_than_vanishing() -> None:
+    """Dropping the last path argument leaves none, which reads as the rootdir.
+
+    That is the same silent pass `_excluded_markers` refuses for an unreadable
+    `-m`, reached by a different route: a renamed file or a node id would be
+    quietly discarded and the run would then appear to cover everything.
+    """
+    assert _paths_of(['tests/core/test_ci_coverage.py']) == ['tests/core/test_ci_coverage.py']
+    assert _paths_of(['--cwl_runner', 'cwltool']) == []          # a flag's value is not a path
+    assert _paths_of(['tests/core/test_ci_coverage.py::test_x']) == ['tests/core/test_ci_coverage.py']
+    with pytest.raises(ValueError, match='does not exist'):
+        _paths_of(['tests/core/no_such_file.py'])
