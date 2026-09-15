@@ -1,10 +1,11 @@
 """Regression coverage for `sophios.compiler` bugs that have no home elsewhere."""
 import copy
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from sophios import utils
+from sophios import ast, compiler, cwl_subinterpreter, utils
 from sophios.compiler import insert_step_into_workflow
 from sophios.wic_types import StepId, Tool, Yaml
 
@@ -30,6 +31,41 @@ def test_an_inserted_step_is_resolvable_by_id() -> None:
     yaml_tree_mod = insert_step_into_workflow(yaml_tree, stepid, tools, 1)
 
     assert utils.get_steps_keys(yaml_tree_mod['steps']) == ['existing', 'conv']
+
+
+class _Captured(Exception):
+    """Raised by the stub to stop `rerun_cwltool` once it has built its document."""
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('cwl_tool', 'module', 'name', 'tree_arg'), [
+    ('tool', compiler, 'compile_workflow', 0),
+    ('tool.wic', ast, 'read_ast_from_disk', 1),
+])
+def test_rerun_cwltool_builds_an_id_form_step(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        cwl_tool: str, module: Any, name: str, tree_arg: int) -> None:
+    """`rerun_cwltool` builds a step `get_steps_keys` can read back, on both branches.
+
+    Asserting on literals copied into the test proves nothing about the code:
+    the documents are built inside `rerun_cwltool`, so the test has to get them
+    from there. Each branch hands its document to exactly one function, which is
+    the seam to stub — the CWL runner is never reached, and the cache directory
+    is never touched. `_Captured` is not a `FileNotFoundError`, so the
+    function's own handler does not swallow it.
+    """
+    seen: list[Yaml] = []
+
+    def capture(*args: Any, **_: Any) -> None:
+        seen.append(args[tree_arg].yml)
+        raise _Captured
+
+    monkeypatch.setattr(module, name, capture)
+    with pytest.raises(_Captured):
+        cwl_subinterpreter.rerun_cwltool(
+            '', tmp_path, tmp_path, cwl_tool, {'in': {}}, {}, {}, None, tmp_path)
+
+    assert [utils.require_step_id(step) for step in seen[0]['steps']] == [cwl_tool]
 
 
 @pytest.mark.fast

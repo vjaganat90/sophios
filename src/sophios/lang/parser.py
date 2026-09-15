@@ -98,6 +98,42 @@ class ParseResult:
         return self.document is not None and not self.diagnostics.has_errors
 
 
+def _report_unknown_tags(root: yaml.nodes.Node, file: str, diags: Diagnostics) -> None:
+    """Report every tag the language does not own, wherever it appears.
+
+    One walk over the composed graph rather than a call at each position that
+    consumes a node. The per-position form is what this replaces, and it had
+    already missed three positions on its first pass and eight on its second —
+    the rule had one home, but every position still had to remember to call it,
+    and a position added later starts uncovered by default.
+
+    Sophios owns four tags and the loader rejects every other, so the
+    specification must never be more permissive than the thing it specifies.
+    The payload is kept, untagged, for recovery.
+
+    Aliases make the composed document a graph rather than a tree, so nodes are
+    tracked by identity; the walk stays linear in distinct nodes and a recursive
+    alias cannot make it loop.
+    """
+    seen: set[int] = set()
+    stack: list[yaml.nodes.Node] = [root]
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if node.tag.startswith('!') and node.tag not in Tag.ALL:
+            diags.error(Code.UNKNOWN_TAG,
+                        f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
+                        SourceSpan.of(file, node))
+        if isinstance(node, yaml.nodes.SequenceNode):
+            stack.extend(node.value)
+        elif isinstance(node, yaml.nodes.MappingNode):
+            for key_node, value_node in node.value:
+                stack.append(key_node)
+                stack.append(value_node)
+
+
 def parse(text: str, filename: str = '<string>') -> ParseResult:
     """Parse `.wic` source text into a `Document`.
 
@@ -116,6 +152,8 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
     if root is None:  # An empty document is well-formed and carries nothing.
         return ParseResult(Document(span=whole), diagnostics)
 
+    _report_unknown_tags(root, filename, diagnostics)
+
     if not isinstance(root, yaml.nodes.MappingNode):
         diagnostics.error(
             Code.NOT_A_MAPPING,
@@ -124,7 +162,13 @@ def parse(text: str, filename: str = '<string>') -> ParseResult:
         )
         return ParseResult(None, diagnostics)
 
-    return ParseResult(_document(root, filename, diagnostics), diagnostics)
+    document = _document(root, filename, diagnostics)
+    # One walk reports tags and the structural pass reports everything else, so
+    # without this the two arrive in pass order rather than reading order. Sorted
+    # by position, a reader works down the file once; unpositioned diagnostics
+    # cannot occur here, since every parse diagnostic carries a span.
+    return ParseResult(document, Diagnostics(sorted(
+        diagnostics, key=lambda d: (d.span.start_line, d.span.start_column) if d.span else (0, 0))))
 
 
 # --------------------------------------------------------------------------
@@ -426,7 +470,6 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     # here would report `wic019` alone in input position while passthrough
     # reported both, which is the two-surfaces-one-language divergence this
     # rule exists to prevent.
-    _reject_unknown_tag(node, file, diags, span)
 
     if _is_edge_def(node):
         # The diagnostic comes before the name is read, so a *malformed* name
@@ -446,8 +489,6 @@ def _input_value(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> InputV
     build = Forms.TAGGED.get(node.tag)
     if build is not None:
         return build(node, file, diags, span)
-
-    _reject_unknown_tag(node, file, diags, span)
 
     desugared = _desugared_form(node, file, diags, span)
     if desugared is not None:
@@ -747,8 +788,6 @@ def _opaque(node: yaml.nodes.Node, file: str, diags: Diagnostics,
         return None
     path = _path | {id(node)}
 
-    _reject_unknown_tag(node, file, diags)
-
     if _is_edge_def(node):
         # Both spellings, in every position `_opaque` walks. Catching only the
         # tagged one would let `{wic_anchor: n}` through exactly where `!& n`
@@ -841,32 +880,11 @@ def _key_text(node: yaml.nodes.Node, file: str, diags: Diagnostics) -> str:
     dropped by the stringify below, and the parser accepted a document the
     loader refuses — the one direction the language promises never to take.
     """
-    _reject_unknown_tag(node, file, diags)
     if not isinstance(node, yaml.nodes.ScalarNode):
         diags.error(Code.EXPECTED_SCALAR,
                     f'mapping keys must be scalars, found {_kind(node)}',
                     SourceSpan.of(file, node))
     return str(node.value)
-
-
-def _reject_unknown_tag(node: yaml.nodes.Node, file: str, diags: Diagnostics,
-                        span: SourceSpan | None = None) -> None:
-    """Report a tag the language does not own, wherever it appears.
-
-    One home for the rule, deliberately. It used to be written out at each
-    position that consumes a node — once for input values, once for the
-    passthrough walk — and a third position, mapping keys, simply never got a
-    copy. Restating a rule per position is how a position gets missed; now a
-    new one has a single obvious thing to call.
-
-    The rule itself: Sophios owns four tags, the loader rejects every other,
-    and the specification must never be more permissive than the thing it
-    specifies. The payload is kept, untagged, for recovery.
-    """
-    if node.tag.startswith('!') and node.tag not in Tag.ALL:
-        diags.error(Code.UNKNOWN_TAG,
-                    f'unknown tag {node.tag!r}; the Sophios tags are !ii, !&, !*, and !cwl',
-                    span if span is not None else SourceSpan.of(file, node))
 
 
 def _kind(node: yaml.nodes.Node) -> str:
