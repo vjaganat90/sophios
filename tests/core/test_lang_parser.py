@@ -496,7 +496,7 @@ def test_a_named_entry_reports_what_the_mapping_form_reports(claim: str, source:
 
 
 #: A tag on a node that makes up the document's *structure*, rather than on a
-#: key or an input value. The loader rejects all four, so accepting them is the
+#: key or an input value. The loader rejects every one, so accepting them is the
 #: specification being more permissive than the thing it specifies.
 STRUCTURAL_TAGS: Final = (
     ('the root document', '--- !foo\nsteps: []\n'),
@@ -520,8 +520,8 @@ def test_an_unknown_tag_on_a_structural_node_is_reported(claim: str, source: str
     """Every tag the language does not own is reported, structure included.
 
     A call at each position that consumes a node is how a position gets missed:
-    the first pass covered three, left three uncovered, and a second pass found
-    eight more. One walk over the composed graph has no positions to track, so a
+    each pass over that form found positions the previous one had left
+    uncovered. One walk over the composed graph has no positions to track, so a
     shape added later is covered by default. Each case asserts both halves — the
     parser reports and the loader raises — since the failure here is the parser
     being more permissive than the thing it specifies.
@@ -531,6 +531,25 @@ def test_an_unknown_tag_on_a_structural_node_is_reported(claim: str, source: str
     assert Code.UNKNOWN_TAG in [d.code for d in result.diagnostics], claim
     with pytest.raises(yaml.YAMLError):
         yaml.load(source, Loader=wic_loader())
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('claim', 'source'), [
+    ('a non-mapping root, which returns early', '- !foo a\n'),
+    ('a tag above a structural error', 'wic: !foo {}\nsteps:\n- in: {}\n'),
+    ('a tag below a structural error', 'steps:\n- in: {}\n- id: s\n  in: !foo {}\n'),
+])
+def test_diagnostics_come_back_in_reading_order(claim: str, source: str) -> None:
+    """However many passes produced them, the reader works down the file once.
+
+    Tags are reported in one walk and everything else in the structural pass, so
+    pass order is not reading order and every return from `parse()` that can
+    carry both has to say so — including the non-mapping root, which returns
+    before the structural pass runs at all.
+    """
+    positions = [(d.span.start_line, d.span.start_column) for d in parse(source, 'order.wic').diagnostics]
+    assert len(positions) > 1, claim
+    assert positions == sorted(positions), claim
 
 
 @pytest.mark.fast
