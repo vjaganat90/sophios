@@ -23,6 +23,20 @@ from .types import (
     WorkflowGraph,
 )
 from .emit import emit, emit_job_inputs, emit_visualization
+from .resolve import (
+    RegistryKey,
+    RegistrySnapshot,
+    Resolved,
+    ResolvedDocument,
+    ResolvedPort,
+    ResolvedProcess,
+    ResolvedStep,
+    ToolDefinition,
+    WorkflowSource,
+    generated_process_id,
+    resolve,
+)
+from .pipeline import FrontEndResult, front_end, legacy_after_lower
 
 __all__ = [
     'Binding',
@@ -44,4 +58,18 @@ __all__ = [
     'emit',
     'emit_job_inputs',
     'emit_visualization',
+    'RegistryKey',
+    'RegistrySnapshot',
+    'Resolved',
+    'ResolvedDocument',
+    'ResolvedPort',
+    'ResolvedProcess',
+    'ResolvedStep',
+    'ToolDefinition',
+    'WorkflowSource',
+    'generated_process_id',
+    'resolve',
+    'FrontEndResult',
+    'front_end',
+    'legacy_after_lower',
 ]
