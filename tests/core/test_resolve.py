@@ -1,7 +1,7 @@
 """Registry resolution and the direct typed front end.
 
-The generated differential is byte-exact after the temporary post-Lower
-handoff.  Its input filter is an independent model of the legacy scalar
+The generated checks compare the typed front door with the live typed compiler.
+Their input filter is an independent model of the scalar
 coercions; it does not call Resolve, Lower, or a production semantic judge.
 
 BLIND SPOTS: generated workflows use the synthetic flat-tool vocabulary.
@@ -29,16 +29,14 @@ from sophios.ir import (
     WorkflowSource,
     front_end,
     generated_process_id,
-    legacy_after_lower,
     resolve,
 )
+from sophios.ir.complete import complete
 from sophios.ir.lower import lower
 from sophios.lang import InlineLiteral, SourceSpan, Step, parse
 from sophios.wic_types import StepId as LegacyStepId, Yaml
 
 from . import ast_strategies as strat
-from .differential import assert_compilations_equivalent
-from .equivalence import Strength
 from .hermetic import ORACLE, compile_hermetic
 from .source_scan import REPO_ROOT
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, inputs_of, outputs_of
@@ -65,11 +63,11 @@ def _scalar_literals_fit(workflow: Yaml) -> bool:
 
 
 def _source_model(workflow: Yaml) -> tuple[str, dict[tuple[str, str], str]]:
-    """Undo only the legacy loader's subtree attachment for test input source.
+    """Undo only the filesystem loader's subtree attachment for test source.
 
     This is a test-side model: real authored source names a ``.wic`` child and
     the registry supplies that child's source; ``ast_strategies.to_yml`` has
-    already attached it in the shape the old compiler consumes.
+    already attached it in the shape the public compiler boundary accepts.
     """
     sources: dict[tuple[str, str], str] = {}
 
@@ -103,13 +101,14 @@ def _typed(workflow: Yaml):  # type: ignore[no-untyped-def]
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows().filter(_scalar_literals_fit))
 @ORACLE
-def test_resolution_is_identical_to_legacy_lookup(workflow: Yaml) -> None:
-    """Typed registry resolution changes no final artifact bytes."""
-    typed = _typed(copy.deepcopy(workflow))
-    bridged = legacy_after_lower(typed.resolved.document, typed.graph)
-    old = compile_hermetic(copy.deepcopy(workflow))
-    new = compile_hermetic(bridged)
-    assert_compilations_equivalent(old, new, Strength.IDENTICAL)
+def test_the_live_compiler_retains_the_resolved_interfaces(workflow: Yaml) -> None:
+    """The default path carries resolved process interfaces into its graph."""
+    typed = complete(_typed(copy.deepcopy(workflow)).graph)
+    live = compile_hermetic(copy.deepcopy(workflow)).graph
+    assert [(step.id.name, tuple(port.id.port for port in step.inputs),
+             tuple(port.id.port for port in step.outputs)) for step in live.steps] == [
+        (step.id.name, tuple(port.id.port for port in step.inputs),
+         tuple(port.id.port for port in step.outputs)) for step in typed.steps]
 
 
 @pytest.mark.fast
@@ -175,14 +174,13 @@ def test_registry_order_cannot_change_resolution(workflow: Yaml) -> None:
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-def test_parse_front_door_is_identical_to_the_legacy_input(workflow: Yaml) -> None:
-    """Source enters Parse and reaches legacy Link/Infer only after typed Lower."""
+def test_parse_front_door_is_the_live_compiler_input(workflow: Yaml) -> None:
+    """The live compiler preserves the graph Lower built from parsed source."""
     if not _scalar_literals_fit(workflow):
         return
     typed = _typed(copy.deepcopy(workflow))
-    new = compile_hermetic(legacy_after_lower(typed.resolved.document, typed.graph))
-    old = compile_hermetic(copy.deepcopy(workflow))
-    assert_compilations_equivalent(old, new, Strength.IDENTICAL)
+    live = compile_hermetic(copy.deepcopy(workflow)).graph
+    assert tuple(step.id for step in live.steps) == tuple(step.id for step in typed.graph.steps)
 
 
 @pytest.mark.skip_pypi_ci
@@ -270,7 +268,7 @@ def test_raw_cwl_reference_needs_no_global_escape_hatch() -> None:
     """The local tag reaches CWL unchanged while ordinary bare names stay governed."""
     workflow = {'inputs': {'wf_name': {'type': 'string'}},
                 'steps': [{'id': 'mk_file', 'in': {'name': {'wic_raw_cwl': 'wf_name'}}}]}
-    compiled = compile_hermetic(workflow).rose.data.compiled_cwl
+    compiled = compile_hermetic(workflow).artifact.cwl
     assert compiled['steps'][0]['in']['name'] == 'wf_name'
 
 

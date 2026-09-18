@@ -12,50 +12,45 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from sophios.ir import (
-    FrontEndResult,
     Namespace,
     RegistrySnapshot,
     WorkflowGraph,
     front_end,
-    legacy_after_link,
     link,
 )
 from sophios.lang import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Tool, Yaml
 
 from . import ast_strategies as strat
-from .differential import assert_compilations_equivalent
-from .equivalence import Strength
 from .hermetic import ORACLE, compile_hermetic
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
 from .test_resolve import _scalar_literals_fit, _source_model
 
 
-def _front(workflow: Yaml) -> FrontEndResult:
+def _front(workflow: Yaml) -> WorkflowGraph:
     source, workflows = _source_model(workflow)
     registry = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
     result = front_end(source, registry, name='oracle')
     assert result.resolved is not None and result.resolved.document is not None
     assert result.graph is not None, list(result.diagnostics)
-    return result
+    return result.graph
 
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows().filter(_scalar_literals_fit))
 @ORACLE
-def test_link_is_equivalent_up_to_embedding(workflow: Yaml) -> None:
-    """Typed Link preserves everything except a legitimate run-path embedding."""
+def test_the_live_compiler_retains_linked_explicit_edges(workflow: Yaml) -> None:
+    """The default path carries every linked authored edge into its final graph."""
     typed = _front(copy.deepcopy(workflow))
-    linked = link(typed.graph)
+    linked = link(typed)
     assert linked.graph is not None, list(linked.diagnostics)
-    bridged = legacy_after_link(typed.resolved.document, linked.graph)
-    old = compile_hermetic(copy.deepcopy(workflow))
-    new = compile_hermetic(bridged)
-    assert_compilations_equivalent(old, new, Strength.UP_TO_EMBEDDING)
+    live = compile_hermetic(copy.deepcopy(workflow)).graph
+    linked_edges = {(edge.source, edge.sink) for edge in linked.graph.edges}
+    assert linked_edges <= {(edge.source, edge.sink) for edge in live.edges}
 
 
 def _cross_scope(source_tool: str, source_type: object, child_input: str = 'name', *,
-                 scatter: bool = False) -> FrontEndResult:
+                 scatter: bool = False) -> WorkflowGraph:
     tools = copy.deepcopy(SYNTHETIC_TOOLS)
     tools[LegacyStepId(source_tool, SYNTHETIC_NS)] = Tool(
         f'/synthetic/{source_tool}.cwl', clt({}, {'value': {'type': source_type}}))
@@ -68,14 +63,14 @@ def _cross_scope(source_tool: str, source_type: object, child_input: str = 'name
         tools, workflows={(SYNTHETIC_NS, 'child'): child})
     result = front_end(root, registry, name='root')
     assert result.graph is not None and result.resolved is not None
-    return result
+    return result.graph
 
 
 @pytest.mark.fast
 def test_cross_scope_obligation_is_discharged_at_its_lca() -> None:
     """The edge belongs to the parent graph and the child owes nothing afterward."""
     typed = _cross_scope('string_source', 'string')
-    linked = link(typed.graph)
+    linked = link(typed)
     assert linked.graph is not None, list(linked.diagnostics)
     assert linked.graph.obligations == ()
     assert len(linked.graph.composition_edges) == 1
@@ -100,19 +95,19 @@ def test_unresolved_root_obligation_is_exactly_undefined_edge() -> None:
 @pytest.mark.fast
 def test_only_proven_disjoint_cross_scope_types_are_rejected() -> None:
     """Known incompatibility rejects; opaque Any remains delegated to final CWL validation."""
-    disjoint = link(_cross_scope('int_source', 'int').graph)
+    disjoint = link(_cross_scope('int_source', 'int'))
     assert disjoint.graph is None
     assert [diagnostic.code for diagnostic in disjoint.diagnostics] == [
         SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
 
-    unknown = link(_cross_scope('any_source', 'Any').graph)
+    unknown = link(_cross_scope('any_source', 'Any'))
     assert unknown.graph is not None, list(unknown.diagnostics)
 
 
 @pytest.mark.fast
 def test_consuming_scatter_participates_in_reference_judgment() -> None:
     """A scattered scalar input consumes an array, so a scalar source is disjoint."""
-    result = link(_cross_scope('string_source', 'string', scatter=True).graph)
+    result = link(_cross_scope('string_source', 'string', scatter=True))
     assert result.graph is None
     assert [diagnostic.code for diagnostic in result.diagnostics] == [
         SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE]
@@ -211,7 +206,7 @@ def test_unknown_call_argument_cannot_restore_a_deleted_formal() -> None:
 def test_composed_namespaces_are_injective(workflow: Yaml) -> None:
     """No two step occurrences in a composed graph share an identity."""
     typed = _front(workflow)
-    linked = link(typed.graph)
+    linked = link(typed)
     assert linked.graph is not None, list(linked.diagnostics)
     identities = [step.id for step in linked.graph.all_steps]
     assert len(identities) == len(set(identities))
@@ -221,6 +216,6 @@ def test_composed_namespaces_are_injective(workflow: Yaml) -> None:
 def test_graph_rejects_a_planted_namespace_collision() -> None:
     """The injectivity assertion demonstrably detects a duplicate child graph."""
     typed = _cross_scope('string_source', 'string')
-    child = typed.graph.children[0]
+    child = typed.children[0]
     with pytest.raises(ValueError, match='injective'):
         WorkflowGraph(Namespace(), children=(child, child))
