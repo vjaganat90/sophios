@@ -23,6 +23,36 @@ from ..lang.spans import SourceSpan
 NAMESPACE_SEPARATOR: Final = '___'
 
 
+def emitted_step_id(workflow: str, index: int, name: str) -> str:
+    """The id a step carries in the emitted document.
+
+    One function because this convention was written out in four places and
+    taken apart in several more, and a convention spelled in four places is
+    four chances to spell it differently.
+
+    Args:
+        workflow (str): The workflow the step belongs to.
+        index (int): The step's one-based position in it.
+        name (str): The step's authored name.
+
+    Returns:
+        str: The emitted id.
+    """
+    return f'{workflow}__step__{index}__{name}'
+
+
+def namespaced(*parts: str) -> str:
+    """`parts` joined the way the emitted document flattens a nesting.
+
+    Args:
+        parts: The names to join, outermost first.
+
+    Returns:
+        str: The joined spelling.
+    """
+    return NAMESPACE_SEPARATOR.join(parts)
+
+
 class Direction(StrEnum):
     """Which side of a step a port is on.
 

@@ -21,6 +21,8 @@ from .types import (
     Edge,
     Expression,
     JobBinding,
+    NAMESPACE_SEPARATOR,
+    namespaced,
     Port,
     PortDeclaration,
     PortId,
@@ -266,7 +268,7 @@ def _workflow_surface(graph: WorkflowGraph, relative_run_path: bool) -> Workflow
             if relative_run_path:
                 target = f'{emission.id}/{leaf}'
             elif emission.run.child is not None:
-                target = '___'.join((*graph.namespace.parts, emission.id, leaf))
+                target = namespaced(*graph.namespace.parts, emission.id, leaf)
             else:
                 target = str(PurePath('..') / leaf)
         order = list(emission.field_order)
@@ -297,7 +299,7 @@ def _workflow_surface(graph: WorkflowGraph, relative_run_path: bool) -> Workflow
     order = list(graph.field_order)
     if requirements and 'requirements' not in order:
         order.append('requirements')
-    generated_prefixes = tuple(step.emission.id + '___' for step in steps
+    generated_prefixes = tuple(step.emission.id + NAMESPACE_SEPARATOR for step in steps
                                if step.emission is not None)
 
     def boundary_order(name: str) -> tuple[int, int]:

@@ -142,6 +142,33 @@ def _reachable(start: str, graph: dict[str, set[str]]) -> set[str]:
 
 
 @pytest.mark.fast
+def test_the_emitted_name_conventions_have_one_spelling() -> None:
+    """`types` owns how a derived name is written, and owns it alone.
+
+    The emitted step id was spelled out in four modules and the namespace
+    separator in six, while `NAMESPACE_SEPARATOR` sat beside them unused. Each
+    copy is a chance to diverge, and `link._boundary_name`'s docstring calling
+    itself "the fallback, not the rule" is what that looks like from inside.
+    """
+    owner = REPO_ROOT / 'src' / 'sophios' / 'ir' / 'types.py'
+    # `utils.py` and `run_local.py` take apart names the emitted document has
+    # already flattened -- there the joined string is all there is, so the
+    # split is the only thing available rather than a second spelling of the
+    # rule. They are the last of the legacy path and go with it.
+    readers = {'utils.py', 'run_local.py'}
+    offenders = []
+    for path in sorted((REPO_ROOT / 'src' / 'sophios').rglob('*.py')):
+        if path == owner or path.name in readers:
+            continue
+        for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+            code = line.split('#', 1)[0]
+            if "'___'" in code or '__step__' in code:
+                offenders.append(f'{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}')
+    assert not offenders, (
+        'derived names are spelled outside ir/types.py:\n' + '\n'.join(offenders))
+
+
+@pytest.mark.fast
 def test_core_never_imports_contrib() -> None:
     """No core module reaches a contrib module through any import path."""
     graph = _import_graph()

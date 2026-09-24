@@ -10,6 +10,7 @@ from .resolve import RegistrySnapshot
 from .types import (
     Direction,
     Edge,
+    emitted_step_id,
     EmittedValue,
     Port,
     PortDeclaration,
@@ -256,7 +257,7 @@ def _insert(graph: WorkflowGraph, position: int, insertion: Insertion,
     outputs = tuple(Port(PortId(identity, Direction.OUTPUT, name), declaration.type,
                          declaration) for name, declaration in insertion.outputs)
     descriptor = StepEmission(
-        id=f'{graph.name}__step__{position + 1}__{insertion.name}',
+        id=emitted_step_id(graph.name, position + 1, insertion.name),
         inputs=(),
         run=ProcessRun(insertion.run_path,
                        RegistryKey(insertion.namespace, insertion.name)),
@@ -280,7 +281,7 @@ def _renumber_emission(name: str, index: int, step: StepNode) -> StepNode:
     if step.emission is None:
         return step
     return replace(step, emission=replace(
-        step.emission, id=f'{name}__step__{index}__{step.id.name}'))
+        step.emission, id=emitted_step_id(name, index, step.id.name)))
 
 
 def _propagate_child_interface(graph: WorkflowGraph) -> WorkflowGraph:

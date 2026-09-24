@@ -18,7 +18,7 @@ from .ir.link import link
 from .ir.frontdoor import SourceBundle
 from .ir.pipeline import FrontEndResult, front_end
 from .ir.resolve import RegistrySnapshot
-from .ir.types import Binding, PortId, WorkflowGraph
+from .ir.types import Binding, emitted_step_id, namespaced, PortId, WorkflowGraph
 from .lang import versions
 from .lang.diagnostics import SophiosError
 from .lang.nodes import InlineLiteral
@@ -232,7 +232,7 @@ def _detach_sources(document: Yaml, path: tuple[str, ...],
         if isinstance(metadata, dict) and isinstance(metadata.get('wic'), dict):
             namespace = str(metadata['wic'].get('namespace', 'global'))
         workflow_name = Path(path[-1]).stem if path else ''
-        child_path = (*path, _emitted_step_name(workflow_name, index, step_name))
+        child_path = (*path, emitted_step_id(workflow_name, index, step_name))
         child = _detach_sources(step['subtree'], child_path, workflows)
         workflows[(namespace, child_name)] = _dump_source(child)
         parentargs = step.get('parentargs', {})
@@ -264,10 +264,6 @@ def _detach_implementations(sidecar: Yaml, path: tuple[str, ...],
 def _dump_source(document: Yaml) -> str:
     return yaml.dump(document, Dumper=NoAliasDumper, sort_keys=False,
                      line_break='\n', indent=2)
-
-
-def _emitted_step_name(workflow: str, index: int, name: str) -> str:
-    return f'{workflow}__step__{index}__{name}'
 
 
 def _check_unresolved_names(graph: WorkflowGraph, allow_raw_cwl: bool) -> None:
@@ -337,7 +333,7 @@ def _project_graph(graph: WorkflowGraph, settings: GraphSettings,
     reps.graphdata.ranksame = []
     for step in graph.steps:
         assert step.emission is not None
-        name = '___'.join((*graph.namespace.parts, step.emission.id))
+        name = namespaced(*graph.namespace.parts, step.emission.id)
         label = step.emission.id if settings['graph_label_stepname'] else step.id.name
         attrs = {'label': label, 'shape': 'box', 'style': 'rounded, filled',
                  'fillcolor': 'lightblue'}
@@ -368,7 +364,7 @@ def _project_graph(graph: WorkflowGraph, settings: GraphSettings,
 def _graph_step_name(graph: WorkflowGraph, port: PortId) -> str:
     step = next(step for step in graph.all_steps if step.id == port.step)
     assert step.emission is not None
-    return '___'.join((*step.id.namespace.parts, step.emission.id))
+    return namespaced(*step.id.namespace.parts, step.emission.id)
 
 
 def _lang_version_pins(node: Any, _path: frozenset[int] = frozenset()) -> tuple[str, ...]:
