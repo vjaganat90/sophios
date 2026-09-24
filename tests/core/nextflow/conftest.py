@@ -3,25 +3,26 @@
 import pytest
 
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
+from sophios.api.python._workflow_runtime import compile_workflow_result
 from sophios.api.python.workflow import Step, Workflow
-from sophios.wic_types import RoseTree
+from sophios.ir.artifacts import CompilationResult
 
 from .testkit import REPO_ROOT
 
 
 @pytest.fixture(scope="session")
-def unsupported_real_linear_rose() -> RoseTree:
+def unsupported_real_linear_result() -> CompilationResult:
     """Compile the reviewer's real shell/primitive-output workflow."""
     touch = Step(clt_path=REPO_ROOT / "cwl_adapters" / "touch.cwl")
     touch.inputs.filename = "empty.txt"
     append = Step(clt_path=REPO_ROOT / "cwl_adapters" / "append.cwl")
     append.inputs.str = "Hello"
     cat = Step(clt_path=REPO_ROOT / "cwl_adapters" / "cat.cwl")
-    return Workflow([touch, append, cat], "wf")._compile().rose
+    return compile_workflow_result(Workflow([touch, append, cat], "wf"))
 
 
 @pytest.fixture(scope="session")
-def real_supported_rose() -> RoseTree:
+def real_supported_result() -> CompilationResult:
     """Compile a wholly supported two-process workflow through the real API."""
     touch_tool = (
         CommandLineTool(
@@ -45,11 +46,11 @@ def real_supported_rose() -> RoseTree:
     )
     copy_step = Step(copy_tool, step_name="copy")
     copy_step.inputs.source = touch.outputs.result
-    return Workflow([touch, copy_step], "wf")._compile().rose
+    return compile_workflow_result(Workflow([touch, copy_step], "wf"))
 
 
 @pytest.fixture(scope="session")
-def real_scattered_rose() -> RoseTree:
+def real_scattered_result() -> CompilationResult:
     """Compile a real single-input scatter over an array-typed workflow input."""
     echo_tool = (
         CommandLineTool(
@@ -63,11 +64,11 @@ def real_scattered_rose() -> RoseTree:
     echo = Step(echo_tool, step_name="echo_item")
     echo.inputs.item = ["alpha", "beta"]
     echo.scatter_on(echo.inputs.item)
-    return Workflow([echo], "wf")._compile().rose
+    return compile_workflow_result(Workflow([echo], "wf"))
 
 
 @pytest.fixture(scope="session")
-def real_nested_rose() -> RoseTree:
+def real_nested_result() -> CompilationResult:
     """Compile a real one-level subworkflow whose input comes from an outer step."""
     write_tool = (
         CommandLineTool(
@@ -95,4 +96,4 @@ def real_nested_rose() -> RoseTree:
     inner_copy.inputs.source = child.inputs.source
     child.inputs.source = write.outputs.result
 
-    return Workflow([write, child], "root")._compile().rose
+    return compile_workflow_result(Workflow([write, child], "root"))

@@ -7,7 +7,7 @@ that exercise validation failure construct invalid values directly.
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_types import (
@@ -23,7 +23,8 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
-from sophios.wic_types import GraphReps, NodeData, RoseTree, Tool, Yaml
+from sophios.utils_nf import CompiledNextflowSource
+from sophios.wic_types import Yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -63,65 +64,20 @@ def output_port(name: str, glob: str | NfTemplate | None = None) -> NfPort:
     return NfPort(name, "path", name, target)
 
 
-def node_data(
-    name: str,
-    compiled_cwl: Yaml,
-    *,
-    workflow_inputs: Yaml | None = None,
-    source_yml: Yaml | None = None,
-) -> NodeData:
-    """Build the smallest real NodeData needed by a conversion fixture."""
-    return NodeData(
-        [],
-        name,
-        source_yml or {},
-        compiled_cwl,
-        Tool(f"{name}.cwl", compiled_cwl),
-        workflow_inputs or {},
-        {},
-        {},
-        cast(GraphReps, None),
-        {},
-        f'"{name}"',
-    )
-
-
-def subworkflow_child(document: Yaml, tools: list[Yaml]) -> RoseTree:
-    """Build one step child whose compiled run is a CWL Workflow."""
-    return RoseTree(
-        node_data(str(document.get("id", "child")), document),
-        [
-            RoseTree(node_data(str(tool.get("id", f"tool_{index}")), tool), [])
-            for index, tool in enumerate(tools)
-        ],
-    )
-
-
-def synthetic_rose(
+def synthetic_source(
     workflow_cwl: Yaml,
-    tools: list[Yaml | RoseTree],
+    tools: list[Yaml],
     *,
     workflow_inputs: Yaml | None = None,
     source_yml: Yaml | None = None,
-) -> RoseTree:
-    """Construct a typed RoseTree without invoking compiler internals.
-
-    A child may be given as a compiled tool document or as an already-built
-    RoseTree, so a step whose run is a subworkflow can be expressed directly.
-    """
-    children = [
-        child if isinstance(child, RoseTree)
-        else RoseTree(node_data(str(child.get("id", f"tool_{index}")), child), [])
-        for index, child in enumerate(tools)
-    ]
-    return RoseTree(
-        node_data(
-            str(workflow_cwl.get("id", "workflow")),
-            workflow_cwl,
-            workflow_inputs=workflow_inputs,
-            source_yml=source_yml,
-        ),
-        children,
+) -> CompiledNextflowSource:
+    """Construct the backend's compiled-document seam for capability tests."""
+    del source_yml
+    return CompiledNextflowSource(
+        str(workflow_cwl.get("id", "workflow")),
+        workflow_cwl,
+        tuple(tools),
+        workflow_inputs or {},
     )
 
 

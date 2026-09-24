@@ -5,7 +5,7 @@ import logging
 import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, ClassVar, overload
+from typing import Any, ClassVar, Literal, overload
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
@@ -13,6 +13,7 @@ from sophios.lang.compatibility import TypeRelation, reference_relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.versions import KNOWN_VERSIONS
+from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.wic_types import Tools
 
 from ._compiled import CompiledWorkflow
@@ -45,6 +46,7 @@ from ._workflow_runtime import (
     load_clt as _load_clt,
     lookup_parameter as _lookup_parameter,
     normalize_workflow_name as _normalize_workflow_name,
+    nextflow_workflow as _nextflow_workflow,
     populate_parameters as _populate_parameters,
     run_workflow as _run_workflow,
     silence_autodiscovery_logging as _silence_autodiscovery_logging,
@@ -52,6 +54,7 @@ from ._workflow_runtime import (
     workflow_document as _workflow_document,
     workflow_wic_yaml as _workflow_wic_yaml,
     write_workflow_wic as _write_workflow_wic,
+    write_nextflow_workflow as _write_nextflow_workflow,
 )
 
 
@@ -67,6 +70,7 @@ StrPath = str | Path
 __all__ = [
     "ApiError",
     "CompiledWorkflow",
+    "ExecutableNextflowWorkflow",
     "InvalidCLTError",
     "InvalidInputValueError",
     "InvalidLinkError",
@@ -882,15 +886,37 @@ class Workflow(_ProcessBase):
         """Return this workflow and all nested subworkflows."""
         return [self, *[workflow for child in self.steps for workflow in child._flatten_subworkflows()]]
 
+    @overload
     def compile(
         self,
         *,
+        target: Literal["cwl"] = "cwl",
         tool_registry: Tools | None = None,
         lang_version: str | None = None,
     ) -> CompiledWorkflow:
-        """Compile this workflow into CWL and generated job inputs.
+        ...
+
+    @overload
+    def compile(
+        self,
+        *,
+        target: Literal["nextflow"],
+        tool_registry: Tools | None = None,
+        lang_version: str | None = None,
+    ) -> ExecutableNextflowWorkflow:
+        ...
+
+    def compile(
+        self,
+        *,
+        target: Literal["cwl", "nextflow"] = "cwl",
+        tool_registry: Tools | None = None,
+        lang_version: str | None = None,
+    ) -> CompiledWorkflow | ExecutableNextflowWorkflow:
+        """Compile this workflow into the selected target representation.
 
         Args:
+            target (Literal["cwl", "nextflow"]): Compilation target.
             tool_registry (Tools | None): Optional tool registry override.
             lang_version (str | None): Pin the Sophios language version for
                 this compilation; None (the default) infers it. An explicit
@@ -898,9 +924,36 @@ class Workflow(_ProcessBase):
                 on the result as ``CompiledWorkflow.lang_version``.
 
         Returns:
-            CompiledWorkflow: Public compiled workflow boundary object.
+            CompiledWorkflow | ExecutableNextflowWorkflow: Target-specific result.
         """
-        return _compiled_workflow(self, tool_registry=tool_registry, lang_version=lang_version)
+        if target == "cwl":
+            return _compiled_workflow(
+                self,
+                tool_registry=tool_registry,
+                lang_version=lang_version,
+            )
+        if target == "nextflow":
+            return _nextflow_workflow(
+                self,
+                tool_registry=tool_registry,
+                lang_version=lang_version,
+            )
+        raise ValueError(f"unsupported compilation target {target!r}")
+
+    def to_nextflow(
+        self,
+        outdir: StrPath,
+        *,
+        tool_registry: Tools | None = None,
+        lang_version: str | None = None,
+    ) -> tuple[Path, Path, Path, Path]:
+        """Compile once and write the four supported Nextflow artifacts."""
+        return _write_nextflow_workflow(
+            self,
+            outdir,
+            tool_registry=tool_registry,
+            lang_version=lang_version,
+        )
 
     def run(
         self,

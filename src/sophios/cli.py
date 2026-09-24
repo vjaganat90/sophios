@@ -97,6 +97,8 @@ group_run.add_argument('--run_local', default=False, action="store_true",
                        help='After generating the cwl file(s), run it on your local machine.')
 group_run.add_argument('--generate_cwl_workflow', required=False, default=False, action="store_true",
                        help='Compile the workflow without pulling the docker image')
+parser.add_argument('--target', choices=('cwl', 'nextflow'), default='cwl',
+                    help='Compilation artifact target. Defaults to cwl.')
 parser.add_argument('--cwl_inline_subworkflows', default=False, action="store_true",
                     help='Embed linked subworkflows in the generated CWL run fields.')
 parser.add_argument('--inference_disable', default=False, action="store_true",
@@ -140,6 +142,27 @@ parser.add_argument('--passthrough_flags', type=str, default='no', required=Fals
                     If set to 'no' (default) passthrough flags won't be sent to the cwl_runner backend.''')
 
 
+def validate_target_args(args: argparse.Namespace) -> None:
+    """Reject CWL-only input and execution modes for the Nextflow target."""
+    if args.target != 'nextflow':
+        return
+    incompatible = [
+        flag
+        for flag, enabled in (
+            ('--generate_cwl_workflow', args.generate_cwl_workflow),
+            ('--run_local', args.run_local),
+            ('--generate_run_script', args.generate_run_script),
+            ('--inputs_file', bool(args.inputs_file)),
+        )
+        if enabled
+    ]
+    if incompatible:
+        parser.error(
+            f"--target nextflow cannot be combined with {', '.join(incompatible)}; "
+            "the target writes Nextflow artifacts directly"
+        )
+
+
 def _argv(yaml_path: str = '', suppliedargs: list[str] | None = None) -> list[str]:
     """The argument list a synthesised parse should read.
 
@@ -159,7 +182,9 @@ def get_args(yaml_path: str = '', suppliedargs: list[str] | None = None) -> argp
     Returns:
         argparse.Namespace: The mocked command line arguments
     """
-    return parser.parse_args(_argv(yaml_path, suppliedargs))
+    args = parser.parse_args(_argv(yaml_path, suppliedargs))
+    validate_target_args(args)
+    return args
 
 
 def get_known_and_unknown_args(
@@ -171,7 +196,9 @@ def get_known_and_unknown_args(
         tuple[argparse.Namespace, list[str]]: The mocked, recognized command line arguments,
             and the list of remaining unrecognized argument strings.
     """
-    return parser.parse_known_args(_argv(yaml_path, suppliedargs))
+    args, unknown = parser.parse_known_args(_argv(yaml_path, suppliedargs))
+    validate_target_args(args)
+    return args, unknown
 
 
 def default_compilation_settings() -> tuple[CompilerOptions, GraphSettings, YamlTagPaths]:

@@ -13,6 +13,7 @@ from sophios.input_output_nf import (
     render_nextflow_config,
     write_nextflow_artifacts,
 )
+from sophios.ir.artifacts import CompilationResult
 from sophios.nf_types import (
     ExecutableNextflowWorkflow,
     NF_LOAD_CONTENTS_HELPER,
@@ -30,8 +31,7 @@ from sophios.nf_types import (
     NfTemplate,
     NfWorkflowInputConnection,
 )
-from sophios.utils_nf import cwl_rosetree_to_nextflow
-from sophios.wic_types import RoseTree
+from sophios.utils_nf import compiled_source_to_nextflow
 
 from .testkit import command, flag_workflow, output_port, runtime_workflow
 
@@ -76,8 +76,10 @@ def test_renders_named_workflow_and_entry_wrapper() -> None:
 
 
 @pytest.mark.serial
-def test_renders_real_compiled_source_with_typed_glob(real_supported_rose: RoseTree) -> None:
-    rendered = render_nextflow(cwl_rosetree_to_nextflow(real_supported_rose))
+def test_renders_real_compiled_source_with_typed_glob(
+    real_supported_result: CompilationResult,
+) -> None:
+    rendered = render_nextflow(compiled_source_to_nextflow(real_supported_result))
     assert 'path "${filename}", emit: result' in rendered
     assert "wf__step__2__copy(wf__step__1__touch.out.result)" in rendered
 

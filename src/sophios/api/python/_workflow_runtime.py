@@ -21,9 +21,12 @@ from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
 from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.input_output import dump_wic_yaml as _dump_yaml
+from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.cli import default_compilation_settings, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from sophios.utils import convert_args_dict_to_args_list, step_name_str
+from sophios.utils_nf import compiled_source_to_nextflow
 from sophios.utils_graphs import get_graph_reps
 from sophios.wic_types import StepId, Tool, Tools, YamlTree
 
@@ -518,6 +521,39 @@ def compiled_workflow(
         lang_version=lang_version,
     )
     return compiled_workflow_from_result(workflow, result)
+
+
+def nextflow_workflow(
+    workflow: "Workflow",
+    *,
+    tool_registry: Tools | None = None,
+    lang_version: str | None = None,
+) -> ExecutableNextflowWorkflow:
+    """Compile once through the core semantic pipeline and lower to Nextflow."""
+    result = compile_workflow_result(
+        workflow,
+        tool_registry=tool_registry,
+        lang_version=lang_version,
+    )
+    return compiled_source_to_nextflow(result)
+
+
+def write_nextflow_workflow(
+    workflow: "Workflow",
+    outdir: str | Path,
+    *,
+    tool_registry: Tools | None = None,
+    lang_version: str | None = None,
+) -> tuple[Path, Path, Path, Path]:
+    """Compile once and write the versioned IR plus executable artifacts."""
+    return write_nextflow_artifacts(
+        nextflow_workflow(
+            workflow,
+            tool_registry=tool_registry,
+            lang_version=lang_version,
+        ),
+        outdir,
+    )
 
 
 def effective_run_args(run_args_dict: dict[str, str] | None = None) -> dict[str, str]:
