@@ -254,8 +254,8 @@ non-array source, and scattering a nested workflow step are all rejected.
 
 ## Nested workflows
 
-A step whose workflow is itself a Sophios `Workflow` is supported one level
-deep:
+Sophios workflows may contain other Sophios workflows at any resolved nesting
+depth. For example:
 
 ```python
 inner = Step(copy_tool, step_name="inner_copy")
@@ -266,22 +266,20 @@ child.inputs.source = write.outputs.result
 root = Workflow([write, child], "root")
 ```
 
-The subworkflow is lowered by inlining: its steps become processes of the
-outer workflow, named by joining the outer step's identifier and the inner
-step's with `___`, so two instantiations of one subworkflow never collide.
-Each subworkflow input is replaced by whatever the outer step binds it to,
-and references to the outer step's outputs are rewritten to the inner
-endpoints the subworkflow's `outputSource` names. The generated artifacts are
-therefore flat; a nested DSL2 `workflow` block is not emitted.
+The core compiler resolves composition, validates workflow boundaries, and
+connects each nested input and output before backend lowering. The Nextflow
+backend recursively projects the resolved leaf steps as processes, named from
+their full Sophios namespace with `___`, so separate instantiations never
+collide. The generated artifacts are flat; nested DSL2 `workflow` blocks are
+not emitted.
 
-Every declared subworkflow input must be bound by the step, every name in the
-step's `out` must be a declared subworkflow output, and each subworkflow
-output must resolve to one of that subworkflow's own step outputs — a
-subworkflow output that just forwards one of its inputs is rejected, like any
-other boundary passthrough. Nesting deeper than one level and `scatter` on a
-subworkflow step are both rejected. A scattered step *inside* a subworkflow
-is not a special case: after inlining it follows the scatter rules above, so
-its source must be an array-typed input of the outer workflow.
+The core semantic pipeline rejects invalid boundary declarations, including
+unbound subworkflow inputs and outputs that do not resolve to a child step.
+The backend separately rejects executable semantics that would be lost when a
+resolved boundary is removed. In particular, `scatter` on a subworkflow call
+is not supported. A scattered leaf step *inside* a subworkflow is not a
+special case: after projection it follows the scatter rules above, so its
+source must be an array-typed workflow input.
 
 Workflow-level `ScatterFeatureRequirement` and
 `SubworkflowFeatureRequirement` are accepted as inert declarations, at the
@@ -362,8 +360,8 @@ agreement check for process edges yet.
 - Processes must be `CommandLineTool`-equivalent.
 - Fractional CPU requirements reject before lowering; they are not silently
   rounded.
-- Nesting deeper than one level, arbitrary Groovy, channel operators beyond
-  the one supported adapter, `when`, and `exec` blocks are not interpreted.
+- Arbitrary Groovy, channel operators beyond the one supported adapter,
+  `when`, and `exec` blocks are not interpreted.
 - The generated scatter call is outside the reader's recognized subset, so a
   scattered workflow round-trips as loss-aware structure with an opaque
   region rather than being promoted back to executable IR.
