@@ -1512,9 +1512,9 @@ def compilation_result_source(result: CompilationResult) -> CompiledNextflowSour
         mapped_outputs = dict(graph.output_mapping)
         for name, raw_definition in outputs.items():
             definition = copy.deepcopy(raw_definition)
-            mapped_port = mapped_outputs.get(str(name))
-            if mapped_port is not None:
-                expanded = _expanded_boundary_port(mapped_port, all_steps)
+            output_port = mapped_outputs.get(str(name))
+            if output_port is not None:
+                expanded = _expanded_boundary_port(output_port, all_steps)
                 if len(expanded) != 1:
                     raise ValueError(f"workflow output {name!r} is not singular")
                 source = _source_port_name(expanded[0], leaf_names)
