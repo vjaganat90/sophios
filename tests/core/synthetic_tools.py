@@ -1,0 +1,185 @@
+"""Tools with known signatures, owned by the suite.
+
+`get_tools_cwl` globs `search_paths_cwl`, so the tools a property sees depend
+on which plugin repositories a machine has checked out. That cannot be an
+oracle. These eight stems are the whole vocabulary, so a counterexample
+reproduces from this repository alone.
+
+The signatures are chosen to reach the compiler's branches rather than to model
+anything real; `_SPECS` below gives each stem's reason. They are real CWL v1.2
+and never executed — `baseCommand` is `true` — so nothing pulls a container.
+"""
+from typing import Final
+
+from sophios.lang.cwl import CWL_VERSION
+from sophios.utils_cwl import desugar_into_canonical_normal_form
+from sophios.wic_types import Cwl, StepId, Tool, Tools
+
+#: The plugin namespace tools must be registered under.
+#:
+#: `'global'`, not `'synthetic'`, and this is not a naming preference. The
+#: compiler resolves a step's tool as `StepId(stem, plugin_ns_i)` where
+#: `plugin_ns_i = wic_step_i.get('wic', {}).get('namespace', 'global')`
+#: (src/sophios/compiler.py:500-502) — so a tool registered under any other
+#: namespace is invisible unless every step declares that namespace in a `wic:`
+#: sidecar entry of its own. Verified by execution: registering under
+#: `'synthetic'` fails with "Error! Neither mk_file nor  found!".
+SYNTHETIC_NS: Final = 'global'
+
+#: The URI each format prefix this suite uses expands to. `clt` declares only
+#: the prefixes a tool's own formats mention, so a builder shared by every
+#: module does not stamp `edam` onto tools that never reference it.
+_NAMESPACE_URIS: Final = {'edam': 'https://edamontology.org/'}
+_TXT: Final = 'edam:format_2330'
+_CSV: Final = 'edam:format_3752'
+
+
+def _declared_prefixes(ports: dict[str, Cwl]) -> set[str]:
+    """Every `prefix:` a port's `format` names."""
+    found: set[str] = set()
+    for port in ports.values():
+        formats = port.get('format', []) if isinstance(port, dict) else []
+        for entry in ([formats] if isinstance(formats, str) else formats):
+            if isinstance(entry, str) and ':' in entry:
+                found.add(entry.split(':', 1)[0])
+    return found & set(_NAMESPACE_URIS)
+
+
+def clt(inputs: dict[str, Cwl], outputs: dict[str, Cwl], *,
+        javascript: bool = False, canonical: bool = False) -> Cwl:
+    """One stub CommandLineTool. `true` succeeds and produces nothing, which is
+    all a compile-only registry needs.
+
+    `$namespaces` carries the prefixes this tool's own formats use, and is
+    absent when none do. Emitting a fixed `edam` instead would put it on every
+    tool in every module sharing this builder, several of which never mention a
+    format -- a difference that is invisible today, because the compiler adds
+    the namespace itself and format matching does not read it, and is exactly
+    the kind of silent fixture drift a shared builder is supposed to end.
+
+    Args:
+        inputs (dict[str, Cwl]): The tool's declared inputs.
+        outputs (dict[str, Cwl]): The tool's declared outputs.
+        javascript (bool): Add `InlineJavascriptRequirement`.
+        canonical (bool): Return canonical normal form, which the inference and
+            explicit-edge paths read. `plugins.py` applies it when it loads a
+            tool, so only a caller building one directly has to ask.
+
+    Returns:
+        Cwl: The tool document.
+    """
+    tool: Cwl = {
+        'cwlVersion': CWL_VERSION,
+        'class': 'CommandLineTool',
+        'baseCommand': 'true',
+        'inputs': inputs,
+        'outputs': outputs,
+    }
+    prefixes = _declared_prefixes(inputs) | _declared_prefixes(outputs)
+    if prefixes:
+        tool['$namespaces'] = {prefix: _NAMESPACE_URIS[prefix] for prefix in sorted(prefixes)}
+    if javascript:
+        tool['requirements'] = {'InlineJavascriptRequirement': {}}
+    return desugar_into_canonical_normal_form(tool) if canonical else tool
+
+
+_SPECS: Final[dict[str, Cwl]] = {
+    'mk_file': clt(
+        {'name': {'type': 'string', 'inputBinding': {'position': 1}}},
+        {'file': {'type': 'File', 'format': _TXT,
+                  'outputBinding': {'glob': '$(inputs.name)'}}},
+    ),
+    'mk_text': clt(
+        {'name': {'type': 'string', 'inputBinding': {'position': 1}}},
+        {'text': {'type': 'File', 'format': _CSV,
+                  'outputBinding': {'glob': '$(inputs.name)'}}},
+    ),
+    'xform': clt(
+        {'file': {'type': 'File', 'inputBinding': {'position': 1}},
+         'name': {'type': 'string', 'inputBinding': {'position': 2}}},
+        {'file': {'type': 'File', 'format': _TXT,
+                  'outputBinding': {'glob': '$(inputs.name)'}}},
+    ),
+    'join': clt(
+        {'left': {'type': 'File', 'inputBinding': {'position': 1}},
+         'right': {'type': 'File', 'inputBinding': {'position': 2}},
+         'name': {'type': 'string', 'inputBinding': {'position': 3}}},
+        {'file': {'type': 'File', 'format': _TXT,
+                  'outputBinding': {'glob': '$(inputs.name)'}}},
+    ),
+    'count': clt(
+        {'file': {'type': 'File', 'inputBinding': {'position': 1}}},
+        {'n': {'type': 'int', 'outputBinding': {'outputEval': '$(1)'}}},
+        javascript=True,
+    ),
+    'scale': clt(
+        {'n': {'type': 'int', 'inputBinding': {'position': 1}},
+         'factor': {'type': 'float', 'default': 1.0, 'inputBinding': {'position': 2}}},
+        {'scaled': {'type': 'float', 'outputBinding': {'outputEval': '$(1.0)'}}},
+        javascript=True,
+    ),
+    'poly': clt(
+        {'value': {'type': ['int', 'string'], 'inputBinding': {'position': 1}}},
+        {'value': {'type': 'string', 'outputBinding': {'outputEval': '$("x")'}}},
+        javascript=True,
+    ),
+    'sink': clt(
+        {'file': {'type': 'File', 'inputBinding': {'position': 1}},
+         'n': {'type': 'int', 'inputBinding': {'position': 2}},
+         'extras': {'type': 'File[]', 'default': [], 'inputBinding': {'position': 3}}},
+        {},
+    ),
+}
+
+#: Desugared exactly as `get_tools_cwl` desugars real adapters
+#: (src/sophios/plugins.py:117), so the compiler sees the same shape either way.
+#: `run_path` names a file that does not exist: nothing reads it — the emitted
+#: `run:` is a string, and the validity property embeds emitted child artifacts.
+SYNTHETIC_TOOLS: Final[Tools] = {
+    StepId(stem, SYNTHETIC_NS): Tool(f'/synthetic/{stem}.cwl',
+                                     desugar_into_canonical_normal_form(dict(cwl)))
+    for stem, cwl in _SPECS.items()
+}
+
+STEMS: Final[tuple[str, ...]] = tuple(sorted(_SPECS))
+
+
+def _cwl(stem: str) -> Cwl:
+    return SYNTHETIC_TOOLS[StepId(stem, SYNTHETIC_NS)].cwl
+
+
+def inputs_of(stem: str) -> dict[str, Cwl]:
+    """The tool's declared inputs, after desugaring."""
+    found: dict[str, Cwl] = _cwl(stem)['inputs']
+    return found
+
+
+def outputs_of(stem: str) -> dict[str, Cwl]:
+    """The tool's declared outputs, after desugaring."""
+    found: dict[str, Cwl] = _cwl(stem)['outputs']
+    return found
+
+
+def required_inputs_of(stem: str) -> tuple[str, ...]:
+    """Inputs the compiler will demand a value or an inferred edge for.
+
+    Deliberately a second implementation rather than an import: a generator that
+    asked the compiler which inputs are required, and then a property that
+    checked the compiler honoured them, would be asking one implementation to
+    grade itself.
+
+    A default satisfies an input when it is present and not null: a falsy
+    value like `0`, `false`, `''` or `[]` is still a value the tool author
+    chose, while `null` is the one value that cannot satisfy a non-nullable
+    input. `sink.extras` is the `default: []` case, so
+    `test_required_inputs_agree_with_the_compilers_own_rule` exercises the
+    place where truthiness and presence give different answers.
+    """
+    required = []
+    for name, spec in inputs_of(stem).items():
+        arg_type = spec['type']
+        optional = (isinstance(arg_type, str) and arg_type.endswith('?')) or (
+            isinstance(arg_type, list) and 'null' in arg_type)
+        if not (spec.get('default') is not None or optional):
+            required.append(name)
+    return tuple(required)

@@ -9,12 +9,18 @@ from typing import Any, ClassVar, Literal, overload
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
-from sophios.inference import types_match
+from sophios.lang.compatibility import TypeRelation, reference_relation
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
+from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.nf_types import ExecutableNextflowWorkflow
-from sophios.wic_types import CompilerInfo, Tools
+from sophios.wic_types import Tools
 
 from ._compiled import CompiledWorkflow
 from ._errors import (
+    ApiError,
+    InvalidCLTError,
+    InvalidInputValueError,
     InvalidLinkError,
     InvalidStepError,
 )
@@ -28,7 +34,6 @@ from ._ports import (
     WorkflowInputReference,
 )
 from ._utils import (
-    contains_any_type as _contains_any_type,
     infer_literal_parameter_type as _infer_literal_parameter_type,
     get_value_from_cfg as _get_value_from_cfg,
     load_yaml as _load_yaml,
@@ -36,7 +41,6 @@ from ._utils import (
 from ._types import ScatterMethod
 from ._workflow_runtime import (
     coerce_path as _coerce_path,
-    compile_workflow as _compile_workflow,
     compiled_workflow as _compiled_workflow,
     load_clt_document as _load_clt_document,
     load_clt as _load_clt,
@@ -59,11 +63,20 @@ _silence_autodiscovery_logging()
 
 
 StrPath = str | Path
+#: Re-exported so callers can catch structured compile and validation failures
+#: without importing `sophios.lang.diagnostics`. Their `.diagnostics` carry
+#: `wic0NN` when a document is wrong and `api0NN` when a reported API operation
+#: fails. Ordinary Python call-contract errors remain built-in exceptions.
 __all__ = [
+    "ApiError",
     "CompiledWorkflow",
+    "ExecutableNextflowWorkflow",
+    "InvalidCLTError",
+    "InvalidInputValueError",
     "InvalidLinkError",
     "InvalidStepError",
-    "ExecutableNextflowWorkflow",
+    "SophiosError",
+    "SophiosErrorCode",
     "Step",
     "Workflow",
 ]
@@ -79,14 +92,29 @@ def _tool_builder_source_name(value: Any) -> str | None:
 
 
 def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
-    """Match CWL types for explicit Python API links.
+    """Whether an eager API binding is not disjoint in every known version.
 
-    CWL ``Any`` is intentionally permissive. Keeping this compatibility rule
-    local to explicit Python bindings avoids broadening YAML edge inference.
+    A ``Workflow`` object has no resolved language version yet.  Rejecting only
+    when every supported version proves disjoint keeps this convenience check
+    from preempting the authoritative, resolved-version compiler judgment.
+
+    It also has no *scatter* yet: ``scatter_on()`` runs after the binding, and
+    lifts the sink to an array.  So the sink's declared type is not necessarily
+    its effective one, and a pair disjoint as written may be exactly right once
+    scattered.  Disjointness is only proven here when it holds for the sink as
+    declared *and* for the sink lifted one array level — that is, when no
+    scatter arrangement could make the binding valid.  Anything else is left to
+    the compiler, which knows the scatter.
     """
-    if _contains_any_type(parameter_type) or _contains_any_type(candidate_type):
-        return True
-    return types_match(parameter_type, candidate_type)
+    def proven_disjoint(sink_type: Any) -> bool:
+        return all(
+            reference_relation(candidate_type, sink_type, lang_version=lang_version)
+            is TypeRelation.DISJOINT
+            for lang_version in KNOWN_VERSIONS
+        )
+
+    return not (proven_disjoint(parameter_type)
+                and proven_disjoint({'type': 'array', 'items': parameter_type}))
 
 
 def _parameter_namespace(
@@ -410,19 +438,7 @@ class Step(_ProcessBase):
         process_name: str | None = None,
     ) -> None:
         # pylint: disable=too-many-arguments
-        """Populate a step from an already parsed CLT and optional config.
-
-        Args:
-            clt (CWLCommandLineTool): Parsed CWL tool object.
-            yaml_file (dict[str, Any]): Raw CWL document.
-            clt_path (Path): Filesystem or virtual path representing the tool.
-            cfg_yaml (Mapping[str, Any]): Optional input bindings to apply.
-            tool_registry (Tools): Tool registry preserved on the step.
-            process_name (str | None): Optional explicit step name override.
-
-        Returns:
-            None: The step is initialized in place.
-        """
+        """Populate a step from an already parsed CLT and optional config."""
         resolved_name = process_name or clt_path.stem
 
         object.__setattr__(self, "clt", clt)
@@ -526,17 +542,7 @@ class Step(_ProcessBase):
         return self
 
     def _get_input(self, name: str) -> InputParameter:
-        """Return a named input parameter from this step.
-
-        Args:
-            name (str): The input parameter name.
-
-        Raises:
-            AttributeError: If the input does not exist.
-
-        Returns:
-            InputParameter: The requested step input parameter.
-        """
+        """Return a named input parameter from this step."""
         return self._lookup_input(name)
 
     def get_output(self, name: str) -> OutputParameter:
@@ -774,14 +780,7 @@ class Workflow(_ProcessBase):
         _bind_workflow_output(self, name, value)
 
     def _get_input(self, name: str) -> InputParameter:
-        """Return a named workflow input, creating it if needed.
-
-        Args:
-            name (str): The workflow input name.
-
-        Returns:
-            InputParameter: The created or existing workflow input parameter.
-        """
+        """Return a named workflow input, creating it if needed."""
         return self._ensure_input(name)
 
     def _validate_graph_shape(self) -> None:
@@ -880,32 +879,12 @@ class Workflow(_ProcessBase):
         return _write_workflow_wic(self, path, inline_subworkflows=inline_subworkflows)
 
     def _flatten_steps(self) -> list[Step]:
-        """Return every concrete step in this workflow tree.
-
-        Returns:
-            list[Step]: All ``Step`` instances reachable from this workflow.
-        """
+        """Return every concrete step in this workflow tree."""
         return [step for child in self.steps for step in child._flatten_steps()]
 
     def _flatten_subworkflows(self) -> "list[Workflow]":
-        """Return this workflow and all nested subworkflows.
-
-        Returns:
-            list[Workflow]: This workflow followed by nested subworkflows.
-        """
+        """Return this workflow and all nested subworkflows."""
         return [self, *[workflow for child in self.steps for workflow in child._flatten_subworkflows()]]
-
-    def _compile(self, write_to_disk: bool = False, *, tool_registry: Tools | None = None) -> CompilerInfo:
-        """Compile this workflow through the internal compiler path.
-
-        Args:
-            write_to_disk (bool): Whether to also write generated CWL to ``autogenerated/``.
-            tool_registry (Tools | None): Optional tool registry override.
-
-        Returns:
-            CompilerInfo: Internal compiler result tree for this workflow.
-        """
-        return _compile_workflow(self, write_to_disk=write_to_disk, tool_registry=tool_registry)
 
     @overload
     def compile(
@@ -913,6 +892,7 @@ class Workflow(_ProcessBase):
         *,
         target: Literal["cwl"] = "cwl",
         tool_registry: Tools | None = None,
+        lang_version: str | None = None,
     ) -> CompiledWorkflow:
         ...
 
@@ -922,6 +902,7 @@ class Workflow(_ProcessBase):
         *,
         target: Literal["nextflow"],
         tool_registry: Tools | None = None,
+        lang_version: str | None = None,
     ) -> ExecutableNextflowWorkflow:
         ...
 
@@ -930,33 +911,49 @@ class Workflow(_ProcessBase):
         *,
         target: Literal["cwl", "nextflow"] = "cwl",
         tool_registry: Tools | None = None,
+        lang_version: str | None = None,
     ) -> CompiledWorkflow | ExecutableNextflowWorkflow:
-        """Compile this workflow to the selected supported target.
-
-        The old ``CompilerInfo`` result remains available only through the
-        internal :meth:`_compile`.
+        """Compile this workflow into the selected target representation.
 
         Args:
             target (Literal["cwl", "nextflow"]): Compilation target.
             tool_registry (Tools | None): Optional tool registry override.
+            lang_version (str | None): Pin the Sophios language version for
+                this compilation; None (the default) infers it. An explicit
+                setting beats any file tag. The resolved version is reported
+                on the result as ``CompiledWorkflow.lang_version``.
 
         Returns:
             CompiledWorkflow | ExecutableNextflowWorkflow: Target-specific result.
         """
         if target == "cwl":
-            return _compiled_workflow(self, tool_registry=tool_registry)
+            return _compiled_workflow(
+                self,
+                tool_registry=tool_registry,
+                lang_version=lang_version,
+            )
         if target == "nextflow":
-            return _nextflow_workflow(self, tool_registry=tool_registry)
+            return _nextflow_workflow(
+                self,
+                tool_registry=tool_registry,
+                lang_version=lang_version,
+            )
         raise ValueError(f"unsupported compilation target {target!r}")
 
     def to_nextflow(
         self,
-        outdir: str | Path,
+        outdir: StrPath,
         *,
         tool_registry: Tools | None = None,
+        lang_version: str | None = None,
     ) -> tuple[Path, Path, Path, Path]:
         """Compile once and write the four supported Nextflow artifacts."""
-        return _write_nextflow_workflow(self, outdir, tool_registry=tool_registry)
+        return _write_nextflow_workflow(
+            self,
+            outdir,
+            tool_registry=tool_registry,
+            lang_version=lang_version,
+        )
 
     def run(
         self,

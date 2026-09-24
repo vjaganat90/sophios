@@ -127,7 +127,7 @@ jobs:
       # Completely moving away from pypy
       - name: Setup miniforge (linux, macos)
         if: runner.os != 'Windows'
-        uses: conda-incubator/setup-miniconda@v3.0.1
+        uses: conda-incubator/setup-miniconda@v4.0.1
         with:
           miniforge-variant: Miniforge3
           miniforge-version: 24.7.1-2
@@ -138,7 +138,7 @@ jobs:
 
       - name: Setup miniforge (windows)
         if: runner.os == 'Windows'
-        uses: conda-incubator/setup-miniconda@v3.0.1
+        uses: conda-incubator/setup-miniconda@v4.0.1
         with:
           miniforge-variant: Miniforge3
           miniforge-version: 24.7.1-2
@@ -193,7 +193,7 @@ jobs:
 
       - name: Generate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest tests/core/test_python_api.py -k test_compile_python_workflows
+        run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_compile_python_workflows
 
       - name: Generate Sophios Validation Jsonschema
         if: always()
@@ -204,7 +204,7 @@ jobs:
         # Sophios Python API workflows as well as the Sophios Python API itself.
       - name: Validate sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest tests/core/test_python_api.py -k test_validate_generated_python_workflows
+        run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_validate_generated_python_workflows
 
       - name: Build Documentation
         if: runner.os == 'Linux'
@@ -218,10 +218,18 @@ jobs:
         # NOTE: This test MUST be run in serial! See is_isomorphic_with_timeout()
         timeout-minutes: 20 # backup timeout for windows
 
+      # Two defect classes cwltool already catches -- a Sophios key written
+      # into `in:`, and a promoted port carrying a tool-only `inputBinding` --
+      # but only in run_workflows, behind a container pull. Measured at 21s
+      # over the full corpus here, against the minutes that round trip costs.
+      - name: PyTest Emitted CWL Residue
+        if: always()
+        run: cd sophios/ && pytest -k test_emitted_cwl_says_nothing_cwl_cannot_read
+        timeout-minutes: 20 # backup timeout for windows
+
       - name: PyTest Inline Subworkflows
         if: always()
         run: cd sophios/ && pytest -k test_inline_subworkflows # --cov --cov-config=.coveragerc_serial
-        # NOTE: This test MUST be run in serial! See is_isomorphic_with_timeout()
         timeout-minutes: 20 # backup timeout for windows
 
       # design_docs/core-refactor-design.md, Spec 0: both Spec 0 mechanisms —
@@ -229,7 +237,79 @@ jobs:
       # needs containers; both are static checks over the repository.
       - name: PyTest Spec 0 Invariants
         if: always()
-        run: cd sophios/ && pytest tests/core/test_zone_boundary.py tests/core/test_entry_points.py
+        run: cd sophios/ && pytest tests/core/test_zone_boundary.py tests/core/test_entry_points.py tests/core/test_ci_coverage.py
+
+      # The packaging lane runs `pytest -m "not skip_pypi_ci"`, so a test with
+      # that marker runs only where a step names its file. This is that place,
+      # filtered to exactly the complement so nothing here is run twice: these
+      # files' unmarked tests are already covered by the packaging lane's
+      # default collection. tests/core/test_ci_coverage.py fails if a
+      # skip_pypi_ci test exists that no lane collects, which is how these came
+      # to light — 26 of them had never executed anywhere.
+      - name: PyTest Environment-Dependent
+        if: always()
+        timeout-minutes: 20
+        run: cd sophios/ && pytest tests/core/test_predicates.py tests/core/test_leak_boundary.py tests/core/test_lang_version.py tests/core/test_lang_parser.py tests/core/test_hermeticity.py -m "skip_pypi_ci"
+
+      # design_docs/core-refactor-design.md, Spec 2: the oracle suite — the
+      # generators, the equivalence relation and P25's own hermeticity checks.
+      # Its own step for the reason Spec 0 has one: a red build is attributable
+      # to a zone without bisecting. It needs nothing this matrix lacks, which
+      # is the point of P25 — no plugins, no containers, no corpus.
+      #
+      # skip_pypi_ci excludes the per-stem `cwltool --validate` cases, for the
+      # reason the contrib step gives below.
+      - name: PyTest Spec 2 Oracle
+        if: always()
+        run: cd sophios/ && pytest tests/core/test_hermeticity.py tests/core/test_generators.py tests/core/test_equivalence.py tests/core/test_equivalences.py -m "not skip_pypi_ci"
+
+      # design_docs/core-refactor-design.md, Spec 2: canonical emission. Its own
+      # step, and deliberately with no -m filter: the two properties that carry
+      # the determinism claim end to end — the generated no-set-order property
+      # and the four-hash-seed subprocess regression — are marked slow and
+      # skip_pypi_ci, so every marker-filtered lane in this repository excludes
+      # them and the wheel lane's default collection excludes them too. Named
+      # here so they run somewhere. test_no_canonical_emission_test_is_uncollected
+      # fails if a future marker or rename silently drops them again.
+      - name: PyTest Spec 2 Canonical Emission
+        if: always()
+        timeout-minutes: 20
+        run: cd sophios/ && pytest tests/core/test_canonical_emission.py
+
+      # Spec 3 prerequisite: the front end's opinion of the documents the
+      # compiler manufactures. Its own step because a red build here means the
+      # compiler emitted something the language refuses — a different fact from
+      # a property failing, and one worth reading without bisecting. ~3s.
+      - name: PyTest Manufactured Documents
+        if: always()
+        run: cd sophios/ && pytest tests/core/test_manufactured_documents.py
+
+      # Spec 3's cumulative blocking lane: phase contracts plus the composed
+      # pipeline. It does not assert that a retired name has stayed retired --
+      # a deleted symbol coming back is a review failure, and a test that
+      # names one can only ever restate its own deletion.
+      - name: PyTest Spec 3 Phases
+        if: always()
+        timeout-minutes: 30
+        run: cd sophios/ && pytest tests/core/test_lower.py tests/core/test_emit.py tests/core/test_resolve.py tests/core/test_link.py tests/core/test_infer_phase.py tests/core/test_pipeline.py
+
+      # The Python API surfaces that used to be example scripts nothing executed:
+      # `search_paths_wic` reaches the corpus repositories and docs/tutorials,
+      # and docs/tutorials holds no .py files, so the "Generate Sophios Python
+      # API Workflows" step above never touched examples/. Compile-only — no
+      # container, no runner, no network — and about a second in total.
+      - name: PyTest Example Surfaces
+        if: always()
+        run: cd sophios/ && pytest tests/core/test_example_scripts.py
+
+      # design_docs/core-refactor-design.md, Spec 2: the fast contracts for the
+      # weekly benchmark harness. Its own step because importing it imports
+      # tests/core/wic_corpus.py, which reads the config and walks
+      # search_paths_wic — so a corpus or config problem reds this step and not
+      # the oracle's, which is hermetic by construction and says so.
+      - name: PyTest Benchmark Harness
+        if: always()
+        run: cd sophios/ && pytest tests/core/test_benchmarks.py
 
       # Contrib surfaces (ICT, Workflow Builder, REST) run in core CI, but as
       # their own step, so a red build is attributable to a zone without
@@ -275,10 +355,14 @@ jobs:
       - name: Generate a token
         if: always()
         id: generate_token
-        uses: tibdex/github-app-token@b62528385c34dbc9f38e5f4225ac829252d1ea92
+        uses: actions/create-github-app-token@v3
         with:
-          app_id: ${{ secrets.APP_ID }}
-          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          # tibdex minted a token for the whole app installation; the official
+          # action defaults to the current repository only. owner: restores
+          # installation scope, which cross-repo branch dispatch requires.
+          owner: ${{ github.repository_owner }}
 
       - name: Reply CI results to sender
         # In case of failure, we still need to return the failure status to the original repository.

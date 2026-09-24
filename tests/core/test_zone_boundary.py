@@ -1,4 +1,4 @@
-"""Core/contrib zone boundary (CR-001, property P01).
+"""Core/contrib zone boundary: core never imports contrib.
 
 The core compiler must never acquire a dependency on the peripheral surfaces.
 See design_docs/core-refactor-design.md, Spec 0:
@@ -23,11 +23,15 @@ result therefore means "no statically visible crossing", which is weaker than
 instrumentation; that is not what this test does.
 """
 import ast
+import subprocess
 from pathlib import Path
+from typing import Final
 
 import pytest
 
-SRC_ROOT = Path(__file__).resolve().parents[2] / 'src'
+REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+
+SRC_ROOT = REPO_ROOT / 'src'
 PACKAGE = 'sophios'
 
 # The peripheral zone is a single subtree. Everything else under src/sophios
@@ -64,34 +68,43 @@ def _resolve_relative(module: str, node: ast.ImportFrom, is_package: bool) -> st
     return '.'.join(parts)
 
 
-def _dynamic_target(node: ast.Call) -> str | None:
+def _dynamic_target(node: ast.Call, package: str = PACKAGE) -> str | None:
     """Return the target of `import_module("literal")`, if it is a literal.
 
     A computed target cannot be resolved statically; see the module docstring.
+
+    `package` defaults to `sophios` so every existing caller is unchanged; see
+    `_imports_of` for why it is parameterised.
     """
     name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, 'id', None)
     if name != 'import_module' or not node.args:
         return None
     first = node.args[0]
     if isinstance(first, ast.Constant) and isinstance(first.value, str):
-        return first.value if first.value.startswith(PACKAGE) else None
+        return first.value if first.value.startswith(package) else None
     return None
 
 
-def _imports_of(path: Path, module: str) -> set[str]:
-    """Return the in-package modules that `path` imports, absolute and relative."""
+def _imports_of(path: Path, module: str, package: str = PACKAGE) -> set[str]:
+    """Return the in-package modules that `path` imports, absolute and relative.
+
+    `package` defaults to `sophios` so every existing caller is unchanged. The
+    oracle's hermeticity scan (tests/core/test_hermeticity.py) walks modules
+    under `tests/` with the same rules, and a second copy of this walk is a
+    second thing to keep correct.
+    """
     tree = ast.parse(path.read_text(encoding='utf-8'))
     is_package = path.name == '__init__.py'
     found: set[str] = set()
     for node in ast.walk(tree):
         match node:
             case ast.Call():
-                target = _dynamic_target(node)
+                target = _dynamic_target(node, package)
                 if target is not None:
                     found.add(target)
             case ast.Import():
-                found.update(a.name for a in node.names if a.name.startswith(PACKAGE))
-            case ast.ImportFrom(level=0, module=str() as mod) if mod.startswith(PACKAGE):
+                found.update(a.name for a in node.names if a.name.startswith(package))
+            case ast.ImportFrom(level=0, module=str() as mod) if mod.startswith(package):
                 found.add(mod)
                 found.update(f'{mod}.{a.name}' for a in node.names)
             case ast.ImportFrom(level=int() as level) if level > 0:
@@ -130,7 +143,7 @@ def _reachable(start: str, graph: dict[str, set[str]]) -> set[str]:
 
 @pytest.mark.fast
 def test_core_never_imports_contrib() -> None:
-    """P01: no core module reaches a contrib module through any import path."""
+    """No core module reaches a contrib module through any import path."""
     graph = _import_graph()
     core = [m for m in graph if not _is_contrib(m)]
     assert core, 'no core modules discovered; the zone scan is broken'
@@ -181,3 +194,59 @@ def test_contrib_may_import_core() -> None:
     assert any(
         any(not _is_contrib(t) for t in _reachable(m, graph)) for m in contrib
     ), 'expected contrib to depend on core; the scan may be resolving nothing'
+
+
+def _repo_python_files() -> list[Path]:
+    """Every tracked Python file. Via git, so build output is excluded.
+
+    Returns nothing outside a git checkout — an sdist ships `tests/` but no
+    `.git` — and the guard below turns that into a skip rather than a silent
+    pass. `-z` because git quotes unusual filenames otherwise, and an explicit
+    encoding because git emits UTF-8 while `text=True` decodes with the
+    locale's, which is cp1252 on Windows.
+    """
+    listing = subprocess.run(['git', 'ls-files', '-z', '*.py'], cwd=REPO_ROOT,
+                             capture_output=True, text=True, encoding='utf-8',
+                             check=False)
+    if listing.returncode != 0:
+        return []
+    return [REPO_ROOT / name for name in listing.stdout.split('\0') if name]
+
+# --------------------------------------------------------------------------
+# Lines stay within the configured width
+# --------------------------------------------------------------------------
+
+
+#: Matches pyproject's max-line-length.
+MAX_LINE_LENGTH: Final = 120
+
+
+def _over_long_lines(path: Path) -> list[tuple[int, int]]:
+    """Line numbers and lengths that exceed the limit. No exemptions."""
+    return [(number, len(line))
+            for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), start=1)
+            if len(line) > MAX_LINE_LENGTH]
+
+
+@pytest.mark.fast
+def test_the_width_scan_sees_the_repo() -> None:
+    """Zero parametrized cases is a green test that enforces nothing."""
+    if not (REPO_ROOT / '.git').exists():
+        pytest.skip('not a git checkout; nothing to enumerate')
+    assert _repo_python_files(), 'git ls-files resolved nothing; the width scan is vacuous'
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize('path', _repo_python_files(),
+                         ids=lambda p: str(p.relative_to(REPO_ROOT)))
+def test_no_line_exceeds_the_configured_width(path: Path) -> None:
+    """No Python file carries a line longer than pyproject allows.
+
+    autopep8 does not reflow comments and pylint gates on a score, so nothing
+    else enforces the setting.
+    """
+    offenders = _over_long_lines(path)
+    assert not offenders, (
+        f'{path.relative_to(REPO_ROOT)} has lines over {MAX_LINE_LENGTH} columns: '
+        f'{[f"line {n} ({length})" for n, length in offenders]}'
+    )

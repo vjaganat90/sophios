@@ -1,32 +1,72 @@
 from pathlib import Path
+from typing import Final
 import unittest
 
 import graphviz
-from hypothesis import given, settings, HealthCheck
+from hypothesis import given, settings, HealthCheck, strategies as st
 import networkx as nx
 import pytest
 
 import sophios
-import sophios.ast
+import yaml
+from sophios.ir import frontdoor
+from sophios.lang.diagnostics import SophiosError
+from sophios.lang.error_codes import SophiosErrorCode
 import sophios.cli
 import sophios.plugins
 import sophios.utils
 from sophios.wic_types import GraphData, GraphReps, Yaml, YamlTree, StepId
 
-from .test_setup import tools_cwl, yml_paths, validator, wic_strategy
+from .test_setup import load_test_registry, wic_strategy
+
+
+#: Structured failures the fuzz job accepts. Exactly the former `sys.exit(1)`
+#: sites, which the message arm used to accept as `SystemExit(1)`.
+TOLERATED_CODES: Final[frozenset[SophiosErrorCode]] = frozenset({
+    SophiosErrorCode.UNRESOLVED_INPUT,
+    SophiosErrorCode.SUBWORKFLOW_INVALID,
+    SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH,
+    SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
+    SophiosErrorCode.MISSING_INPUT_FILE,
+    # `wic026` was `ValueError: Error! Multiple definitions of &`,
+    # which the message arm below used to accept. Giving it a code
+    # moved it to this arm; leaving it out of this set turned a
+    # tolerated draw into a job failure.
+    SophiosErrorCode.DUPLICATE_EDGE_DEF,
+    # `wic028` was reported as `wic013` until it was given a code of its own.
+    # Splitting a code does not change which draws the job tolerates, so it
+    # inherits its predecessor's membership -- the same reasoning as `wic026`
+    # above, one step further along.
+    SophiosErrorCode.UNDECLARED_PORT,
+    # The four shape codes, for the third time and the same reason. The front
+    # door now parses before canonicalization runs, so a draw like
+    # `{'steps': {'0': []}}` is reported as `wic003` where it used to arrive as
+    # `ValueError: Error! If steps: tag is a Dictionary then all its values
+    # should be Dictionaries!` -- a string listed below. Whichever of the two
+    # lists a shape error lands in, it is the same draw and the same verdict.
+    SophiosErrorCode.NOT_A_MAPPING,
+    SophiosErrorCode.EXPECTED_MAPPING,
+    SophiosErrorCode.EXPECTED_SEQUENCE,
+    SophiosErrorCode.EXPECTED_SCALAR,
+    # A drawn `!*` names an edge no drawn `!&` defines, which the schema
+    # cannot exclude and the retired compiler accepted by leaving the input
+    # unbound. Refusing it is the improvement; the draw is a defective
+    # document, not a defective compiler, and this set is for the former.
+    SophiosErrorCode.UNDEFINED_EDGE,
+})
 
 
 @pytest.mark.skip_pypi_ci
 class TestFuzzyCompile(unittest.TestCase):
 
     @pytest.mark.slow
-    @given(wic_strategy)
+    @given(data=st.data())
     @settings(max_examples=100,
               suppress_health_check=[HealthCheck.too_slow,
                                      HealthCheck.filter_too_much],
               deadline=None)
     # TODO: Improve schema so we can remove the health checks
-    def test_fuzzy_compile(self, yml: Yaml) -> None:
+    def test_fuzzy_compile(self, data: st.DataObject) -> None:  # pylint: disable=too-many-locals
         """Tests that the compiler doesn't crash when given random allegedly valid input.\n
         Note that the full schema has performance limitations, so a random subset of\n
         wic_main_schema is chosen when hypothesis=True, then random values are generated.
@@ -34,6 +74,11 @@ class TestFuzzyCompile(unittest.TestCase):
         Args:
             yml (Yaml): Yaml input, randomly generated according to a random subset of wic_main_schema
         """
+        registry = load_test_registry()
+        yml: Yaml = data.draw(wic_strategy())
+        tools_cwl = registry.tools
+        yml_paths = registry.workflows
+        validator = registry.validator
         plugin_ns = 'global'
         yml_path = Path('random_stepid')
         steps_keys = sophios.utils.get_steps_keys(yml.get('steps', []))
@@ -56,50 +101,53 @@ class TestFuzzyCompile(unittest.TestCase):
         graphdata = GraphData(str(yml_path))
         graph = GraphReps(graph_gv, graph_nx, graphdata)
 
-        compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation()
+        compiler_options, graph_settings, yaml_tag_paths = sophios.cli.get_dicts_for_compilation(args)
 
         try:
-            yaml_tree_raw = sophios.ast.read_ast_from_disk(args.homedir, y_t, yml_paths, tools_cwl, validator,
-                                                           args.ignore_validation_errors)
-            yaml_tree = sophios.ast.merge_yml_trees(
-                yaml_tree_raw, {}, tools_cwl)
-            root_yml_dir_abs = yml_path.parent.absolute()
-            yaml_tree = sophios.ast.python_script_generate_cwl(
-                yaml_tree, root_yml_dir_abs, tools_cwl)
+            bundle = frontdoor.bundle_from_source(
+                yaml.dump(yml, sort_keys=False, line_break='\n', indent=2),
+                'random_stepid', yml_paths, tools_cwl)
 
-            sophios.compiler.compile_workflow(yaml_tree, compiler_options, graph_settings,
-                                              yaml_tag_paths, [], [graph], {}, {}, {}, {},
-                                              tools_cwl, True, relative_run_path=True, testing=True)
-        except BaseException as e:
+            sophios.compiler.compile_source(
+                bundle, compiler_options, graph_settings, yaml_tag_paths,
+                relative_run_path=True, testing=True, graph_target=graph)
+        except SophiosError as e:
+            # Structured failures are tolerated only for the codes that were
+            # tolerated before this change, and no others.
+            #
+            # `len(e.diagnostics) > 0` was the first attempt and it is a
+            # tautology: the constructor already refuses to build an empty
+            # error, so every compile-phase failure passed and the job stopped
+            # being a regression check at all. Matching on codes restores it,
+            # and is stricter than the message matching below — a new code, or
+            # one of these raised somewhere it should not be, fails the job.
+            #
+            # The set is exactly the former `sys.exit(1)` sites, which the
+            # handler below used to accept as `SystemExit(1)`. Deliberately
+            # absent: MISSING_REQUIRED_INPUT. That site raised a bare
+            # ValueError whose message is not in the list below, so it failed
+            # this job before and must keep failing it — giving a failure a
+            # code documents it, it does not bless it.
+            tolerated = TOLERATED_CODES
+            unexpected = [d for d in e.diagnostics if d.code not in tolerated]
+            if unexpected:
+                raise
+        except Exception as e:
             expected_messages = (
-                'Error! Multiple definitions of &',
-                'Error! Unbound literal variable ~',
                 'Error! Cannot load python_script',
-                'Error! Cannot self-reference the same step!',
                 'Error! If steps: tag is a List then all its elements should be Dictionaries!',
                 'Error! Each step dictionary must contain a non-empty string id: tag.',
                 'Error! If steps: tag is a Dictionary then all its keys should be non-empty strings!',
                 'Error! If steps: tag is a Dictionary then all its values should be Dictionaries!',
-                'Error! The `out` tag should be a list.',
-                'Error! There should only be one non-empty string anchor per out: list entry!',
-                'Error! Each out: list entry should be a string or a single-key dictionary.',
-                'Error! Each out: list entry should resolve to a string output name before workflow compilation.',
-                'Error! Provided input ',
                 "Error! Neither ",
-                'Error! No implementations and/or steps in ',
-                'Error! workflows must define at least one step.',
-                'Error! $namespaces tag must be a dictionary if present.',
-                'Error! $schemas tag must be a list if present.',
-                'Error! Subworkflow has no concrete first step.',
             )
             # Certain constraints are conditionally dependent on values and are
             # not easily encoded in the schema, so catch them here.
-            # Moreover, although we check for the existence of input files in
-            # stage_input_files, we cannot encode file existence in json schema
-            # to check the python_script script: tag before compile time.
-            if isinstance(e, SystemExit) and e.code == 1:
-                pass
-            elif any(msg in str(e) for msg in expected_messages):
+            # The SystemExit arm is gone because the library no longer exits:
+            # what used to be a whitelisted process death is the SophiosError
+            # arm above. `except Exception` rather than BaseException
+            # for the same reason — a SystemExit now IS a test failure.
+            if any(msg in str(e) for msg in expected_messages):
                 pass
             else:
                 raise e
@@ -108,3 +156,27 @@ class TestFuzzyCompile(unittest.TestCase):
 if __name__ == '__main__':
     sophios.plugins.logging_filters()
     unittest.main()
+
+
+@pytest.mark.fast
+def test_the_tolerated_set_covers_what_the_message_arm_used_to() -> None:
+    """A message that became a code has to move between the two arms.
+
+    `wic026` was `ValueError: Error! Multiple definitions of &`, which the
+    generic arm accepted by message. Giving it a code moved it to the
+    structured arm, where leaving it out turned a draw the job had always
+    tolerated into a failure -- and left the message entry unreachable, so
+    nothing pointed at the gap.
+    """
+    from .hermetic import compile_production  # pylint: disable=import-outside-toplevel
+
+    source = {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}}
+    duplicate = {'steps': [
+        {**source, 'out': [{'file': {'wic_anchor': 'twice'}}]},
+        {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'b'}},
+         'out': [{'file': {'wic_anchor': 'twice'}}]}]}
+
+    with pytest.raises(SophiosError) as caught:
+        compile_production(duplicate)
+    escaping = [d.code for d in caught.value.diagnostics if d.code not in TOLERATED_CODES]
+    assert not escaping, f'{[c.value for c in escaping]} would fail the fuzz job'

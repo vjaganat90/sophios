@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 import warnings
 
+from .lang.cwl import CWL_VERSION
 from .nf_types import (
     ExecutableNextflowWorkflow,
     NfConnection,
@@ -602,7 +603,7 @@ def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[di
         tools.append({
             "id": process.name,
             "class": "CommandLineTool",
-            "cwlVersion": "v1.2",
+            "cwlVersion": CWL_VERSION,
             "baseCommand": ["bash", "-c"],
             "arguments": [process.script],
             "inputs": {port.name: {"type": _cwl_type(port)} for port in process.inputs},
@@ -656,7 +657,7 @@ def nextflow_to_cwl(workflow: NextflowDocument) -> tuple[dict[str, Any], list[di
     cwl_workflow = {
         "id": workflow.name,
         "class": "Workflow",
-        "cwlVersion": "v1.2",
+        "cwlVersion": CWL_VERSION,
         "inputs": workflow_inputs,
         "outputs": workflow_outputs,
         "steps": steps,

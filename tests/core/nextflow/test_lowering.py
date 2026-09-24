@@ -6,9 +6,8 @@ import copy
 from typing import Any
 
 import pytest
-
-from sophios import inference
 from sophios.input_output_nf import render_nextflow
+from sophios.ir.artifacts import CompilationResult
 from sophios.nf_types import (
     NfArrayBinding,
     NfBasenameReference,
@@ -23,10 +22,9 @@ from sophios.nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
-from sophios.utils_nf import cwl_rosetree_to_nextflow, cwl_type_to_nf_qualifier
-from sophios.wic_types import RoseTree
+from sophios.utils_nf import compiled_source_to_nextflow, cwl_type_to_nf_qualifier
 
-from .testkit import step, synthetic_rose, tool, workflow_doc
+from .testkit import step, synthetic_source, tool, workflow_doc
 
 
 @pytest.mark.fast
@@ -55,8 +53,10 @@ def test_rejects_unbounded_and_collection_types(cwl_type: Any) -> None:
 
 
 @pytest.mark.fast
-def test_real_supported_rosetree_converts(real_supported_rose: RoseTree) -> None:
-    converted = cwl_rosetree_to_nextflow(real_supported_rose)
+def test_real_supported_compilation_result_converts(
+    real_supported_result: CompilationResult,
+) -> None:
+    converted = compiled_source_to_nextflow(real_supported_result)
     assert converted.name == "wf"
     assert [process.name for process in converted.processes] == [
         "wf__step__1__touch",
@@ -79,7 +79,7 @@ def test_composes_command_arguments_bindings_and_redirects() -> None:
         stdout="stdout.txt",
         stderr="stderr.txt",
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("RUN", **{"in": {"message": "message", "source": "source"}, "out": ["report"]})],
             inputs={"message": {"type": "string"}, "source": {"type": "File"}},
@@ -88,8 +88,8 @@ def test_composes_command_arguments_bindings_and_redirects() -> None:
         [run_tool],
         workflow_inputs={"message": "hello", "source": {"class": "File", "path": "input.txt"}},
     )
-    process = cwl_rosetree_to_nextflow(rose).processes[0]
-    rendered = render_nextflow(cwl_rosetree_to_nextflow(rose))
+    process = compiled_source_to_nextflow(rose).processes[0]
+    rendered = render_nextflow(compiled_source_to_nextflow(rose))
     command_line = next(line for line in rendered.splitlines() if " < " in line)
     assert command_line.count("__sophios_shell_quote_9f72e") == 9
     for fragment in ("'python'", "'script.py'", "'--mode'", "'fast'", "'--message'"):
@@ -112,7 +112,7 @@ def test_boolean_flag_lowers_to_a_conditional_flag_token() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("SORT", **{"in": {"reverse": "reverse"}})],
             inputs={"reverse": {"type": "boolean"}},
@@ -121,7 +121,7 @@ def test_boolean_flag_lowers_to_a_conditional_flag_token() -> None:
         workflow_inputs={"reverse": True},
     )
 
-    command = cwl_rosetree_to_nextflow(rose).processes[0].command
+    command = compiled_source_to_nextflow(rose).processes[0].command
 
     assert command.tokens[1] == NfFlag("reverse", "-r")
 
@@ -137,7 +137,7 @@ def test_flag_tokens_take_their_cwl_position_among_other_bindings() -> None:
         },
         arguments=[{"position": 1, "valueFrom": "--stable"}],
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("SORT", **{"in": {"source": "source", "reverse": "reverse"}})],
             inputs={"source": {"type": "File"}, "reverse": {"type": "boolean"}},
@@ -149,7 +149,7 @@ def test_flag_tokens_take_their_cwl_position_among_other_bindings() -> None:
         },
     )
 
-    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
 
     assert tokens[0] == NfTemplate((NfLiteral("SORT"),))
     assert tokens[1] == NfTemplate((NfLiteral("--stable"),))
@@ -168,7 +168,7 @@ def test_array_of_scalars_lowers_to_a_val_array_port_with_a_binding() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("NAMES", **{"in": {"names": "names"}})],
             inputs={"names": {"type": {"type": "array", "items": "string"}}},
@@ -177,7 +177,7 @@ def test_array_of_scalars_lowers_to_a_val_array_port_with_a_binding() -> None:
         workflow_inputs={"names": ["alice", "bob"]},
     )
 
-    process = cwl_rosetree_to_nextflow(rose).processes[0]
+    process = compiled_source_to_nextflow(rose).processes[0]
 
     assert process.inputs[0] == NfPort("names", "val", is_array=True)
     assert process.command.tokens[-1] == NfArrayBinding("names", "--name")
@@ -194,7 +194,7 @@ def test_array_of_files_lowers_to_a_path_array_port() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("CAT", **{"in": {"sources": "sources"}})],
             inputs={"sources": {"type": {"type": "array", "items": "File"}}},
@@ -208,7 +208,7 @@ def test_array_of_files_lowers_to_a_path_array_port() -> None:
         },
     )
 
-    process = cwl_rosetree_to_nextflow(rose).processes[0]
+    process = compiled_source_to_nextflow(rose).processes[0]
 
     assert process.inputs[0] == NfPort("sources", "path", is_array=True)
     assert process.command.tokens[-1] == NfArrayBinding("sources")
@@ -220,7 +220,7 @@ def test_array_binding_without_a_prefix_lowers_correctly() -> None:
         "CAT",
         inputs={"sources": {"type": {"type": "array", "items": "string"}, "inputBinding": {}}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("CAT", **{"in": {"sources": "sources"}})],
             inputs={"sources": {"type": {"type": "array", "items": "string"}}},
@@ -229,7 +229,7 @@ def test_array_binding_without_a_prefix_lowers_correctly() -> None:
         workflow_inputs={"sources": ["a", "b"]},
     )
 
-    process = cwl_rosetree_to_nextflow(rose).processes[0]
+    process = compiled_source_to_nextflow(rose).processes[0]
 
     assert process.command.tokens[-1] == NfArrayBinding("sources", None)
 
@@ -246,7 +246,7 @@ def test_empty_array_value_is_accepted_and_distinct_from_absent() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("NAMES", **{"in": {"names": "names"}})],
             inputs={"names": {"type": {"type": "array", "items": "string"}}},
@@ -255,7 +255,7 @@ def test_empty_array_value_is_accepted_and_distinct_from_absent() -> None:
         workflow_inputs={"names": []},
     )
 
-    assert cwl_rosetree_to_nextflow(rose).params == {"names": []}
+    assert compiled_source_to_nextflow(rose).params == {"names": []}
 
 
 @pytest.mark.fast
@@ -270,7 +270,7 @@ def test_shell_quote_false_literal_lowers_to_a_raw_shell_literal_token() -> None
             {"position": 3, "valueFrom": "out.txt"},
         ],
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("REDIRECT", out=["result"])],
             outputs={"result": {"type": "File", "outputSource": "REDIRECT/result"}},
@@ -278,7 +278,7 @@ def test_shell_quote_false_literal_lowers_to_a_raw_shell_literal_token() -> None
         [redirect_tool],
     )
 
-    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
 
     assert tokens[0] == NfTemplate((NfLiteral("REDIRECT"),))
     assert tokens[1] == NfTemplate((NfLiteral("hello"),))
@@ -299,7 +299,7 @@ def test_shell_quote_false_takes_precedence_over_boolean_flag_lowering() -> None
         },
         requirements={"ShellCommandRequirement": {}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("LITERAL", **{"in": {"flag": "flag"}})],
             inputs={"flag": {"type": "boolean"}},
@@ -308,7 +308,7 @@ def test_shell_quote_false_takes_precedence_over_boolean_flag_lowering() -> None
         workflow_inputs={"flag": True},
     )
 
-    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
 
     assert tokens[1] == NfShellLiteral("--literal")
     assert not any(isinstance(token, NfFlag) for token in tokens)
@@ -323,9 +323,9 @@ def test_command_of_only_shell_literals_still_runs_a_program() -> None:
         baseCommand=None,
         arguments=[{"position": 1, "valueFrom": "printf ok", "shellQuote": False}],
     )
-    rose = synthetic_rose(workflow_doc([step("LITERAL")]), [literal_tool])
+    rose = synthetic_source(workflow_doc([step("LITERAL")]), [literal_tool])
 
-    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
 
     assert tokens == (NfShellLiteral("printf ok"),)
 
@@ -338,7 +338,7 @@ def test_iwdr_own_basename_listing_lowers_to_no_stage_as() -> None:
         inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
         requirements={"InitialWorkDirRequirement": {"listing": ["$(inputs.source)"]}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("STAGE", **{"in": {"source": "source"}})],
             inputs={"source": {"type": "File"}},
@@ -347,7 +347,7 @@ def test_iwdr_own_basename_listing_lowers_to_no_stage_as() -> None:
         workflow_inputs={"source": {"class": "File", "path": "in.txt"}},
     )
 
-    process = cwl_rosetree_to_nextflow(rose).processes[0]
+    process = compiled_source_to_nextflow(rose).processes[0]
 
     assert process.inputs[0] == NfPort("source", "path")
     assert process.inputs[0].stage_as is None
@@ -363,7 +363,7 @@ def test_iwdr_literal_entryname_lowers_to_a_stage_as_port() -> None:
         ]}},
         arguments=["cat", "renamed.txt"],
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("STAGE", **{"in": {"source": "source"}})],
             inputs={"source": {"type": "File"}},
@@ -372,7 +372,7 @@ def test_iwdr_literal_entryname_lowers_to_a_stage_as_port() -> None:
         workflow_inputs={"source": {"class": "File", "path": "in.txt"}},
     )
 
-    process = cwl_rosetree_to_nextflow(rose).processes[0]
+    process = compiled_source_to_nextflow(rose).processes[0]
 
     assert process.inputs[0] == NfPort("source", "path", stage_as="renamed.txt")
 
@@ -391,7 +391,7 @@ def test_basename_lowers_to_a_typed_segment_in_every_template_position() -> None
         arguments=[{"position": 2, "valueFrom": "$(inputs.source.basename).copy"}],
         stdout="$(inputs.source.basename).log",
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("COPY", **{"in": {"source": "source"}, "out": ["result"]})],
             inputs={"source": {"type": "File"}},
@@ -401,7 +401,7 @@ def test_basename_lowers_to_a_typed_segment_in_every_template_position() -> None
         workflow_inputs={"source": {"class": "File", "path": "lines.txt"}},
     )
 
-    process = cwl_rosetree_to_nextflow(rose).processes[0]
+    process = compiled_source_to_nextflow(rose).processes[0]
 
     expected = (NfBasenameReference("source"), NfLiteral(".copy"))
     assert process.outputs[0].glob == NfTemplate(expected)
@@ -422,7 +422,7 @@ def test_self_referencing_value_from_lowers_identically_to_no_value_from() -> No
             "SORT",
             inputs={"reverse": {"type": "boolean", "inputBinding": binding}},
         )
-        rose = synthetic_rose(
+        rose = synthetic_source(
             workflow_doc(
                 [step("SORT", **{"in": {"reverse": "reverse"}})],
                 inputs={"reverse": {"type": "boolean"}},
@@ -430,7 +430,7 @@ def test_self_referencing_value_from_lowers_identically_to_no_value_from() -> No
             [sort_tool],
             workflow_inputs={"reverse": True},
         )
-        return cwl_rosetree_to_nextflow(rose).processes[0].command
+        return compiled_source_to_nextflow(rose).processes[0].command
 
     without_value_from = build(None)
     with_value_from = build("$(inputs.reverse)")
@@ -442,7 +442,7 @@ def test_self_referencing_value_from_lowers_identically_to_no_value_from() -> No
 def test_absent_optional_scalar_lowers_to_the_sentinel_parameter() -> None:
     """An unreferenced optional val input carries the runtime-proven [] sentinel."""
     passthrough = tool("PASSTHROUGH", inputs={"note": {"type": ["null", "string"]}})
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("PASSTHROUGH", **{"in": {"note": "note"}})],
             inputs={"note": {"type": ["null", "string"]}},
@@ -451,7 +451,7 @@ def test_absent_optional_scalar_lowers_to_the_sentinel_parameter() -> None:
         workflow_inputs={"note": None},
     )
 
-    workflow = cwl_rosetree_to_nextflow(rose)
+    workflow = compiled_source_to_nextflow(rose)
 
     assert workflow.params == {"note": []}
     assert NfWorkflowInputConnection("note", "PASSTHROUGH", "note") in workflow.connections
@@ -463,7 +463,7 @@ def test_boolean_binding_without_a_prefix_contributes_no_token() -> None:
         "SORT",
         inputs={"reverse": {"type": "boolean", "inputBinding": {"position": 1}}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("SORT", **{"in": {"reverse": "reverse"}})],
             inputs={"reverse": {"type": "boolean"}},
@@ -472,7 +472,7 @@ def test_boolean_binding_without_a_prefix_contributes_no_token() -> None:
         workflow_inputs={"reverse": True},
     )
 
-    command = cwl_rosetree_to_nextflow(rose).processes[0].command
+    command = compiled_source_to_nextflow(rose).processes[0].command
 
     assert [token for token in command.tokens if isinstance(token, NfFlag)] == []
     assert len(command.tokens) == 1
@@ -492,14 +492,14 @@ def test_applies_unwired_scalar_default_before_lowering() -> None:
         outputs={"result": {"type": "File", "outputBinding": {"glob": "result.txt"}}},
         arguments=[{"position": 2, "valueFrom": "result.txt"}],
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("DEFAULT", out=["result"])],
             outputs={"result": {"type": "File", "outputSource": "DEFAULT/result"}},
         ),
         [default_tool],
     )
-    workflow = cwl_rosetree_to_nextflow(rose)
+    workflow = compiled_source_to_nextflow(rose)
     assert workflow.params == {"DEFAULT___message": "hello default"}
     assert NfWorkflowInputConnection("DEFAULT___message", "DEFAULT", "message") in workflow.connections
     assert "Channel.value(params.DEFAULT___message)" in render_nextflow(workflow)
@@ -517,7 +517,7 @@ def test_rejects_collisions_between_source_and_default_params() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("DEFAULT")],
             inputs={"DEFAULT___message": {"type": "string"}},
@@ -529,7 +529,7 @@ def test_rejects_collisions_between_source_and_default_params() -> None:
         ValueError,
         match="lowered workflow parameter names collide: DEFAULT___message",
     ):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -538,8 +538,8 @@ def test_maps_docker_requirement() -> None:
         "CONTAINER",
         requirements={"DockerRequirement": {"dockerPull": "ubuntu:24.04"}},
     )
-    rose = synthetic_rose(workflow_doc([step("CONTAINER")]), [container])
-    assert cwl_rosetree_to_nextflow(rose).processes[0].container == "ubuntu:24.04"
+    rose = synthetic_source(workflow_doc([step("CONTAINER")]), [container])
+    assert compiled_source_to_nextflow(rose).processes[0].container == "ubuntu:24.04"
 
 
 @pytest.mark.fast
@@ -555,13 +555,13 @@ def test_maps_cpu_and_memory_requirements() -> None:
             }
         },
     )
-    rose = synthetic_rose(workflow_doc([step("RESOURCES")]), [resources])
-    assert cwl_rosetree_to_nextflow(rose).processes[0].resources == NfResources(2, 1024)
+    rose = synthetic_source(workflow_doc([step("RESOURCES")]), [resources])
+    assert compiled_source_to_nextflow(rose).processes[0].resources == NfResources(2, 1024)
 
 
 @pytest.mark.fast
-def test_preserves_linear_dag(real_supported_rose: RoseTree) -> None:
-    workflow = cwl_rosetree_to_nextflow(real_supported_rose)
+def test_preserves_linear_dag(real_supported_result: CompilationResult) -> None:
+    workflow = compiled_source_to_nextflow(real_supported_result)
     internal = [
         connection
         for connection in workflow.connections
@@ -579,7 +579,7 @@ def test_preserves_fanout() -> None:
     )
     consumer_b = tool("B", inputs={"value": {"type": "File"}})
     consumer_c = tool("C", inputs={"value": {"type": "File"}})
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc([
             step("A", out=["out"]),
             step("B", **{"in": {"value": "A/out"}}),
@@ -587,7 +587,7 @@ def test_preserves_fanout() -> None:
         ]),
         [producer, consumer_b, consumer_c],
     )
-    connections = cwl_rosetree_to_nextflow(rose).connections
+    connections = compiled_source_to_nextflow(rose).connections
     assert len([
         edge
         for edge in connections
@@ -598,8 +598,8 @@ def test_preserves_fanout() -> None:
 
 
 @pytest.mark.fast
-def test_preserves_workflow_input_connection(real_supported_rose: RoseTree) -> None:
-    connections = cwl_rosetree_to_nextflow(real_supported_rose).connections
+def test_preserves_workflow_input_connection(real_supported_result: CompilationResult) -> None:
+    connections = compiled_source_to_nextflow(real_supported_result).connections
     assert NfWorkflowInputConnection(
         "wf__step__1__touch___filename",
         "wf__step__1__touch",
@@ -608,8 +608,8 @@ def test_preserves_workflow_input_connection(real_supported_rose: RoseTree) -> N
 
 
 @pytest.mark.fast
-def test_preserves_workflow_output_connection(real_supported_rose: RoseTree) -> None:
-    connections = cwl_rosetree_to_nextflow(real_supported_rose).connections
+def test_preserves_workflow_output_connection(real_supported_result: CompilationResult) -> None:
+    connections = compiled_source_to_nextflow(real_supported_result).connections
     assert NfWorkflowOutputConnection(
         "wf__step__2__copy",
         "result",
@@ -618,35 +618,43 @@ def test_preserves_workflow_output_connection(real_supported_rose: RoseTree) -> 
 
 
 @pytest.mark.fast
-def test_copies_workflow_params(real_supported_rose: RoseTree) -> None:
-    params = cwl_rosetree_to_nextflow(real_supported_rose).params
+def test_copies_workflow_params(real_supported_result: CompilationResult) -> None:
+    params = compiled_source_to_nextflow(real_supported_result).params
     assert params == {"wf__step__1__touch___filename": "message.txt"}
 
 
 @pytest.mark.fast
-def test_forward_conversion_does_not_call_inference(
-    monkeypatch: pytest.MonkeyPatch,
-    real_supported_rose: RoseTree,
+def test_forward_conversion_uses_resolved_graph_edges(
+    real_supported_result: CompilationResult,
 ) -> None:
-    def fail_if_called(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("forward conversion must not invoke inference")
+    compilation = copy.deepcopy(real_supported_result)
+    steps = compilation.artifact.cwl["steps"]
+    steps[1]["in"]["source"]["source"] = "not_the_resolved_edge/result"
 
-    monkeypatch.setattr(inference, "perform_edge_inference", fail_if_called)
-    cwl_rosetree_to_nextflow(real_supported_rose)
+    connections = compiled_source_to_nextflow(compilation).connections
+
+    assert NfProcessConnection(
+        "wf__step__1__touch",
+        "result",
+        "wf__step__2__copy",
+        "source",
+    ) in connections
 
 
 @pytest.mark.fast
-def test_conversion_does_not_mutate_rosetree(real_supported_rose: RoseTree) -> None:
-    before = copy.deepcopy(real_supported_rose.data.compiled_cwl)
-    cwl_rosetree_to_nextflow(real_supported_rose)
-    assert real_supported_rose.data.compiled_cwl == before
+def test_conversion_does_not_mutate_compilation_result(
+    real_supported_result: CompilationResult,
+) -> None:
+    before = copy.deepcopy(real_supported_result.artifact.cwl)
+    compiled_source_to_nextflow(real_supported_result)
+    assert real_supported_result.artifact.cwl == before
 
 
 @pytest.mark.fast
 def test_scatter_lowers_to_an_adapted_workflow_input_connection(
-    real_scattered_rose: RoseTree,
+    real_scattered_result: CompilationResult,
 ) -> None:
-    connections = cwl_rosetree_to_nextflow(real_scattered_rose).connections
+    connections = compiled_source_to_nextflow(real_scattered_result).connections
     assert connections[0] == NfWorkflowInputConnection(
         "wf__step__1__echo_item___item",
         "wf__step__1__echo_item",
@@ -657,27 +665,27 @@ def test_scatter_lowers_to_an_adapted_workflow_input_connection(
 
 @pytest.mark.fast
 def test_a_scattered_port_stays_a_scalar_element_port(
-    real_scattered_rose: RoseTree,
+    real_scattered_result: CompilationResult,
 ) -> None:
     """The process receives one element per task, so its port is not array-marked."""
-    process = cwl_rosetree_to_nextflow(real_scattered_rose).processes[0]
+    process = compiled_source_to_nextflow(real_scattered_result).processes[0]
     assert process.inputs == (NfPort("item", "val"),)
 
 
 @pytest.mark.fast
 def test_a_scattered_parameter_carries_the_whole_source_array(
-    real_scattered_rose: RoseTree,
+    real_scattered_result: CompilationResult,
 ) -> None:
-    assert cwl_rosetree_to_nextflow(real_scattered_rose).params == {
+    assert compiled_source_to_nextflow(real_scattered_result).params == {
         "wf__step__1__echo_item___item": ["alpha", "beta"]
     }
 
 
 @pytest.mark.fast
-def test_a_subworkflow_step_inlines_into_namespaced_processes(
-    real_nested_rose: RoseTree,
+def test_a_subworkflow_graph_projects_into_namespaced_processes(
+    real_nested_result: CompilationResult,
 ) -> None:
-    workflow = cwl_rosetree_to_nextflow(real_nested_rose)
+    workflow = compiled_source_to_nextflow(real_nested_result)
     assert [process.name for process in workflow.processes] == [
         "root__step__1__write",
         "root__step__2__child_wic___child__step__1__inner_copy",
@@ -686,10 +694,10 @@ def test_a_subworkflow_step_inlines_into_namespaced_processes(
 
 @pytest.mark.fast
 def test_subworkflow_io_binds_to_the_outer_step_endpoints(
-    real_nested_rose: RoseTree,
+    real_nested_result: CompilationResult,
 ) -> None:
     """The inner step reads the outer producer, and the outer output reads the inner step."""
-    connections = cwl_rosetree_to_nextflow(real_nested_rose).connections
+    connections = compiled_source_to_nextflow(real_nested_result).connections
     assert NfProcessConnection(
         "root__step__1__write",
         "result",

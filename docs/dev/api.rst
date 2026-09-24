@@ -1,10 +1,6 @@
 Developer API
 ====================================
 
-sophios.ast
-------------------------------------
-.. automodule:: sophios.ast
-
 sophios.cli
 ------------------------------------
 .. automodule:: sophios.cli
@@ -21,14 +17,6 @@ sophios.compute_request
 sophios.cwl_subinterpreter
 ------------------------------------
 .. automodule:: sophios.cwl_subinterpreter
-
-sophios.inference
-------------------------------------
-.. automodule:: sophios.inference
-
-sophios.inlineing
-------------------------------------
-.. automodule:: sophios.inlineing
 
 sophios.input_output
 ------------------------------------

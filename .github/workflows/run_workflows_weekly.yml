@@ -38,7 +38,12 @@ jobs:
       uses: actions/checkout@v5
       with:
         repository: ${{ github.repository_owner }}/sophios
-        ref: master
+        # The triggering ref, not a literal branch. On `schedule` that is the
+        # default branch, so the weekly still runs master; on
+        # `workflow_dispatch` it is the branch chosen in the UI, which a
+        # literal `master` here silently ignored -- the run reported itself
+        # against the dispatched sha and tested master anyway.
+        ref: ${{ github.ref }}
         path: sophios
 
     - name: Checkout biobb_adapters
@@ -78,7 +83,7 @@ jobs:
 
     - name: Setup miniforge (linux, macos)
       if: always()
-      uses: conda-incubator/setup-miniconda@v3.0.1
+      uses: conda-incubator/setup-miniconda@v4.0.1
       with:
         miniforge-variant: Miniforge3
         miniforge-version: 24.7.1-2
@@ -112,7 +117,7 @@ jobs:
 
     - name: Generate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd sophios/ && pytest tests/core/test_python_api.py -k test_compile_python_workflows
+      run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_compile_python_workflows
 
     - name: Generate Sophios Validation Jsonschema
       if: always()
@@ -123,11 +128,11 @@ jobs:
       # Sophios Python API workflows as well as the WIC Python API itself.
     - name: Validate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd sophios/ && pytest tests/core/test_python_api.py -k test_validate_generated_python_workflows
+      run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_validate_generated_python_workflows
 
     - name: PyTest Tool Builder
       if: always()
-      run: cd sophios/ && pytest tests/core/test_tool_builder.py -k test_tool_builder
+      run: cd sophios/ && pytest tests/core/test_python_api_tool_builder.py
 
     - name: cwl-docker-extract (i.e. recursively docker pull)
       if: always()
@@ -153,3 +158,10 @@ jobs:
       if: always()
       # NOTE: Do NOT add coverage to PYPY CI runs https://github.com/tox-dev/tox/issues/2252
       run: cd sophios/ && pytest -k test_run_inlined_workflows_weekly --workers 8 --cwl_runner toil-cwl-runner # --cov
+
+    # Repository-wide AST scans over configuration boundaries. Compiler-driving
+    # settings tests remain in the pull-request lanes.
+    - name: PyTest Codebase Sanity
+      if: always()
+      timeout-minutes: 20
+      run: cd sophios/ && pytest tests/core/test_settings_boundary.py -m sanity

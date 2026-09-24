@@ -1,8 +1,23 @@
 # Sophios Core Refactor — Design
 
 **Status:** Approved. This design is locked; changes require a new revision.
-**Baseline:** `master` at `6570369`
+**Baseline:** the compiler as it stood before Spec 0 (`master` at `6570369`).
+Present-tense descriptions of existing behaviour below refer to that state, not
+to any later one; the hash is given so a reader can check them against it.
 **Scope:** Four specs, delivered in order. Each is independently shippable.
+
+## Naming
+
+**Sophios** is the language. It has one DSL with two surfaces: a YAML spelling,
+conventionally stored in files named `.wic`, and the Python API. Neither is
+primary; §5.3 and Spec 1's adherence properties depend on that being true.
+
+`.wic` is a file extension. This document writes "`.wic` files" for files on
+disk and "Sophios" for the language. Some concrete syntax still carries the
+older `wic` prefix — the `wic:` block, the `!ii` / `!&` / `!*` tags, the `wic_*`
+desugared keys — and keeps it, because existing workflows depend on those
+spellings. The language's own version tag is `lang_version`, which is
+unimplemented and therefore free to name correctly.
 
 ---
 
@@ -61,10 +76,10 @@ precedes Spec 3.
 
 ### Guaranteed
 
-- The `.wic` DSL. `wic_version` 0.0.1 is defined to accept what exists today,
-  validated against `docs/tutorials/`, `examples/`, and the `.wic` files in
-  `mm-workflows` and `image-workflows`. The version tag is optional, so no
-  existing file requires editing.
+- The Sophios DSL, in both surfaces. `lang_version` 0.0.1 is defined to accept
+  what exists today, validated against `docs/tutorials/`, `examples/`, and the
+  `.wic` files in `mm-workflows` and `image-workflows`. The version tag is
+  optional, so no existing file requires editing.
 - `Workflow`, `Step`, `CompiledWorkflow`, and the `tool_builder` classes.
 - The five types reachable by external callers: `Tools`, `StepId`, `Tool`,
   `Json`, `RawJson`.
@@ -162,11 +177,11 @@ constraint.
 
 ---
 
-## 5. Spec 1 — Specified and versioned `.wic` grammar
+## 5. Spec 1 — Specified and versioned Sophios grammar
 
 ### 5.1 What is being specified
 
-`.wic` is a leaky abstraction over CWL, deliberately. A user writes shorthand
+Sophios is a leaky abstraction over CWL, deliberately. A user writes shorthand
 for the common case and drops into raw CWL for anything the shorthand does not
 cover. That design is retained. Sealing the abstraction would mean re-inventing
 CWL one feature at a time.
@@ -180,14 +195,14 @@ The grammar pins the leak. It does not plug it.
 
 ### 5.2 The CWL substrate
 
-Passthrough means "this is CWL, handed over unchanged", so part of `.wic`'s
+Passthrough means "this is CWL, handed over unchanged", so part of Sophios's
 meaning is CWL's meaning. A specification written against an unspecified CWL
 version specifies nothing. At baseline the version is genuinely unspecified:
 `compiler.py` emits `v1.2` for workflows, `python_cwl_adapter.py` hardcodes
 `v1.0` for generated CommandLineTools, and the schema validates `cwlVersion` as
 any non-empty string.
 
-**`.wic` is specified as an abstraction over CWL v1.2** — one declared version,
+**Sophios is specified as an abstraction over CWL v1.2** — one declared version,
 enforced as an enum rather than a free string, applied consistently across every
 emitting path. This gives passthrough a precise meaning and makes the residue
 property checkable.
@@ -204,13 +219,13 @@ Three concerns, currently fused into one generated JSON Schema:
 
 | Layer | Question | Environment-dependent | Artifact |
 |---|---|---|---|
-| **Syntax** | Is this well-formed `.wic`? | No — this is specified | Typed AST + parser with source positions |
+| **Syntax** | Is this well-formed Sophios? | No — this is specified | Typed AST + parser with source positions |
 | **Resolution** | Do referenced steps exist here? | Yes | Resolution pass, "unknown tool" diagnostics |
 | **Type checking** | Do port types line up? | Yes | Type pass |
 
 Fusing them is why the schema is enormous, slow, unstable across environments,
 and reports `None is not of type 'object'` instead of naming a file and line.
-At baseline, `.wic` validity depends on which plugins are installed, because the
+At baseline, Sophios validity depends on which plugins are installed, because the
 schema enumerates every installed tool as a valid step name. That also makes the
 existing fuzzer unusable as an oracle: it samples a random subset of an
 environment-dependent schema.
@@ -223,10 +238,11 @@ editor support, so there is one source of truth.
 
 ### 5.4 The leak boundary
 
-`.wic` leaks three ways:
+Sophios leaks three ways:
 
-1. **wic-owned syntax**, consumed and stripped before emitting CWL: `!&`, `!*`,
-   `!ii`, and the `wic:` sidecar.
+1. **Sophios-owned syntax**, consumed and stripped before emitting CWL: `!&`, `!*`,
+   `!ii`, `!cwl` (the tag is consumed; its expression is handed to CWL
+   unresolved), and the `wic:` sidecar.
 2. **Interpreted CWL**, read and acted upon: `scatter` and `when` inject
    `ScatterFeatureRequirement` / `InlineJavascriptRequirement`; an inline `run:`
    registers a tool.
@@ -234,9 +250,29 @@ editor support, so there is one source of truth.
    `requirements` / `hints`.
 
 **The interpreted set (2) is enumerated exhaustively. Everything else is
-passthrough by definition, and the residue after stripping wic-owned syntax
+passthrough by definition, and the residue after stripping Sophios-owned syntax
 must be a valid CWL v1.2 document.** This yields two directly testable
 properties and keeps existing files working.
+
+"Passthrough" specifies ownership and preservation, not blindness. A field can
+remain byte-identical in the emitted document while an explicitly enumerated
+Sophios operation observes it without rewriting it. Linking and inference may
+read declared port `type` and `format` values to decide whether to connect two
+ports; no other semantic operation over passthrough data is implied. This is a
+second, orthogonal axis of the boundary: preservation says who may transform a
+field, while observation says which Sophios decisions may inspect it.
+
+For `lang_version` 0.0.1, reference checking over raw port declarations is
+conservative and version-owned. It has three outcomes: proven overlap, proven
+disjointness, and unknown. Sophios rejects only proven disjointness; `Any`,
+records, enums, named schema references, malformed declarations, and types
+unavailable across a scope boundary remain unknown and pass through to final
+CWL validation. Nullable, union, and array declarations — including shorthand
+spellings and scatter's effective array ports — are compared recursively.
+`cwltool` is a conformance oracle for this rule and for the final residue, not
+the production implementation or owner of Sophios semantics. A normalized
+`PortType` algebra remains Spec 3's responsibility; Spec 2 deliberately judges
+the raw declarations at the linking boundary.
 
 ### 5.5 The AST
 
@@ -244,15 +280,42 @@ A step-input value is currently a singleton dict with a magic key, dispatched by
 a `match` whose cases sit 143 lines apart. The sum type already exists; it is
 merely untyped. Made explicit:
 
-| Surface | AST node | Meaning |
-|---|---|---|
-| `!ii v` | `InlineLiteral(v)` | Literal value, never an edge |
-| `!& n` | `EdgeDef(n)` | Explicit edge definition site |
-| `!* n` | `EdgeRef(n)` | Explicit edge call site |
-| `!cwl e` | `RawCwlRef(e)` | **New.** Opaque CWL reference, passed through unresolved |
-| bare `s` | `UnresolvedName(s)` | Must resolve to a workflow input, else diagnostic |
+| Surface | AST node | Position | Meaning |
+|---|---|---|---|
+| `!ii v` | `InlineLiteral(v)` | `in:` | Literal value, never an edge |
+| `!* n` | `EdgeRef(n)` | `in:` | Explicit edge call site |
+| `!cwl e` | `RawCwlRef(e)` | `in:` | **New.** Opaque CWL reference, passed through unresolved |
+| bare `s` | `UnresolvedName(s)` | `in:` | Must resolve to a workflow input, else diagnostic |
+| `!& n` | `EdgeDef(n)` | **`out:` only** | Explicit edge definition site |
 
 Every node carries a source span. That is what buys the diagnostics.
+
+**Position is part of the type.** `EdgeDef` is reachable only through
+`OutputBinding.edge_def`; `InputValue` is the union of the four forms above and
+does not contain it. This is not a restriction added to the language — it is the
+language, finally written down. An edge is defined where its value comes into
+being, which is an output, and consumed where a value is needed, which is an
+input. Every `source:` CWL admits is a workflow input or `step/output`; a step's
+input port has no address, so an edge anchored there would have nothing for
+`!*` to resolve to.
+
+The first cut of this AST put all five forms in `InputValue`, mirroring YAML's
+willingness to anchor any node. The parser accepted `in: {f: !& n}` with no
+diagnostic and the compiler's input `match` had no case for it, so the value
+fell through to the raw-CWL default and earned `wic011` — advice to add `!ii`
+for a construct that was already correct and documented. Two lists of legal
+forms, in two files, with nothing linking them: the same shape as the
+`lang_version` validator gap. Recorded as CE-13, found by a generator derived
+from these types rather than from examples someone had seen work, and closed by
+narrowing the union so the position is a type error rather than a runtime
+fallthrough. The diagnostic (`wic019`) is positional rather than
+input-specific: an edge definition outside an `out:` entry is reported wherever
+it appears, in either spelling, since §6.1 makes the two equivalent.
+
+The general rule this sets: **a form the union admits and no consumer
+implements is a promise the language cannot keep.** Where a form is genuinely
+pending — `!cwl` — the implementation-status table names it and a test asserts
+it still fails, so the exclusion cannot outlive its cause.
 
 **`--allow_raw_cwl`** operates on step-input *values*, a different axis from the
 key-level leak boundary. At baseline a bare string not found in `inputs:`
@@ -274,16 +337,43 @@ pair on the way in.
 > The grammar fixes the surface; the AST normalises the warts so they stop
 > propagating.
 
+**Step surface forms follow CWL's, not a superset of them.** CWL v1.2 types
+`Workflow.steps` as an array of `WorkflowStep` with
+`jsonldPredicate: {mapSubject: id}`, and Schema Salad applies that
+transformation only when the field's value is an object. So CWL admits two
+spellings — an array whose items carry `id`, and a mapping keyed by step name
+— and Sophios's grammar admits exactly those.
+
+A third form, a *sequence of single-key mappings*, was listed in the reference
+and worked — until an earlier normal-form refactor made the compiler read a
+step's name from `id:` and rewrote every tutorial out of it, leaving the
+reference describing a form the compiler no longer read; the language reference
+records which change that was. That break is ratified rather than reverted: the
+key is not lifted into `id` when the container is already an array, so
+`cwltool` fails the same document the same way, for the same reason. The form
+was removed from the language rather than implemented, and the parser reports
+it (`wic006`).
+
+Implementing it instead would have cost a real diagnostic. In list position a
+single-key mapping is ambiguous — `- in: {…}` is a forgotten step id, and
+synthesising `id` from the key would silently turn it into a step named `in`.
+The mapping form has no such ambiguity, because a mapping key can only be a
+step name. That asymmetry is why CWL draws the line where it does, and
+following it is what §1's "leaky abstraction over CWL" requires: a shorthand
+that accepts a shape the substrate rejects breaks at exactly the moment a user
+drops down into raw CWL.
+
 ### 5.6 Conformance corpus
 
 `mm-workflows` and `image-workflows` are the integration and end-to-end corpus.
-They continue to run in CI against their live default branches: whatever `main`
-says, those are the tests.
+They run in CI against their live default branches: **whatever `main` says,
+those are the tests, for better or worse.**
 
-Grammar conformance is a different job. A specification validated against a
-moving branch is not fixed, so at specification time the conformance corpus is
-**pinned** to specific commits. The pin is a development-time artifact and does
-not affect the live E2E runs.
+Grammar conformance runs against the same live checkouts — CI provisions both
+repositories beside this one, and the corpus is discovered there, never copied
+in and never pinned. The workflows stay in their own repositories. If upstream
+moves and a file stops conforming, that is a signal to act on — fix the file
+or fix the grammar — not drift to be insulated from.
 
 We hold commit access to both corpora. Where a corpus `.wic` does not conform,
 the default is to **improve the file** — several are stale and worth updating —
@@ -297,14 +387,14 @@ conformance corpus with the exclusion documented.
 The language is specified and versioned, not frozen. Pinning without an
 evolution path only defers the problem.
 
-- **`wic_version` starts at 0.0.1**, defined against CWL v1.2. The `.wic`
+- **`lang_version` starts at 0.0.1**, defined against CWL v1.2. The Sophios
   version and its CWL substrate move together.
 - **The tag is optional and expected to stay unused.** Downstream files are
   tagless.
 - **Versioning is semantic and applied by human judgment**, not derived from
   diffs.
 
-**Resolution.** An untagged file compiles at the **highest `wic_version` under
+**Resolution.** An untagged file compiles at the **highest `lang_version` under
 which that source actually compiles** — not the highest version shipped:
 
 | Case | Resolution |
@@ -338,8 +428,8 @@ hard.
 | Python API | An attribute on `CompiledWorkflow` |
 | Emitted artifact | A namespaced annotation, declared in `$namespaces` so output remains valid CWL v1.2 |
 
-**The version is settable without editing anything** — a `--wic_version` CLI
-flag and a matching `wic_version: str | None = None` parameter on the Python API
+**The version is settable without editing anything** — a `--lang_version` CLI
+flag and a matching `lang_version: str | None = None` parameter on the Python API
 compile and run entry points. This reaches legacy `.wic` files and deeply nested
 `Workflow` objects without touching either.
 
@@ -384,23 +474,70 @@ would disable every property depending on it.
 survive byte-identically; residue validates as CWL v1.2; every corpus file
 parses.
 
-**Compiler semantics:**
+**The equivalence relation.** Most compiler-semantic properties here, and every
+differential property in Spec 3, have one shape:
+
+    compile(f(W)) ≡ compile(W)
+
+for a rewrite `f` that must not change meaning. They differ only in `f` and in
+what `≡` may ignore. That relation is therefore a **deliverable of this spec,
+not an idiom repeated per property**: three strengths, ordered as a lattice,
+each naming exactly what it forgives and why.
+
+| Strength | Ignores | Legitimate because |
+|---|---|---|
+| `IDENTICAL` | nothing | — |
+| `UP_TO_EMBEDDING` | `run:` paths | `run:` encodes where a document sits relative to its parent |
+| `UP_TO_RENAMING` | namespaced names | a namespace encodes nesting depth, so regrouping renames every port and moves no edge |
+
+It reports *where* two compilations diverge rather than *that* they do, because
+Spec 3 runs it over thousands of inputs. `UP_TO_RENAMING` compares the multiset
+of tools as well as the graph: isomorphism alone accepts a graph whose every
+step was replaced by a different tool of the same arity.
+
+**Equivalences** — each a rewrite plus the strength it preserves:
 
 - **Partition independence** — compiling a workflow equals compiling any
   partitioning of it, modulo namespacing. Generated workflows *and* generated
-  partitionings.
-- **Determinism** — identical output across `PYTHONHASHSEED`. A live hazard
-  exists on the speculative-insertion path, where a `set` of strings is
-  converted to a list; corpus workflows never reach that line.
+  partitionings. Inlining is the same law in the other direction.
+- **Path agreement** — Python API → `write_wic` → compile equals Python API →
+  compile. A serialized workflow output uses the compiler's concrete step id,
+  because `compile_workflow_finish` consumes an explicit `outputSource`
+  verbatim and the corpus uses that spelling. Both direct compilation and
+  `write_wic()` therefore obtain output references from the same document
+  builder, which knows only the concrete form; there is no caller-selectable
+  flag, because a second spelling would be a second language.
+- **Idempotence** — compiling one input twice agrees. Not trivial: the compiler
+  mutates a module global, the tool registry, and four structures threaded
+  through the recursion.
+
+Step order is deliberately *not* one of these. Inference scans backwards and
+takes the most recent match, so order is part of what a workflow means.
+
+**Single-compilation predicates** — claims about one run, needing no relation:
+
+- **Canonical emission** — no `set` iteration order reaches the output. Three
+  sites let it: two set the emitted `requirements` key order and a step's `out`
+  list order and need no flag, and the third is on the speculative-insertion
+  path, reachable only behind `--insert_steps_automatically` with two or more
+  whitelisted converter tools. Stated as canonical order rather than as
+  agreement across `PYTHONHASHSEED`: the seed is the symptom, sortedness is
+  checkable on every example without a second interpreter, and a total static
+  scan reaches the site no generator can. It is also a precondition for the
+  relation above — while emitted order came from a set, `IDENTICAL` was a
+  strength nothing could satisfy.
 - **Namespace injectivity** — distinct ports never collide after namespacing.
-- **Edge soundness** — every inferred edge connects type-compatible ports.
+- **Edge soundness** — every inferred edge connects type-compatible ports, and
+  every Sophios-resolved reference (workflow input or explicit `!&` / `!*`
+  edge) is rejected when its effective endpoint types are proven disjoint.
+  Inference keeps its existing candidate-selection heuristic; reference
+  rejection has the higher burden of proof described in §5.4.
 - **Termination** — compilation reaches a fixed point or emits a diagnostic;
   `max_iters` is never silently exhausted.
 - **Totality** — every failure is a diagnostic, never an unhandled exception.
 
 **Canonical path** (Python API → Compute): compiled output validates under
-`cwltool`; path agreement between `write_wic` → compile and direct compile;
-compute payloads conform to their schema.
+`cwltool`; compute payloads conform to their schema.
 
 Every counterexample found is pinned as a permanent regression. A bug found once
 must never be findable again by chance.
@@ -444,7 +581,7 @@ implicit in dictionary manipulation and call-stack state.
 
 | Phase | Transform | Environment-dependent |
 |---|---|---|
-| Parse | `.wic` → AST | No |
+| Parse | Sophios source → AST | No |
 | Resolve | AST + registry → resolved AST | Yes |
 | Lower | resolved AST → `WorkflowGraph` | No |
 | Link | compose subgraphs; namespacing; LCA explicit edges; obligations | No |
@@ -464,12 +601,17 @@ change against a working tree.
 
 **Equivalence is demonstrated, not argued.** Old and new pipelines run side by
 side and their outputs are compared on every generated input, expressed as a
-property: *new ≡ old for all generated workflows*. A divergence blocks the
-change; it is never triaged as acceptable without a recorded decision. The old
-path is retired only after equivalence holds across the full generator and every
-Spec 2 property passes against the new pipeline.
+property: *new ≡ old for all generated workflows*. `≡` is the relation defined
+in §6.2, imported rather than reinvented — each phase extraction states the
+strength it claims to preserve, and a phase that can only claim
+`UP_TO_RENAMING` has said something about itself worth reviewing. A divergence
+blocks the change; it is never triaged as acceptable without a recorded
+decision. The old path is retired only after equivalence holds across the full
+generator and every Spec 2 property passes against the new pipeline.
 
-This is why Spec 2 precedes Spec 3. The other order is a rewrite with no oracle.
+This is why Spec 2 precedes Spec 3. The other order is a rewrite with no oracle
+— and, before the relation existed, one where each phase would have arrived
+with its own private notion of what "the same" meant.
 
 ### 7.4 Performance
 
@@ -490,7 +632,7 @@ is not the justification for this work.
 | Grammar before IR | IR first, grammar as documentation | The oracle needs a fixed vocabulary to state properties in. IR first means refactoring with no stable target. |
 | Property tests before IR | Refactor first, test after | Without an oracle a rewrite is unverifiable. Differential testing is what makes Spec 3 verified rather than hopeful. |
 | Verification is property-based | More example tests | Example tests find breakage someone already thought to write down. That is the blind spot being removed. |
-| `wic_version` 0.0.1 on CWL v1.2 | Leave the version unspecified; target a later revision | Passthrough makes part of our meaning CWL's meaning, so an unspecified version specifies nothing. v1.2 is released and already emitted. |
+| `lang_version` 0.0.1 on CWL v1.2 | Leave the version unspecified; target a later revision | Passthrough makes part of our meaning CWL's meaning, so an unspecified version specifies nothing. v1.2 is released and already emitted. |
 | Version inferred as highest under which the source compiles | Highest shipped version; require the tag; default to 0.0.1 | "Highest shipped" silently reinterprets files a later version changed. Inference from what compiles is self-correcting and keeps downstream tagless. |
 | Version setting global to the compilation | Per-file or per-`Workflow` override | A mixed-version tree makes meaning depend on file location and lets an edge join ports under different language rules. Unrepresentable is better than discouraged. |
 | Typed AST via stdlib `dataclasses` | pydantic | Pydantic coerces by default; a frontend needs exact, position-aware rejection. It would also define the language in terms of a third party's validation semantics. |

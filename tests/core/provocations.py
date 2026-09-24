@@ -1,0 +1,298 @@
+"""One attack per diagnostic code — the registry behind the provocation rule.
+
+A diagnostic that cannot be provoked is dead on arrival (the parser's
+UNKNOWN_TAG sat unreachable for days), so every `SophiosErrorCode` member must appear in
+exactly one tier here, and the meta-test in `test_lang_parser.py` fails the
+build for any member that does not.
+
+Two tiers, because the codes have two habitats. PARSE codes fire through
+`parse()` alone and their provocations are source strings. COMPILED codes fire
+through the compiler or its helpers; their provocations are zero-arg callables
+that must raise `SophiosError` carrying the code, importing what they need
+lazily so this module stays cheap to import. A branch that adds a `SophiosErrorCode`
+extends this registry in the same commit, or the meta-test says so.
+"""
+from collections.abc import Callable
+from typing import Final
+
+from sophios.lang.error_codes import SophiosErrorCode
+
+#: Codes provoked through `parse()` alone: source text in, diagnostic out.
+PARSE: Final[dict[SophiosErrorCode, str]] = {
+    SophiosErrorCode.INVALID_YAML: 'steps:\n  - [unclosed\n',
+    SophiosErrorCode.NOT_A_MAPPING: '- just\n- a list\n',
+    SophiosErrorCode.EXPECTED_MAPPING: 'steps: 3\n',
+    SophiosErrorCode.EXPECTED_SEQUENCE: 'steps:\n- id: s\n  out: 3\n',
+    SophiosErrorCode.EXPECTED_SCALAR: 'steps:\n  ? [a, b]\n  : {}\n',
+    SophiosErrorCode.MISSING_STEP_ID: 'steps:\n- {a: 1, b: 2}\n',
+    SophiosErrorCode.EMPTY_STEP_ID: "steps:\n- id: ''\n",
+    SophiosErrorCode.MALFORMED_WIC_STEP_KEY: 'wic:\n  steps:\n    nope:\n      x: 1\n',
+    SophiosErrorCode.UNKNOWN_TAG: 'top: !foo bar\n',
+    SophiosErrorCode.DUPLICATE_KEY: 'steps:\n- id: s\n  in:\n    f: !ii a\n    f: !ii b\n',
+    SophiosErrorCode.RECURSIVE_ALIAS: 'top: &a [*a]\n',
+    SophiosErrorCode.MISPLACED_EDGE_DEF: 'top: !& e\n',
+    SophiosErrorCode.RESERVED_KEY: 'steps:\n- id: s\n  in:\n    f:\n      wic_inline_inpt: 1\n',
+}
+
+#: Codes provoked through the compiler or its helpers. Callables raise
+#: `SophiosError` carrying the code. Extended by the branches that add the
+#: codes; empty here because this branch declares no compile-phase codes.
+COMPILED: Final[dict[SophiosErrorCode, Callable[[], object]]] = {}
+
+
+def _provoke_undefined_edge() -> None:
+    from .hermetic import compile_production  # pylint: disable=import-outside-toplevel
+
+    compile_production({'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}}},
+        {'id': 'sink', 'in': {'file': {'wic_alias': 'nothing_defines_this'}}}]})
+
+
+def _provoke_duplicate_edge_def() -> None:
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'steps': [
+        {'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'a'}},
+         'out': [{'file': {'wic_anchor': 'twice'}}]},
+        {'id': 'mk_text', 'in': {'name': {'wic_inline_input': 'b'}},
+         'out': [{'file': {'wic_anchor': 'twice'}}]},
+        {'id': 'sink', 'in': {'file': {'wic_alias': 'twice'}}}]})
+
+
+def _compile_minimal(yml: dict) -> None:
+    """Compile one in-memory workflow with the real tool registry.
+
+    Imported lazily, like everything else here: this module is imported by the
+    meta-test to enumerate codes, and pulling in the compiler and the tool
+    registry to do that would make a cheap import expensive.
+    """
+    from .compile_harness import compile_info  # pylint: disable=import-outside-toplevel
+
+    compile_info(yml, 'provoke')
+
+
+def _provoke_unresolved_input() -> None:
+    _compile_minimal({'steps': [{'id': 'touch', 'in': {'filename': 'not_a_workflow_input'}}]})
+
+
+def _provoke_missing_required_input() -> None:
+    # A null !ii on a non-nullable input.
+    _compile_minimal({'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': None}}}]})
+
+
+def _provoke_subworkflow_invalid() -> None:
+    """Compile a document that declares no step at all.
+
+    The compiler refuses a workflow with nothing to run. Previously provoked
+    through the file loader with a validator that refused everything; that
+    loader is gone, and this reaches the same code from the compiler itself.
+    """
+    _compile_minimal({'steps': []})
+
+
+def _provoke_script_argument_mismatch() -> None:
+    from types import ModuleType  # pylint: disable=import-outside-toplevel
+
+    from sophios.python_cwl_adapter import check_args_match_inputs  # pylint: disable=import-outside-toplevel
+
+    module = ModuleType('provoked_script')
+    module.inputs = {'expected': int}  # type: ignore[attr-defined]
+    check_args_match_inputs(module, {'unexpected': 1}, check=True)
+
+
+def _provoke_container_engine_unavailable() -> None:
+    from unittest import mock  # pylint: disable=import-outside-toplevel
+
+    from sophios import post_compile  # pylint: disable=import-outside-toplevel
+
+    with mock.patch.object(post_compile.sub, 'run', side_effect=FileNotFoundError('docker')):
+        post_compile.verify_container_engine_config('docker', False)
+
+
+def _provoke_missing_input_file() -> None:
+    import tempfile  # pylint: disable=import-outside-toplevel
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
+
+    from sophios import post_compile  # pylint: disable=import-outside-toplevel
+
+    with tempfile.TemporaryDirectory() as root:
+        post_compile.stage_input_files({'f': {'class': 'File', 'location': 'definitely_absent.txt'}},
+                                       Path(root), root, throw=True)
+
+
+COMPILED.update({
+    SophiosErrorCode.UNRESOLVED_INPUT: _provoke_unresolved_input,
+    SophiosErrorCode.MISSING_REQUIRED_INPUT: _provoke_missing_required_input,
+    SophiosErrorCode.SUBWORKFLOW_INVALID: _provoke_subworkflow_invalid,
+    SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH: _provoke_script_argument_mismatch,
+    SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE: _provoke_container_engine_unavailable,
+    SophiosErrorCode.MISSING_INPUT_FILE: _provoke_missing_input_file,
+})
+
+
+def _provoke_unknown_lang_version() -> None:
+    from sophios.lang import resolve_lang_version  # pylint: disable=import-outside-toplevel
+    resolve_lang_version('9.9.9')
+
+
+def _provoke_lang_version_conflict() -> None:
+    from sophios.lang import resolve_lang_version  # pylint: disable=import-outside-toplevel
+    resolve_lang_version(None, ('0.0.1', '0.0.2'), known=('0.0.1', '0.0.2'))
+
+
+COMPILED.update({
+    SophiosErrorCode.UNKNOWN_LANG_VERSION: _provoke_unknown_lang_version,
+    SophiosErrorCode.LANG_VERSION_CONFLICT: _provoke_lang_version_conflict,
+})
+
+
+def _provoke_literal_type_mismatch() -> None:
+    # !ii places no constraint relating a literal to the declared CWL type of
+    # the input it binds, so the typed job boundary must reject a literal that
+    # does not convert.
+    from sophios.ir.complete import coerce_job_value  # pylint: disable=import-outside-toplevel
+    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
+    coerce_job_value('n', port_declaration({'type': 'int'}), '_')
+
+
+COMPILED.update({
+    SophiosErrorCode.LITERAL_TYPE_MISMATCH: _provoke_literal_type_mismatch,
+})
+
+
+def _never_converges() -> None:
+    """The fixed-point guard's provocation.
+
+    Imported lazily from the suite that owns the mechanism, matching how
+    `_compile_minimal` reaches `compile_harness` here. The direction matters:
+    `test_predicates` must not import this module, which reaches plugin
+    discovery through `compile_harness` and would break its hermeticity.
+    """
+    from .test_predicates import never_converges  # pylint: disable=import-outside-toplevel
+    never_converges()
+
+
+COMPILED.update({
+    SophiosErrorCode.FIXED_POINT_NOT_REACHED: _never_converges,
+})
+
+
+def _provoke_incompatible_input_reference() -> None:
+    """Bind a declared string workflow input to a File argument."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+    compile_hermetic({'inputs': {'wf_name': {'type': 'string'}},
+                      'steps': [{'id': 'count', 'in': {'file': 'wf_name'}}]}, 'provoke')
+
+
+COMPILED.update({
+    SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE: _provoke_incompatible_input_reference,
+})
+
+
+def _provoke_empty_name() -> None:
+    """A name the document leaves empty, which `parse` accepts and lowering cannot represent.
+
+    Raises:
+        SophiosError: Always, carrying `wic027`.
+    """
+    from sophios.ir.declarations import port_declaration  # pylint: disable=import-outside-toplevel
+    from sophios.ir.lower import lower  # pylint: disable=import-outside-toplevel
+    from sophios.ir.resolve import (  # pylint: disable=import-outside-toplevel
+        RegistryKey, ResolvedDocument, ResolvedPort, ResolvedProcess, ResolvedStep,
+    )
+    from sophios.lang.diagnostics import SophiosError  # pylint: disable=import-outside-toplevel
+    from sophios.lang.parser import parse  # pylint: disable=import-outside-toplevel
+
+    document = parse('steps:\n- id: s\n  in:\n    "": !* e\n', 'provoke.wic').document
+    assert document is not None
+    step = document.steps[0]
+    process = ResolvedProcess(
+        RegistryKey('test', 's'), 's.cwl',
+        (ResolvedPort('', port_declaration(None)),), (),
+        {'class': 'CommandLineTool'},
+    )
+    resolved = ResolvedDocument(
+        'provoke', document, (ResolvedStep(step, process),), '0.0.1')
+    diagnostics = lower(resolved).diagnostics
+    raise SophiosError(tuple(diagnostics))
+
+
+def _provoke_undeclared_port() -> None:
+    """Bind an input of a tool whose interface does not declare it.
+
+    A CommandLineTool, deliberately: the check runs for every resolved step,
+    and reporting a subworkflow code for a tool step was what this code
+    replaced.
+
+    Raises:
+        SophiosError: Always, carrying `wic028`.
+    """
+    from sophios.ir.lower import lower  # pylint: disable=import-outside-toplevel
+    from sophios.ir.resolve import RegistrySnapshot, resolve  # pylint: disable=import-outside-toplevel
+    from sophios.lang.diagnostics import SophiosError  # pylint: disable=import-outside-toplevel
+    from sophios.lang.parser import parse  # pylint: disable=import-outside-toplevel
+
+    from .synthetic_tools import SYNTHETIC_TOOLS  # pylint: disable=import-outside-toplevel
+
+    document = parse('steps:\n- id: mk_file\n  in: {name: !ii a, ghost: !ii x}\n',
+                     'provoke.wic').document
+    assert document is not None
+    resolved = resolve(document, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS), name='provoke')
+    assert resolved.document is not None
+    raise SophiosError(tuple(lower(resolved.document).diagnostics))
+
+
+def _provoke_invalid_input_value() -> None:
+    """Load a config `File` value that names neither a location nor a path."""
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
+    from tempfile import TemporaryDirectory  # pylint: disable=import-outside-toplevel
+
+    from sophios.api.python.workflow import Step  # pylint: disable=import-outside-toplevel
+
+    adapter = Path(__file__).resolve().parents[2] / 'cwl_adapters' / 'append.cwl'
+    with TemporaryDirectory() as directory:
+        config = Path(directory) / 'inputs.yml'
+        config.write_text('file:\n  class: File\n', encoding='utf-8')
+        Step(clt_path=adapter, config_path=config)
+
+
+def _provoke_invalid_step() -> None:
+    """Compile a workflow whose input is linked to an external step."""
+    from pathlib import Path  # pylint: disable=import-outside-toplevel
+
+    from sophios.api.python.workflow import Step, Workflow  # pylint: disable=import-outside-toplevel
+
+    adapters = Path(__file__).resolve().parents[2] / 'cwl_adapters'
+    external = Step(clt_path=adapters / 'touch.cwl')
+    external.inputs.filename = 'empty.txt'
+    append = Step(clt_path=adapters / 'append.cwl')
+    append.inputs.file = external.outputs.file
+    append.inputs.str = 'Hello'
+    Workflow([append], 'provoke').compile()
+
+
+def _provoke_invalid_link() -> None:
+    """Bind a workflow output to a value that is not a port."""
+    from sophios.api.python.workflow import Workflow  # pylint: disable=import-outside-toplevel
+
+    workflow = Workflow([], 'provoke')
+    workflow.outputs.out = 3
+
+
+def _provoke_invalid_tool() -> None:
+    """A CWL tool that cannot be loaded."""
+    from sophios.api.python.workflow import Step  # pylint: disable=import-outside-toplevel
+
+    Step(clt_path='no_such_tool.cwl')
+
+
+COMPILED.update({
+    SophiosErrorCode.INVALID_INPUT_VALUE: _provoke_invalid_input_value,
+    SophiosErrorCode.INVALID_STEP: _provoke_invalid_step,
+    SophiosErrorCode.INVALID_LINK: _provoke_invalid_link,
+    SophiosErrorCode.INVALID_TOOL: _provoke_invalid_tool,
+    SophiosErrorCode.UNDEFINED_EDGE: _provoke_undefined_edge,
+    SophiosErrorCode.DUPLICATE_EDGE_DEF: _provoke_duplicate_edge_def,
+    SophiosErrorCode.EMPTY_NAME: _provoke_empty_name,
+    SophiosErrorCode.UNDECLARED_PORT: _provoke_undeclared_port,
+})

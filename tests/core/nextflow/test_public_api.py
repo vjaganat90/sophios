@@ -60,7 +60,7 @@ def test_default_and_explicit_cwl_targets_match() -> None:
 @pytest.mark.serial
 def test_nextflow_target_compiles_once(monkeypatch: pytest.MonkeyPatch) -> None:
     workflow = adapter_workflow()
-    original = runtime.compile_workflow
+    original = runtime.compile_workflow_result
     calls = 0
 
     def counted_compile(*args: Any, **kwargs: Any) -> Any:
@@ -68,7 +68,7 @@ def test_nextflow_target_compiles_once(monkeypatch: pytest.MonkeyPatch) -> None:
         calls += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(runtime, "compile_workflow", counted_compile)
+    monkeypatch.setattr(runtime, "compile_workflow_result", counted_compile)
 
     compiled = workflow.compile(target="nextflow")
 
@@ -156,23 +156,22 @@ def test_nextflow_cli_conversion_error_is_concise_and_actionable(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    rose_tree = supported_workflow()._compile().rose
+    compilation = runtime.compile_workflow_result(supported_workflow())
     capsys.readouterr()
 
-    def reject_nested(_rose_tree: Any) -> ExecutableNextflowWorkflow:
-        raise ValueError("nested workflows are deferred to Phase 2")
+    def reject_unsupported(_compilation: Any) -> ExecutableNextflowWorkflow:
+        raise ValueError("workflow.steps[0].when is deferred to Phase 3")
 
-    monkeypatch.setattr(sophios_main, "cwl_rosetree_to_nextflow", reject_nested)
+    monkeypatch.setattr(sophios_main, "compiled_source_to_nextflow", reject_unsupported)
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(SystemExit, match="1"):
-        sophios_main._write_nextflow_target(rose_tree, "nested")
+        sophios_main._write_nextflow_target(compilation, "unsupported")
 
-    error_path = tmp_path / "error_nested.txt"
+    error_path = tmp_path / "error_unsupported.txt"
     assert error_path.read_text(encoding="utf-8") == (
-        "nested workflows are deferred to Phase 2; "
-        "retry with --cwl_inline_subworkflows when flattening is valid\n"
+        "workflow.steps[0].when is deferred to Phase 3\n"
     )
     assert capsys.readouterr().out == (
-        "Failed to generate Nextflow artifacts. See error_nested.txt.\n"
+        "Failed to generate Nextflow artifacts. See error_unsupported.txt.\n"
     )

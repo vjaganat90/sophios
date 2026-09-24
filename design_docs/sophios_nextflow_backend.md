@@ -25,7 +25,7 @@ Sophios supports Nextflow DSL2 as a target alongside CWL. The backend has four r
 3. read a deliberately supported DSL2 subset without silently discarding unknown content; and
 4. expose the supported behavior through the existing Python, CLI, and later service boundaries.
 
-CWL remains the canonical authored/compiled semantic substrate until a successor design explicitly changes that decision. The Nextflow backend consumes the compiler's private compiled semantic graph through an adapter. That graph is currently exposed as `CompilerInfo.rose`; a future core IR may replace it without changing the public Python API or this backend's semantic contract.
+CWL remains the canonical authored/compiled semantic substrate until a successor design explicitly changes that decision. The Nextflow backend consumes the core compiler's `CompilationResult`: an immutable `WorkflowGraph` paired with its `CompilationArtifact` tree. The adapter projects already-resolved leaf processes, edges, boundary mappings, and job bindings into the backend capability boundary; it does not repeat link resolution, inference, or subworkflow composition. This private seam may evolve without changing the public Python API or the backend's semantic contract.
 
 The backend does not perform a second forward inference pass. Imported workflows may use normal Sophios compilation and inference after reconstruction; they do not call low-level inference routines directly.
 
@@ -104,7 +104,7 @@ The intended CLI surface is:
 sophios --yaml workflow.wic --target nextflow
 ```
 
-`--target nextflow` is sufficient by itself. CWL-specific run flags are rejected with structured diagnostics. Nested workflows too deeply composed for the current phase point users to the supported flattening option when applicable.
+`--target nextflow` is sufficient by itself. CWL-specific run flags are rejected with structured diagnostics. Resolved nested workflows are projected recursively; executable semantics attached to a workflow-call boundary or child workflow must be explicitly supported or rejected before that structural boundary is removed.
 
 Import is exposed from the concrete `sophios.api.python.nextflow` module when the reader/import phase lands. The removed generic API aggregator is not restored.
 

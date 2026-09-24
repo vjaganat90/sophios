@@ -7,16 +7,24 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
+
 import graphviz
 import networkx as nx
 from jsonschema import Draft202012Validator
 
 from . import input_output as io
-from . import ast, cli, compiler, inference, utils
+from . import cli, compiler, utils
+from .ir import frontdoor
 from .post_compile import stage_input_files
 from .plugins import get_tools_cwl, get_yml_paths, logging_filters
 from .schemas import wic_schema
-from .wic_types import GraphData, GraphReps, Json, StepId, Tools, YamlTree
+from .lang.diagnostics import SophiosError
+from .wic_types import GraphData, GraphReps, Json, Tools
+
+#: The compiler's `--inputs_file` default. Named rather than fished out of a
+#: synthesised parse, which is the pattern this module has stopped using.
+INPUTS_FILE_DEFAULT = ''
 
 
 def absolute_paths(config: Json, cachedir_path: Path) -> Json:
@@ -54,7 +62,9 @@ def absolute_paths(config: Json, cachedir_path: Path) -> Json:
 
 def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, cwl_tool: str,
                   args_vals: Json, tools_cwl: Tools, yml_paths: dict[str, dict[str, Path]],
-                  validator: Draft202012Validator, root_workflow_yml_path: Path) -> None:
+                  validator: Draft202012Validator, root_workflow_yml_path: Path,
+                  inference_rules: dict[str, str] | None = None,
+                  renaming_conventions: list[tuple[str, str]] | None = None) -> None:
     """This will speculatively execute cwltool for real-time analysis purposes.\n
     It will NOT check for return code 0. See docs/userguide.md
 
@@ -79,44 +89,50 @@ def rerun_cwltool(homedir: str, _directory_realtime: Path, cachedir_path: Path, 
         if Path(cwl_tool).suffix == '.wic':
             yaml_path = cwl_tool
             wic_steps = {'steps': {f'(1, {cwl_tool})': {'wic': {'steps': args_vals_new}}}}
-            root_yaml_tree = {'wic': wic_steps, 'steps': [{cwl_tool: None}]}
+            root_yaml_tree = {'wic': wic_steps, 'steps': [{'id': cwl_tool}]}
             # TODO: Support other namespaces
             plugin_ns = 'global'  # wic['wic'].get('namespace', 'global')
-            step_id = StepId(yaml_path, plugin_ns)
-            y_t = YamlTree(step_id, root_yaml_tree)
-            yaml_tree_raw = ast.read_ast_from_disk(homedir, y_t, yml_paths, tools_cwl, validator, True)
-            yaml_tree = ast.merge_yml_trees(yaml_tree_raw, {}, tools_cwl)
-            yaml_tree = ast.python_script_generate_cwl(yaml_tree, Path(''), tools_cwl)
-            yml = yaml_tree.yml
+            yml = root_yaml_tree
         else:
-            yml = {'steps': [{cwl_tool: args_vals_new}]}
+            # id last: a config: tag carrying its own 'id' would otherwise win the
+            # spread and silently retarget the step at a different tool.
+            yml = {'steps': [{**args_vals_new, 'id': cwl_tool}]}
 
         # Measure compile time
         time_initial = time.time()
 
-        # Setup dummy args
-        args = cli.get_args()
-        compiler_options, graph_settings, yaml_tag_paths = cli.get_dicts_for_compilation()
+        # Defaults, for a narrower reason than "nothing to pass on":
+        # `cli_watcher` does declare `--homedir`, `--cachedir_path` and
+        # `--root_workflow_yml_path`, which between them cover every key of
+        # YamlTagPaths. They would only be read by a nested cwl_subinterpreter
+        # step, which does not occur, so the defaults are unobservable here.
+        compiler_options, graph_settings, yaml_tag_paths = cli.default_compilation_settings()
+        compiler_options['inference_rules'] = inference_rules or {}
+        compiler_options['renaming_conventions'] = renaming_conventions or []
 
         # TODO: Support other namespaces
         plugin_ns = 'global'  # wic['wic'].get('namespace', 'global')
         yaml_path = f'{cwl_tool}_only.wic'
-        stepid = StepId(yaml_path, plugin_ns)
-        yaml_tree = YamlTree(stepid, yml)
         subgraph = GraphReps(graphviz.Digraph(name=yaml_path), nx.DiGraph(), GraphData(yaml_path))
 
-        compiler_info = compiler.compile_workflow(yaml_tree, compiler_options, graph_settings, yaml_tag_paths,
-                                                  [], [subgraph], {}, {}, {}, {},
-                                                  tools_cwl, True, relative_run_path=False, testing=False)
-        rose_tree = compiler_info.rose
+        # The root here is constructed, not read, so it is spelled out once --
+        # and every `.wic` it names is then read as itself, keeping the spans
+        # of the documents somebody actually wrote.
+        bundle = frontdoor.bundle_from_source(
+            yaml.dump(yml, sort_keys=False, line_break='\n', indent=2),
+            Path(yaml_path).stem, yml_paths, tools_cwl)
+        result = compiler.compile_source(
+            bundle, compiler_options, graph_settings, yaml_tag_paths,
+            relative_run_path=False, testing=False, graph_target=subgraph)
+        artifact = result.artifact
         working_dir = Path('.') / Path('autogenerated/')  # Use a new working directory.
         # Can also use `_directory_realtime` / Path('autogenerated/') at the risk of overwriting other files.
-        io.write_to_disk(rose_tree, working_dir, False, args.inputs_file)
+        io.write_artifacts_to_disk(artifact, working_dir, False, INPUTS_FILE_DEFAULT)
 
         time_final = time.time()
         print(f'compile time for {cwl_tool}: {round(time_final - time_initial, 4)} seconds')
 
-        yaml_inputs = rose_tree.data.workflow_inputs_file
+        yaml_inputs = artifact.job_inputs
         stage_input_files(yaml_inputs, root_workflow_yml_path, str(working_dir), use_subdirs_cwl=False, throw=False)
 
         # NOTE: Since we are running cwltool 'within' cwltool, the inner
@@ -227,10 +243,6 @@ def main() -> None:
     tools_cwl = get_tools_cwl(global_config, quiet=args.quiet)
     yml_paths = get_yml_paths(global_config)
 
-    # Perform initialization via mutating global variables (This is not ideal)
-    compiler.inference_rules = global_config.get('inference_rules', {})
-    inference.renaming_conventions = global_config.get('renaming_conventions', [])
-
     # Generate schemas for validation
     yaml_stems = utils.flatten([list(p) for p in yml_paths.values()])
     validator = wic_schema.get_validator(tools_cwl, yaml_stems)
@@ -255,17 +267,23 @@ def main() -> None:
                     print(file)
                     rerun_cwltool(args.homedir, Path(file).parent, cachedir_path, cwl_tool,
                                   args_vals, tools_cwl, yml_paths, validator,
-                                  root_workflow_yml_path)
+                                  root_workflow_yml_path,
+                                  global_config.get('inference_rules', {}),
+                                  global_config.get('renaming_conventions', []))
             prev_files = {**prev_files, **changed_files}
 
             time.sleep(1.0)  # Wait at least 1 second so we don't just spin.
             i += 1
     except KeyboardInterrupt:
         pass
-
-    failed = False  # Your analysis goes here
-    if failed:
-        print(f'{cwl_tool} failed!')
+    except SophiosError as e:
+        # This module is a console script too (`cwl_subinterpreter` in
+        # pyproject.toml), so it is an adapter, not library code: it owes the
+        # user the same clean report and exit code that `sophios` gives,
+        # rather than a raw traceback from a failure the library reported
+        # deliberately.
+        for diagnostic in e.diagnostics:
+            print(diagnostic.message)
         sys.exit(1)
 
 

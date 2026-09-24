@@ -3,13 +3,28 @@
 # pylint: disable=missing-function-docstring
 
 import copy
+from collections.abc import Mapping
+from dataclasses import replace
 import re
 from typing import Any, cast
 
 import pytest
 
-from sophios.api.python.workflow import CompiledWorkflow
+from sophios import compiler
+from sophios.api.python import _workflow_runtime as workflow_runtime
+from sophios.api.python._workflow_runtime import compile_workflow_result
+from sophios.api.python.tool_builder import (
+    CommandLineTool,
+    Input,
+    Inputs,
+    Output,
+    Outputs,
+    cwl,
+)
+from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
+from sophios.cli import default_compilation_settings
 from sophios.input_output_nf import render_nextflow
+from sophios.ir.artifacts import CompilationResult
 from sophios.nf_types import (
     NfFlag,
     NfPort,
@@ -25,27 +40,28 @@ from sophios.utils_nf import (
     _ADMITTED_OUTPUT_EVAL,
     _NAMED_OUTPUT_EVAL_REJECTIONS,
     _output_capture,
-    cwl_rosetree_to_nextflow,
+    CompiledNextflowSource,
+    compilation_result_source,
+    compiled_source_to_nextflow,
 )
-from sophios.wic_types import RoseTree, Yaml
+from sophios.utils_graphs import get_graph_reps
+from sophios.wic_types import StepId as LegacyStepId, Yaml, YamlTree
 
 from .testkit import (
     REPO_ROOT,
-    node_data,
     step,
-    subworkflow_child,
-    synthetic_rose,
+    synthetic_source,
     tool,
     workflow_doc,
 )
 
 
 @pytest.mark.fast
-def test_real_unsupported_rosetree_aggregates_capability_errors(
-    unsupported_real_linear_rose: RoseTree,
+def test_real_unsupported_compilation_aggregates_capability_errors(
+    unsupported_real_linear_result: CompilationResult,
 ) -> None:
     with pytest.raises(ValueError) as error:
-        cwl_rosetree_to_nextflow(unsupported_real_linear_rose)
+        compiled_source_to_nextflow(unsupported_real_linear_result)
     message = str(error.value)
     # append.cwl's InitialWorkDirRequirement listing ($(inputs.file), staging
     # under its own basename) is the approved self-staging no-op shape, so it
@@ -85,7 +101,7 @@ def test_rejects_every_unconsumed_tool_field_before_lowering() -> None:
         },
         successCodes=[1],
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("UNCONSUMED", **{"in": {"reference": "reference"}, "out": ["result"]})],
             inputs={"reference": {"type": "File"}},
@@ -96,7 +112,7 @@ def test_rejects_every_unconsumed_tool_field_before_lowering() -> None:
     )
 
     with pytest.raises(ValueError) as error:
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
     message = str(error.value)
     assert "steps[0].run.successCodes" in message
@@ -119,7 +135,7 @@ def test_accepts_boolean_flag_bindings_for_both_values(value: bool) -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": "boolean"},
@@ -128,7 +144,7 @@ def test_accepts_boolean_flag_bindings_for_both_values(value: bool) -> None:
         workflow_inputs={"verbose": value},
     )
 
-    assert cwl_rosetree_to_nextflow(rose).params == {"verbose": value}
+    assert compiled_source_to_nextflow(rose).params == {"verbose": value}
 
 
 @pytest.mark.fast
@@ -148,7 +164,7 @@ def test_accepts_self_referencing_value_from_on_a_boolean_binding(value: bool) -
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": {"type": "boolean"}},
@@ -157,7 +173,7 @@ def test_accepts_self_referencing_value_from_on_a_boolean_binding(value: bool) -
         workflow_inputs={"verbose": value},
     )
 
-    converted = cwl_rosetree_to_nextflow(rose)
+    converted = compiled_source_to_nextflow(rose)
     assert converted.params == {"verbose": value}
     assert converted.processes[0].command.tokens[-1] == NfFlag("verbose", "--verbose")
 
@@ -179,7 +195,7 @@ def test_rejects_value_from_aliasing_a_different_input_on_a_boolean_binding() ->
             "other": {"type": "boolean"},
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose", "other": "other"}})],
             inputs={"verbose": {"type": "boolean"}, "other": {"type": "boolean"}},
@@ -189,7 +205,7 @@ def test_rejects_value_from_aliasing_a_different_input_on_a_boolean_binding() ->
     )
 
     with pytest.raises(ValueError, match=r"valueFrom on a boolean inputBinding is supported only as"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -208,7 +224,7 @@ def test_rejects_literal_value_from_on_a_boolean_binding() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": {"type": "boolean"}},
@@ -218,7 +234,7 @@ def test_rejects_literal_value_from_on_a_boolean_binding() -> None:
     )
 
     with pytest.raises(ValueError, match=r"valueFrom on a boolean inputBinding is supported only as"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -237,7 +253,7 @@ def test_rejects_basename_suffixed_value_from_on_a_boolean_binding() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": {"type": "boolean"}},
@@ -247,7 +263,7 @@ def test_rejects_basename_suffixed_value_from_on_a_boolean_binding() -> None:
     )
 
     with pytest.raises(ValueError, match=r"valueFrom on a boolean inputBinding is supported only as"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -258,7 +274,7 @@ def test_rejects_file_output_wired_into_a_boolean_flag() -> None:
         "SORT",
         inputs={"reverse": {"type": "boolean", "inputBinding": {"position": 1, "prefix": "-r"}}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc([
             step("MAKE", out=["out"]),
             step("SORT", **{"in": {"reverse": "MAKE/out"}}),
@@ -267,7 +283,7 @@ def test_rejects_file_output_wired_into_a_boolean_flag() -> None:
     )
 
     with pytest.raises(ValueError, match=r"reverse.*boolean source"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -278,7 +294,7 @@ def test_rejects_string_source_wired_into_a_boolean_flag(supplied: str) -> None:
         "SORT",
         inputs={"reverse": {"type": "boolean", "inputBinding": {"position": 1, "prefix": "-r"}}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("SORT", **{"in": {"reverse": "flagval"}})],
             inputs={"flagval": {"type": "string"}},
@@ -288,7 +304,7 @@ def test_rejects_string_source_wired_into_a_boolean_flag(supplied: str) -> None:
     )
 
     with pytest.raises(ValueError, match=r"reverse.*boolean source"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -298,7 +314,7 @@ def test_accepts_a_boolean_source_wired_into_a_boolean_flag() -> None:
         "SORT",
         inputs={"reverse": {"type": "boolean", "inputBinding": {"position": 1, "prefix": "-r"}}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("SORT", **{"in": {"reverse": "flagval"}})],
             inputs={"flagval": {"type": "boolean"}},
@@ -307,7 +323,7 @@ def test_accepts_a_boolean_source_wired_into_a_boolean_flag() -> None:
         workflow_inputs={"flagval": False},
     )
 
-    assert cwl_rosetree_to_nextflow(rose).params == {"flagval": False}
+    assert compiled_source_to_nextflow(rose).params == {"flagval": False}
 
 
 @pytest.mark.fast
@@ -322,7 +338,7 @@ def test_accepts_absent_optional_boolean_flag() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": {"type": ["null", "boolean"]}},
@@ -331,7 +347,7 @@ def test_accepts_absent_optional_boolean_flag() -> None:
         workflow_inputs={"verbose": None},
     )
 
-    converted = cwl_rosetree_to_nextflow(rose)
+    converted = compiled_source_to_nextflow(rose)
     assert converted.params == {"verbose": []}
     assert converted.processes[0].command.tokens[-1] == NfFlag("verbose", "--verbose")
 
@@ -353,7 +369,7 @@ def test_rejects_absent_optional_flag_that_is_also_dereferenced() -> None:
         },
         arguments=[{"position": 2, "valueFrom": "--label=$(inputs.verbose)"}],
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("BOTH", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": {"type": ["null", "boolean"]}},
@@ -408,11 +424,11 @@ def test_ignores_inert_documentation_but_not_semantics() -> None:
         outputs={"result": {"type": "File", "outputSource": "IDENTITY/result"}},
     )
     workflow_inputs = {"source": {"class": "File", "path": "source.txt"}}
-    baseline = cwl_rosetree_to_nextflow(
-        synthetic_rose(workflow, [baseline_tool], workflow_inputs=workflow_inputs)
+    baseline = compiled_source_to_nextflow(
+        synthetic_source(workflow, [baseline_tool], workflow_inputs=workflow_inputs)
     )
-    documented = cwl_rosetree_to_nextflow(
-        synthetic_rose(workflow, [documented_tool], workflow_inputs=workflow_inputs)
+    documented = compiled_source_to_nextflow(
+        synthetic_source(workflow, [documented_tool], workflow_inputs=workflow_inputs)
     )
 
     assert documented == baseline
@@ -420,8 +436,8 @@ def test_ignores_inert_documentation_but_not_semantics() -> None:
 
     documented_tool["permanentFailCodes"] = [1]
     with pytest.raises(ValueError) as error:
-        cwl_rosetree_to_nextflow(
-            synthetic_rose(workflow, [documented_tool], workflow_inputs=workflow_inputs)
+        compiled_source_to_nextflow(
+            synthetic_source(workflow, [documented_tool], workflow_inputs=workflow_inputs)
         )
     message = str(error.value)
     assert "steps[0].run.permanentFailCodes" in message
@@ -441,25 +457,24 @@ def test_ignores_inert_documentation_but_not_semantics() -> None:
 @pytest.mark.fast
 def test_rejects_compiledworkflow_substitution() -> None:
     compiled = CompiledWorkflow("wf", workflow_doc([]), {})
-    with pytest.raises(TypeError, match="RoseTree"):
-        cwl_rosetree_to_nextflow(cast(Any, compiled))
+    with pytest.raises(TypeError, match="CompilationResult"):
+        compiled_source_to_nextflow(cast(Any, compiled))
 
 
 @pytest.mark.fast
 def test_requires_workflow_root() -> None:
-    rose = RoseTree(node_data("tool", tool("tool")), [])
     with pytest.raises(ValueError, match="root.*Workflow"):
-        cwl_rosetree_to_nextflow(rose)
+        CompiledNextflowSource("tool", tool("tool"), (), {})
 
 
 @pytest.mark.fast
 def test_rejects_unsupported_workflow_constructs() -> None:
-    conditional = synthetic_rose(
+    conditional = synthetic_source(
         workflow_doc([step("conditional", run="tool.cwl", when="$(true)")]),
         [tool("tool")],
     )
     with pytest.raises(ValueError, match="when.*not supported.*Phase 1"):
-        cwl_rosetree_to_nextflow(conditional)
+        compiled_source_to_nextflow(conditional)
 
 
 @pytest.mark.fast
@@ -511,9 +526,9 @@ def test_closed_world_analysis_covers_workflow_and_step_levels(
         outputs={"result": {"type": "File", "outputSource": "WRITE/result"}},
     )
     mutation(workflow)
-    rose = synthetic_rose(workflow, [write], workflow_inputs={"message": "hello"})
+    rose = synthetic_source(workflow, [write], workflow_inputs={"message": "hello"})
     with pytest.raises(ValueError, match=re.escape(diagnostic)):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -533,25 +548,25 @@ def test_boundary_missingness_is_not_conflated_with_defaults(
     definition: dict[str, Any] = {"type": "string"}
     if default is not None:
         definition["default"] = default
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc([], inputs={"message": definition}),
         [],
         workflow_inputs=workflow_inputs,
     )
     with pytest.raises(ValueError, match=diagnostic):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_undeclared_workflow_input_values() -> None:
-    rose = synthetic_rose(workflow_doc([]), [], workflow_inputs={"extra": "value"})
+    rose = synthetic_source(workflow_doc([]), [], workflow_inputs={"extra": "value"})
     with pytest.raises(ValueError, match="has no declared workflow input"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_workflow_input_identifier_collisions() -> None:
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [],
             inputs={
@@ -566,13 +581,13 @@ def test_rejects_workflow_input_identifier_collisions() -> None:
         ValueError,
         match=r"workflow input identifiers 'out-dir', 'out_dir'.*normalize to 'out_dir'",
     ):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_aggregates_workflow_input_collisions_with_other_findings() -> None:
     collision = tool("COLLISION")
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("COLLISION", unknown_field=True)],
             inputs={
@@ -585,7 +600,7 @@ def test_aggregates_workflow_input_collisions_with_other_findings() -> None:
     )
 
     with pytest.raises(ValueError) as exc_info:
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
     diagnostic = str(exc_info.value)
     assert diagnostic.startswith("Nextflow Phase 1 capability analysis failed:\n")
@@ -602,12 +617,12 @@ def test_rejects_tool_port_identifier_collisions() -> None:
             "out_dir": {"type": "string", "default": "second"},
         },
     )
-    rose = synthetic_rose(workflow_doc([step("COLLISION")]), [collision])
+    rose = synthetic_source(workflow_doc([step("COLLISION")]), [collision])
     with pytest.raises(
         ValueError,
         match=r"tool input identifiers 'out-dir', 'out_dir'.*normalize to 'out_dir'",
     ):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -623,20 +638,20 @@ def test_rejects_tool_port_identifier_collisions() -> None:
     ],
 )
 def test_rejects_boundary_values_outside_supported_shape(cwl_type: Any, value: Any) -> None:
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc([], inputs={"value": {"type": cwl_type}}),
         [],
         workflow_inputs={"value": value},
     )
     with pytest.raises(ValueError, match="does not match its supported CWL type"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_accepts_unreferenced_absent_optional_input() -> None:
     """An optional val input with no inputBinding is never dereferenced, so absence is safe."""
     optional = tool("OPTIONAL", inputs={"message": {"type": ["null", "string"]}})
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("OPTIONAL", **{"in": {"message": "message"}})],
             inputs={"message": {"type": ["null", "string"]}},
@@ -644,7 +659,7 @@ def test_accepts_unreferenced_absent_optional_input() -> None:
         [optional],
         workflow_inputs={"message": None},
     )
-    assert cwl_rosetree_to_nextflow(rose).params == {"message": []}
+    assert compiled_source_to_nextflow(rose).params == {"message": []}
 
 
 @pytest.mark.fast
@@ -659,7 +674,7 @@ def test_rejects_absent_optional_input_bound_directly_into_the_command() -> None
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("OPTIONAL", **{"in": {"message": "message"}})],
             inputs={"message": {"type": ["null", "string"]}},
@@ -672,7 +687,7 @@ def test_rejects_absent_optional_input_bound_directly_into_the_command() -> None
         match=r"steps\[0\].run.inputs.message: absent optional values are supported only for "
         "a val input whose absence leaves command rendering unchanged",
     ):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -692,7 +707,7 @@ def test_rejects_absent_optional_input_whose_binding_emits_a_shell_literal() -> 
         },
         requirements={"ShellCommandRequirement": {}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("OPTIONAL", **{"in": {"message": "message"}})],
             inputs={"message": {"type": ["null", "string"]}},
@@ -705,7 +720,7 @@ def test_rejects_absent_optional_input_whose_binding_emits_a_shell_literal() -> 
         ValueError,
         match=r"steps\[0\].run.inputs.message: absent optional values are supported only for ",
     ):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -716,7 +731,7 @@ def test_rejects_absent_optional_input_referenced_via_another_bindings_value_fro
         inputs={"message": {"type": ["null", "string"]}},
         arguments=[{"position": 1, "valueFrom": "$(inputs.message)"}],
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("ALIASED", **{"in": {"message": "message"}})],
             inputs={"message": {"type": ["null", "string"]}},
@@ -725,14 +740,14 @@ def test_rejects_absent_optional_input_referenced_via_another_bindings_value_fro
         workflow_inputs={"message": None},
     )
     with pytest.raises(ValueError, match=r"steps\[0\].run.inputs.message: absent optional"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_absent_optional_path_input() -> None:
     """path-qualifier channel construction always stages unconditionally; absence stays rejected."""
     optional = tool("OPTIONAL", inputs={"reference": {"type": ["null", "File"]}})
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("OPTIONAL", **{"in": {"reference": "reference"}})],
             inputs={"reference": {"type": ["null", "File"]}},
@@ -741,13 +756,13 @@ def test_rejects_absent_optional_path_input() -> None:
         workflow_inputs={"reference": None},
     )
     with pytest.raises(ValueError, match=r"steps\[0\].run.inputs.reference: absent optional"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_absent_optional_workflow_input_feeding_required_input() -> None:
     required = tool("REQUIRED", inputs={"message": {"type": "string"}})
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("REQUIRED", **{"in": {"message": "message"}})],
             inputs={"message": {"type": ["null", "string"]}},
@@ -756,7 +771,7 @@ def test_rejects_absent_optional_workflow_input_feeding_required_input() -> None
         workflow_inputs={},
     )
     with pytest.raises(ValueError, match="absent required"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -771,7 +786,7 @@ def test_rejects_basename_against_a_value_input() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("BASENAME", **{"in": {"label": "label"}, "out": ["result"]})],
             inputs={"label": {"type": "string"}},
@@ -799,7 +814,7 @@ def test_reports_every_basename_against_a_value_input_by_path() -> None:
         },
         stdout="$(inputs.tag.basename).log",
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [
                 step(
@@ -832,15 +847,15 @@ def test_rejects_output_glob_outside_typed_input_subset() -> None:
             }
         },
     )
-    rose = synthetic_rose(workflow_doc([step("BAD_GLOB", out=["result"])]), [bad_glob])
+    rose = synthetic_source(workflow_doc([step("BAD_GLOB", out=["result"])]), [bad_glob])
     with pytest.raises(ValueError, match="unsupported CWL expression"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
-def _findings(rose: RoseTree) -> list[str]:
+def _findings(rose: CompiledNextflowSource) -> list[str]:
     """Return the exact aggregated finding lines of one rejected conversion."""
     with pytest.raises(ValueError) as error:
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
     header, *lines = str(error.value).splitlines()
     assert header == "Nextflow Phase 1 capability analysis failed:"
     return [line.removeprefix("- ") for line in lines]
@@ -868,14 +883,14 @@ def _scatter_rose(
     scatter: Any = ("item",),
     value: Any = ("a", "b"),
     **step_fields: Any,
-) -> RoseTree:
+) -> CompiledNextflowSource:
     fields: dict[str, Any] = {
         "in": {"item": source},
         "out": ["result"],
         "scatter": list(scatter) if isinstance(scatter, tuple) else scatter,
         **step_fields,
     }
-    return synthetic_rose(
+    return synthetic_source(
         workflow_doc(
             [step("SCATTER", **fields)],
             inputs={"items": {"type": {"type": "array", "items": items}}},
@@ -897,7 +912,7 @@ def test_rejects_multi_input_scatter_under_every_scatter_method(method: str) -> 
         },
         outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step(
                 "SCATTER",
@@ -955,7 +970,7 @@ def test_accepts_an_inert_scatter_method_at_one_scattered_input(
     step_fields: dict[str, Any],
 ) -> None:
     """All three methods coincide at one scattered input, so each is inert."""
-    workflow = cwl_rosetree_to_nextflow(_scatter_rose(**step_fields))
+    workflow = compiled_source_to_nextflow(_scatter_rose(**step_fields))
 
     assert workflow.connections == (
         NfWorkflowInputConnection("items", "SCATTER", "item", "scatter"),
@@ -965,7 +980,7 @@ def test_accepts_an_inert_scatter_method_at_one_scattered_input(
 @pytest.mark.fast
 @pytest.mark.parametrize("scatter", ["item", ("item",)], ids=["string-form", "list-form"])
 def test_accepts_both_single_input_scatter_spellings(scatter: Any) -> None:
-    workflow = cwl_rosetree_to_nextflow(_scatter_rose(scatter=scatter))
+    workflow = compiled_source_to_nextflow(_scatter_rose(scatter=scatter))
 
     assert workflow.connections == (
         NfWorkflowInputConnection("items", "SCATTER", "item", "scatter"),
@@ -974,7 +989,7 @@ def test_accepts_both_single_input_scatter_spellings(scatter: Any) -> None:
 
 @pytest.mark.fast
 def test_rejects_scatter_over_a_non_array_workflow_input() -> None:
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("SCATTER", **{"in": {"item": "items"}, "out": ["result"], "scatter": ["item"]})],
             inputs={"items": {"type": "string"}},
@@ -1014,7 +1029,7 @@ def test_rejects_scatter_naming_an_undeclared_input() -> None:
 
 @pytest.mark.fast
 def test_rejects_an_unwired_scattered_input() -> None:
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("SCATTER", **{"out": ["result"], "scatter": ["item"]})],
             inputs={"items": {"type": _STRING_ARRAY}},
@@ -1039,7 +1054,7 @@ def _producer() -> Yaml:
 @pytest.mark.fast
 def test_rejects_scatter_over_a_process_output() -> None:
     """No process output can carry an array, so a queue source truncates the scatter."""
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc([
             step("PRODUCER", out=["out"]),
             step(
@@ -1061,7 +1076,7 @@ def test_rejects_a_process_output_source_on_a_scattered_steps_other_input() -> N
     scatter_tool = _scattered_tool(
         extra={"type": "File", "inputBinding": {"position": 2}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [
                 step("PRODUCER", out=["out"]),
@@ -1094,7 +1109,7 @@ def test_rejects_a_downstream_process_consumer_of_a_scattered_step() -> None:
         inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
         outputs={"result": {"type": "File", "outputBinding": {"glob": "copy.txt"}}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [
                 step(
@@ -1118,7 +1133,7 @@ def test_rejects_a_downstream_process_consumer_of_a_scattered_step() -> None:
 
 @pytest.mark.fast
 def test_accepts_a_workflow_output_of_a_scattered_step() -> None:
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("SCATTER", **{"in": {"item": "items"}, "out": ["result"], "scatter": ["item"]})],
             inputs={"items": {"type": _STRING_ARRAY}},
@@ -1133,7 +1148,7 @@ def test_accepts_a_workflow_output_of_a_scattered_step() -> None:
         workflow_inputs={"items": ["a", "b"]},
     )
 
-    workflow = cwl_rosetree_to_nextflow(rose)
+    workflow = compiled_source_to_nextflow(rose)
 
     assert NfWorkflowOutputConnection("SCATTER", "result", "each") in workflow.connections
 
@@ -1146,7 +1161,7 @@ def test_accepts_a_scattered_boolean_flag_source() -> None:
         inputs={"item": {"type": "boolean", "inputBinding": {"prefix": "--flag"}}},
         outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("SCATTER", **{"in": {"item": "items"}, "out": ["result"], "scatter": ["item"]})],
             inputs={"items": {"type": {"type": "array", "items": "boolean"}}},
@@ -1155,7 +1170,7 @@ def test_accepts_a_scattered_boolean_flag_source() -> None:
         workflow_inputs={"items": [True, False]},
     )
 
-    workflow = cwl_rosetree_to_nextflow(rose)
+    workflow = compiled_source_to_nextflow(rose)
 
     assert workflow.processes[0].command.tokens[-1] == NfFlag("item", "--flag")
 
@@ -1168,9 +1183,9 @@ def test_accepts_a_scattered_boolean_flag_source() -> None:
 )
 def test_accepts_inert_workflow_level_scatter_requirement(requirements: Any) -> None:
     rose = _scatter_rose()
-    rose.data.compiled_cwl["requirements"] = requirements
+    cast(dict[str, Any], rose.workflow)["requirements"] = requirements
 
-    assert cwl_rosetree_to_nextflow(rose).connections == (
+    assert compiled_source_to_nextflow(rose).connections == (
         NfWorkflowInputConnection("items", "SCATTER", "item", "scatter"),
     )
 
@@ -1201,7 +1216,7 @@ def test_rejects_unsupported_workflow_level_requirements(
     diagnostic: str,
 ) -> None:
     rose = _scatter_rose()
-    rose.data.compiled_cwl["requirements"] = requirements
+    cast(dict[str, Any], rose.workflow)["requirements"] = requirements
 
     assert _findings(rose) == [diagnostic]
 
@@ -1213,12 +1228,12 @@ def test_rejects_mixed_container_execution_policy() -> None:
         requirements={"DockerRequirement": {"dockerPull": "ubuntu:24.04"}},
     )
     host = tool("HOST")
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc([step("CONTAINERIZED"), step("HOST")]),
         [containerized, host],
     )
     with pytest.raises(ValueError, match="mixed container execution is not supported"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1227,10 +1242,10 @@ def test_rejects_fractional_cpu_requirements_before_lowering() -> None:
         "RESOURCES",
         requirements={"ResourceRequirement": {"coresMax": 2.5}},
     )
-    rose = synthetic_rose(workflow_doc([step("RESOURCES")]), [resources])
+    rose = synthetic_source(workflow_doc([step("RESOURCES")]), [resources])
 
     with pytest.raises(ValueError, match=r"coresMax.*whole number"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
     with pytest.raises(ValueError, match="cpus must be a positive integer"):
         NfResources(cpus=cast(Any, 2.5))
 
@@ -1238,12 +1253,12 @@ def test_rejects_fractional_cpu_requirements_before_lowering() -> None:
 @pytest.mark.fast
 def test_rejects_unknown_connection_source() -> None:
     consumer = tool("B", inputs={"value": {"type": "File"}})
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc([step("B", **{"in": {"value": "MISSING/out"}})]),
         [consumer],
     )
     with pytest.raises(ValueError, match="unknown source process"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1258,7 +1273,7 @@ def test_rejects_separate_without_a_prefix() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": {"type": "boolean"}},
@@ -1268,7 +1283,7 @@ def test_rejects_separate_without_a_prefix() -> None:
     )
 
     with pytest.raises(ValueError, match="separate cannot be specified without a prefix"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1283,7 +1298,7 @@ def test_accepts_separate_true_without_a_prefix_on_a_boolean_binding() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": {"type": "boolean"}},
@@ -1292,7 +1307,7 @@ def test_accepts_separate_true_without_a_prefix_on_a_boolean_binding() -> None:
         workflow_inputs={"verbose": True},
     )
 
-    assert cwl_rosetree_to_nextflow(rose).params == {"verbose": True}
+    assert compiled_source_to_nextflow(rose).params == {"verbose": True}
 
 
 @pytest.mark.fast
@@ -1307,7 +1322,7 @@ def test_rejects_separate_null_without_a_prefix_on_a_boolean_binding() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": {"type": "boolean"}},
@@ -1317,7 +1332,7 @@ def test_rejects_separate_null_without_a_prefix_on_a_boolean_binding() -> None:
     )
 
     with pytest.raises(ValueError, match="separate cannot be specified without a prefix"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1332,7 +1347,7 @@ def test_rejects_separate_null_without_a_prefix_on_a_string_binding() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("ECHO", **{"in": {"message": "message"}})],
             inputs={"message": {"type": "string"}},
@@ -1342,7 +1357,7 @@ def test_rejects_separate_null_without_a_prefix_on_a_string_binding() -> None:
     )
 
     with pytest.raises(ValueError, match="separate cannot be specified without a prefix"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1357,7 +1372,7 @@ def test_rejects_whitespace_only_prefix_on_a_boolean_binding() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": {"type": "boolean"}},
@@ -1367,7 +1382,7 @@ def test_rejects_whitespace_only_prefix_on_a_boolean_binding() -> None:
     )
 
     with pytest.raises(ValueError, match="CWL command prefix for 'verbose' must be a non-empty string"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1383,13 +1398,13 @@ def test_rejects_a_flag_input_wired_to_an_unrecognized_source_shape(raw_source: 
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc([step("FLAGS", **{"in": {"verbose": raw_source}})]),
         [flags],
     )
 
     with pytest.raises(ValueError):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1405,7 +1420,7 @@ def test_a_command_of_only_flags_still_runs_a_program() -> None:
         },
         baseCommand=None,
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("FLAGS", **{"in": {"verbose": "verbose"}})],
             inputs={"verbose": {"type": "boolean"}},
@@ -1414,7 +1429,7 @@ def test_a_command_of_only_flags_still_runs_a_program() -> None:
         workflow_inputs={"verbose": True},
     )
 
-    tokens = cwl_rosetree_to_nextflow(rose).processes[0].command.tokens
+    tokens = compiled_source_to_nextflow(rose).processes[0].command.tokens
 
     assert tokens[0] == NfTemplate((NfLiteral("true"),))
     assert tokens[1] == NfFlag("verbose", "--verbose")
@@ -1432,8 +1447,8 @@ def _array_tool(items: Any, **binding: Any) -> Yaml:
     )
 
 
-def _array_rose(items: Any, value: Any, **binding: Any) -> RoseTree:
-    return synthetic_rose(
+def _array_rose(items: Any, value: Any, **binding: Any) -> CompiledNextflowSource:
+    return synthetic_source(
         workflow_doc(
             [step("ARRAY", **{"in": {"values": "values"}})],
             inputs={"values": {"type": {"type": "array", "items": items}}},
@@ -1443,14 +1458,14 @@ def _array_rose(items: Any, value: Any, **binding: Any) -> RoseTree:
     )
 
 
-def _array_rose_from_producer(items: Any, **binding: Any) -> RoseTree:
+def _array_rose_from_producer(items: Any, **binding: Any) -> CompiledNextflowSource:
     """Wire the array-typed input from a producing step, bypassing boundary-value matching.
 
     Isolates a type-shape rejection (an unsupported items schema) from the
     separate, and less specific, boundary-value-shape rejection.
     """
     producer = tool("PRODUCER", outputs={"out": {"type": "File", "outputBinding": {"glob": "out.txt"}}})
-    return synthetic_rose(
+    return synthetic_source(
         workflow_doc([
             step("PRODUCER", out=["out"]),
             step("ARRAY", **{"in": {"values": "PRODUCER/out"}}),
@@ -1463,14 +1478,14 @@ def _array_rose_from_producer(items: Any, **binding: Any) -> RoseTree:
 def test_rejects_nested_arrays() -> None:
     rose = _array_rose_from_producer({"type": "array", "items": "string"})
     with pytest.raises(ValueError, match="nested arrays are deferred"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_per_item_input_binding_on_array_items() -> None:
     rose = _array_rose_from_producer({"type": "File", "inputBinding": {"prefix": "-I"}})
     with pytest.raises(ValueError, match="per-item array element bindings are deferred"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1493,7 +1508,7 @@ def test_rejects_per_item_input_binding_on_the_array_schema() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("ARRAY", **{"in": {"values": "values"}})],
             inputs={"values": {"type": {"type": "array", "items": "string"}}},
@@ -1502,28 +1517,28 @@ def test_rejects_per_item_input_binding_on_the_array_schema() -> None:
         workflow_inputs={"values": ["a", "b"]},
     )
     with pytest.raises(ValueError, match="per-item array element bindings are deferred"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_value_from_on_an_array_binding() -> None:
     rose = _array_rose("string", ["a"], valueFrom="$(inputs.values)")
     with pytest.raises(ValueError, match=r"valueFrom on an array-typed inputBinding.*deferred"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_item_separator_on_an_array_binding() -> None:
     rose = _array_rose("string", ["a", "b"], itemSeparator=",")
     with pytest.raises(ValueError, match=r"itemSeparator.*not consumed by Nextflow Phase 1"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_separate_false_on_an_array_binding() -> None:
     rose = _array_rose("string", ["a", "b"], separate=False)
     with pytest.raises(ValueError, match=r"separate: false on an array-typed inputBinding.*deferred"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1537,9 +1552,9 @@ def test_rejects_array_typed_outputs() -> None:
             }
         },
     )
-    rose = synthetic_rose(workflow_doc([step("MAKE", out=["results"])]), [array_output])
+    rose = synthetic_source(workflow_doc([step("MAKE", out=["results"])]), [array_output])
     with pytest.raises(ValueError, match=r"results\.type: primitive and non-path output capture"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1554,7 +1569,7 @@ def test_rejects_absent_optional_array_input() -> None:
             }
         },
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("ARRAY", **{"in": {"values": "values"}})],
             inputs={"values": {"type": ["null", {"type": "array", "items": "string"}]}},
@@ -1563,14 +1578,14 @@ def test_rejects_absent_optional_array_input() -> None:
         workflow_inputs={"values": None},
     )
     with pytest.raises(ValueError, match=r"steps\[0\].run.inputs.values: absent optional"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_array_value_with_a_mismatched_item_type() -> None:
     rose = _array_rose("string", ["a", 1])
     with pytest.raises(ValueError, match="does not match its supported CWL type"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 def _shell_tool(arguments: list[Any], *, shell_command: bool = True) -> Yaml:
@@ -1584,8 +1599,8 @@ def _shell_tool(arguments: list[Any], *, shell_command: bool = True) -> Yaml:
     )
 
 
-def _shell_rose(arguments: list[Any], *, shell_command: bool = True) -> RoseTree:
-    return synthetic_rose(
+def _shell_rose(arguments: list[Any], *, shell_command: bool = True) -> CompiledNextflowSource:
+    return synthetic_source(
         workflow_doc(
             [step("SHELL", out=["result"])],
             outputs={"result": {"type": "File", "outputSource": "SHELL/result"}},
@@ -1598,7 +1613,7 @@ def _shell_rose(arguments: list[Any], *, shell_command: bool = True) -> RoseTree
 def test_accepts_shell_command_requirement_with_no_shell_quote_false() -> None:
     """ShellCommandRequirement alone changes nothing: no shellQuote:false, nothing to reject."""
     rose = _shell_rose(["hello"])
-    converted = cwl_rosetree_to_nextflow(rose)
+    converted = compiled_source_to_nextflow(rose)
     assert converted.processes[0].command.tokens[0] == NfTemplate((NfLiteral("SHELL"),))
 
 
@@ -1606,21 +1621,21 @@ def test_accepts_shell_command_requirement_with_no_shell_quote_false() -> None:
 def test_rejects_shell_quote_false_without_shell_command_requirement() -> None:
     rose = _shell_rose([{"valueFrom": ">>", "shellQuote": False}], shell_command=False)
     with pytest.raises(ValueError, match="requires ShellCommandRequirement"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_shell_quote_false_with_no_value_from() -> None:
     rose = _shell_rose([{"shellQuote": False}])
     with pytest.raises(ValueError, match="has no valueFrom"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_shell_quote_false_with_a_prefix() -> None:
     rose = _shell_rose([{"valueFrom": ">>", "shellQuote": False, "prefix": "-x"}])
     with pytest.raises(ValueError, match="does not support a prefix"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 def _shell_tool_with_input(value_from: str) -> Yaml:
@@ -1641,7 +1656,7 @@ def _shell_tool_with_input(value_from: str) -> Yaml:
 )
 def test_rejects_shell_quote_false_referencing_an_input(value_from: str) -> None:
     """Unquoting a value derived from any input -- directly or via a suffix -- is the boundary."""
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("SHELL", **{"in": {"message": "message"}, "out": ["result"]})],
             inputs={"message": {"type": "string"}},
@@ -1651,7 +1666,7 @@ def test_rejects_shell_quote_false_referencing_an_input(value_from: str) -> None
         workflow_inputs={"message": "hi"},
     )
     with pytest.raises(ValueError, match="references an input"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1668,7 +1683,7 @@ def test_rejects_shell_quote_false_input_binding_with_no_value_from() -> None:
         outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
         requirements={"ShellCommandRequirement": {}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("APPEND", **{"in": {"text": "text"}, "out": ["result"]})],
             inputs={"text": {"type": "string"}},
@@ -1678,13 +1693,13 @@ def test_rejects_shell_quote_false_input_binding_with_no_value_from() -> None:
         workflow_inputs={"text": "Hello"},
     )
     with pytest.raises(ValueError, match="does not support a prefix"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_accepts_literal_shell_quote_false_binding() -> None:
     rose = _shell_rose([{"valueFrom": ">>", "shellQuote": False}, "out.txt"])
-    converted = cwl_rosetree_to_nextflow(rose)
+    converted = compiled_source_to_nextflow(rose)
     assert NfShellLiteral(">>") in converted.processes[0].command.tokens
 
 
@@ -1707,8 +1722,8 @@ def _iwdr_tool(
     )
 
 
-def _iwdr_rose(listing: list[Any], **kwargs: Any) -> RoseTree:
-    return synthetic_rose(
+def _iwdr_rose(listing: list[Any], **kwargs: Any) -> CompiledNextflowSource:
+    return synthetic_source(
         workflow_doc(
             [step("STAGE", **{"in": {"source": "source"}, "out": ["result"]})],
             inputs={"source": {"type": "File"}},
@@ -1723,7 +1738,7 @@ def _iwdr_rose(listing: list[Any], **kwargs: Any) -> RoseTree:
 def test_accepts_iwdr_bare_shorthand_own_basename() -> None:
     """The real append.cwl shape: a bare $(inputs.<name>) listing entry is a no-op."""
     rose = _iwdr_rose(["$(inputs.source)"])
-    converted = cwl_rosetree_to_nextflow(rose)
+    converted = compiled_source_to_nextflow(rose)
     assert converted.processes[0].inputs[0].stage_as is None
 
 
@@ -1731,14 +1746,14 @@ def test_accepts_iwdr_bare_shorthand_own_basename() -> None:
 def test_accepts_iwdr_dirent_self_basename_entryname() -> None:
     """The tool_builder .stage() default: entryname restates the input's own basename."""
     rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "$(inputs.source.basename)"}])
-    converted = cwl_rosetree_to_nextflow(rose)
+    converted = compiled_source_to_nextflow(rose)
     assert converted.processes[0].inputs[0].stage_as is None
 
 
 @pytest.mark.fast
 def test_accepts_iwdr_dirent_literal_rename() -> None:
     rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "renamed.txt"}])
-    converted = cwl_rosetree_to_nextflow(rose)
+    converted = compiled_source_to_nextflow(rose)
     assert converted.processes[0].inputs[0].stage_as == "renamed.txt"
 
 
@@ -1746,28 +1761,28 @@ def test_accepts_iwdr_dirent_literal_rename() -> None:
 def test_rejects_iwdr_writable_true() -> None:
     rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "renamed.txt", "writable": True}])
     with pytest.raises(ValueError, match="writable: true"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_iwdr_inline_content_entry() -> None:
     rose = _iwdr_rose([{"entry": "literal file content", "entryname": "x.txt"}])
     with pytest.raises(ValueError, match="inline content construction is deferred"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_iwdr_computed_entryname() -> None:
     rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "$(inputs.source.path)"}])
     with pytest.raises(ValueError, match="computed or differently-referencing entryname"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_iwdr_entryname_with_path_separator() -> None:
     rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "sub/dir.txt"}])
     with pytest.raises(ValueError, match="path separator"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1775,21 +1790,21 @@ def test_rejects_iwdr_entryname_with_path_separator() -> None:
 def test_rejects_iwdr_entryname_with_nextflow_stage_as_wildcard(entryname: str) -> None:
     rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": entryname}])
     with pytest.raises(ValueError, match="stageAs wildcard"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_iwdr_undeclared_input() -> None:
     rose = _iwdr_rose(["$(inputs.nope)"])
     with pytest.raises(ValueError, match="undeclared input"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_iwdr_val_typed_target() -> None:
     rose = _iwdr_rose(["$(inputs.name)"], extra_inputs={"name": {"type": "string"}})
     with pytest.raises(ValueError, match="non-path input"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1799,21 +1814,21 @@ def test_rejects_iwdr_array_typed_target() -> None:
         extra_inputs={"files": {"type": {"type": "array", "items": "File"}}},
     )
     with pytest.raises(ValueError, match="array-typed input"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_iwdr_unsupported_dirent_field() -> None:
     rose = _iwdr_rose([{"entry": "$(inputs.source)", "entryname": "x.txt", "foo": 1}])
     with pytest.raises(ValueError, match="unsupported Dirent fields"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
 def test_rejects_iwdr_listing_entry_of_unsupported_shape() -> None:
     rose = _iwdr_rose([123])
     with pytest.raises(ValueError, match="bare .* reference or a Dirent mapping"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1823,12 +1838,12 @@ def test_rejects_iwdr_listing_that_is_not_a_list() -> None:
         outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
         requirements={"InitialWorkDirRequirement": {"listing": "not-a-list"}},
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc([step("STAGE", out=["result"])]),
         [broken],
     )
     with pytest.raises(ValueError, match="listing must be a list"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1838,7 +1853,7 @@ def test_rejects_iwdr_renamed_input_referenced_elsewhere() -> None:
         arguments=["cat", "$(inputs.source)"],
     )
     with pytest.raises(ValueError, match="staged under an explicit rename"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1858,7 +1873,7 @@ def test_rejects_iwdr_renamed_input_referenced_elsewhere() -> None:
 def test_rejects_iwdr_listing_that_repeats_an_input(listing: list[object]) -> None:
     rose = _iwdr_rose(listing)
     with pytest.raises(ValueError, match="input 'source' appears more than once"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
 @pytest.mark.fast
@@ -1874,7 +1889,7 @@ def test_rejects_iwdr_collision_same_literal_name() -> None:
         arguments=["cat", "same.txt"],
         stdout="out.txt",
     )
-    rose = synthetic_rose(
+    rose = synthetic_source(
         workflow_doc(
             [step("STAGE", **{"in": {"a": "a", "b": "b"}, "out": ["result"]})],
             inputs={"a": {"type": "File"}, "b": {"type": "File"}},
@@ -1887,356 +1902,348 @@ def test_rejects_iwdr_collision_same_literal_name() -> None:
         },
     )
     with pytest.raises(ValueError, match="staged under the same literal name"):
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
 
 
-def _inner_tool(name: str = "INNER", **fields: Any) -> Yaml:
-    return tool(
-        name,
-        inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
-        outputs={"result": {"type": "File", "outputBinding": {"glob": "copy.txt"}}},
-        **fields,
+def _copy_tool() -> CommandLineTool:
+    return (
+        CommandLineTool(
+            "copy_file",
+            Inputs(source=Input(cwl.file, position=1)),
+            Outputs(result=Output(cwl.file, glob="copy.txt")),
+        )
+        .base_command("cp")
+        .argument("copy.txt", position=2)
     )
 
 
-def _child_document(
-    *,
-    steps: list[Yaml] | None = None,
-    inputs: Yaml | None = None,
-    outputs: Yaml | None = None,
-    **fields: Any,
-) -> Yaml:
-    document = workflow_doc(
-        steps if steps is not None
-        else [step("INNER", **{"in": {"source": "source"}, "out": ["result"]})],
-        inputs=inputs if inputs is not None else {"source": {"type": "File"}},
-        outputs=outputs if outputs is not None
-        else {"inner_result": {"type": "File", "outputSource": "INNER/result"}},
+def _write_step() -> Step:
+    write_tool = (
+        CommandLineTool(
+            "write_message",
+            Inputs(message=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="message.txt")),
+        )
+        .base_command("echo")
+        .stdout("message.txt")
     )
-    document["id"] = "child"
-    document.update(fields)
-    return document
+    write = Step(write_tool, step_name="write")
+    write.inputs.message = "nested composition"
+    return write
 
 
-def _nested_rose(
-    *,
-    child: Yaml | None = None,
-    inner_tools: list[Yaml] | None = None,
-    step_fields: dict[str, Any] | None = None,
-    outputs: Yaml | None = None,
-) -> RoseTree:
-    fields: dict[str, Any] = {
-        "in": {"source": "reference"},
-        "out": ["inner_result"],
-        **(step_fields or {}),
+def _copy_child(name: str, source: Any) -> Workflow:
+    inner = Step(_copy_tool(), step_name="inner_copy")
+    child = Workflow([inner], name)
+    inner.inputs.source = child.inputs.source
+    child.outputs.result = inner.outputs.result
+    child.inputs.source = source
+    return child
+
+
+def _nested_result(*, siblings: int = 1) -> CompilationResult:
+    write = _write_step()
+    children = [_copy_child(f"child_{index}", write.outputs.result) for index in range(siblings)]
+    steps: list[Step | Workflow] = [write, *children]
+    return compile_workflow_result(Workflow(steps, "root"))
+
+
+def _deep_nested_result() -> CompilationResult:
+    write = _write_step()
+    inner = Step(_copy_tool(), step_name="inner_copy")
+    leaf = Workflow([inner], "leaf")
+    inner.inputs.source = leaf.inputs.source
+    middle = Workflow([leaf], "middle")
+    leaf.inputs.source = middle.inputs.source
+    middle.inputs.source = write.outputs.result
+    return compile_workflow_result(Workflow([write, middle], "root"))
+
+
+def _nested_downstream_result() -> CompilationResult:
+    """Compile a child-output edge the Python surface deliberately cannot author yet."""
+    write = _write_step()
+    child = _copy_child("child", write.outputs.result)
+    consume = Step(_copy_tool(), step_name="consume")
+    consume.inputs.source = "placeholder.txt"
+    root = Workflow([write, child, consume], "root")
+    document = root.yaml
+    document["steps"][1]["parentargs"]["out"] = [
+        {"result": {"wic_anchor": "childout"}}
+    ]
+    document["steps"][2]["in"]["source"] = {"wic_alias": "childout"}
+    compiler_options, graph_settings, tag_paths = default_compilation_settings()
+    tools = workflow_runtime._merged_known_tools(root._flatten_steps())
+    return compiler.compile_document(
+        YamlTree(LegacyStepId("root", "global"), document),
+        compiler_options,
+        graph_settings,
+        tag_paths,
+        tools,
+        relative_run_path=True,
+        testing=True,
+        graph_target=get_graph_reps("root"),
+    )
+
+
+def _nested_artifacts(result: CompilationResult) -> list[Any]:
+    return [artifact for artifact in result.artifact.children if artifact.graph is not None]
+
+
+def _with_wrapper_semantic(
+    result: CompilationResult,
+    **changes: Any,
+) -> CompilationResult:
+    index = next(
+        index
+        for index, step_node in enumerate(result.graph.steps)
+        if step_node.emission is not None and step_node.emission.run.child is not None
+    )
+    step_node = result.graph.steps[index]
+    assert step_node.emission is not None
+    changed_step = replace(step_node, emission=replace(step_node.emission, **changes))
+    steps = list(result.graph.steps)
+    steps[index] = changed_step
+    return replace(result, graph=replace(result.graph, steps=tuple(steps)))
+
+
+@pytest.mark.fast
+def test_resolved_subworkflow_projects_to_a_namespaced_process(
+    real_nested_result: CompilationResult,
+) -> None:
+    names = [process.name for process in compiled_source_to_nextflow(real_nested_result).processes]
+    assert any("child_wic___child__step__1__inner_copy" in name for name in names)
+
+
+@pytest.mark.fast
+def test_an_empty_resolved_subworkflow_projects_to_no_processes() -> None:
+    result = compile_workflow_result(Workflow([Workflow([], "child")], "root"))
+    assert compiled_source_to_nextflow(result).processes == ()
+
+
+@pytest.mark.fast
+def test_two_resolved_subworkflow_instances_do_not_collide() -> None:
+    workflow = compiled_source_to_nextflow(_nested_result(siblings=2))
+    child_names = [process.name for process in workflow.processes if "inner_copy" in process.name]
+    assert len(child_names) == 2
+    assert len(set(child_names)) == 2
+
+
+@pytest.mark.fast
+def test_a_resolved_subworkflow_output_reaches_a_downstream_outer_step() -> None:
+    workflow = compiled_source_to_nextflow(_nested_downstream_result())
+    connection = next(
+        edge
+        for edge in workflow.connections
+        if isinstance(edge, NfProcessConnection) and edge.to_process.endswith("consume")
+    )
+    assert connection.from_process.endswith("inner_copy")
+
+
+@pytest.mark.fast
+def test_resolved_nesting_deeper_than_one_level_projects_recursively() -> None:
+    workflow = compiled_source_to_nextflow(_deep_nested_result())
+    assert len([process for process in workflow.processes if "inner_copy" in process.name]) == 1
+    assert any("middle_wic" in process.name and "leaf_wic" in process.name
+               for process in workflow.processes)
+
+
+@pytest.mark.fast
+def test_rejects_scatter_on_a_resolved_subworkflow_call() -> None:
+    result = _with_wrapper_semantic(_nested_result(), scatter=("source",))
+    with pytest.raises(ValueError, match="scatter on a nested workflow step"):
+        compiled_source_to_nextflow(result)
+
+
+@pytest.mark.fast
+def test_rejects_when_on_a_resolved_subworkflow_call() -> None:
+    result = _with_wrapper_semantic(_nested_result(), when="$(true)")
+    with pytest.raises(ValueError, match="when conditions are not supported"):
+        compiled_source_to_nextflow(result)
+
+
+@pytest.mark.fast
+def test_resolved_subworkflow_input_reaches_the_leaf_process(
+    real_nested_result: CompilationResult,
+) -> None:
+    workflow = compiled_source_to_nextflow(real_nested_result)
+    assert any(
+        isinstance(edge, NfProcessConnection)
+        and edge.from_process.endswith("write")
+        and edge.to_process.endswith("inner_copy")
+        for edge in workflow.connections
+    )
+
+
+@pytest.mark.fast
+def test_projection_does_not_invent_subworkflow_inputs(
+    real_nested_result: CompilationResult,
+) -> None:
+    source = compilation_result_source(real_nested_result)
+    declared = set(cast(dict[str, Any], source.workflow["inputs"]))
+    leaf_sources: set[str] = set()
+    for step_document in cast(list[dict[str, Any]], source.workflow["steps"]):
+        for definition in cast(dict[str, Any], step_document["in"]).values():
+            value = definition.get("source") if isinstance(definition, Mapping) else definition
+            if isinstance(value, str) and "/" not in value:
+                leaf_sources.add(value)
+    assert leaf_sources <= declared
+
+
+@pytest.mark.fast
+def test_projected_outputs_name_declared_leaf_outputs(
+    real_nested_result: CompilationResult,
+) -> None:
+    source = compilation_result_source(real_nested_result)
+    steps = cast(list[dict[str, Any]], source.workflow["steps"])
+    endpoints = {
+        f"{step_document['id']}/{output}"
+        for step_document in steps
+        for output in step_document["out"]
     }
-    return synthetic_rose(
-        workflow_doc(
-            [step("CHILD", **fields)],
-            inputs={"reference": {"type": "File"}},
-            outputs=outputs,
-        ),
-        [subworkflow_child(child or _child_document(), inner_tools or [_inner_tool()])],
-        workflow_inputs={"reference": "reference.txt"},
+    assert all(
+        definition["outputSource"] in endpoints
+        for definition in cast(dict[str, Any], source.workflow["outputs"]).values()
     )
 
 
 @pytest.mark.fast
-def test_inlines_a_subworkflow_step_into_a_namespaced_process() -> None:
-    """One level of nesting lowers by inlining, with the outer step as the namespace."""
-    workflow = cwl_rosetree_to_nextflow(_nested_rose(
-        outputs={
-            "copied": {"type": "File", "outputSource": "CHILD/inner_result"},
-        },
-    ))
+def test_nested_output_boundary_resolves_to_a_leaf_output(
+    real_nested_result: CompilationResult,
+) -> None:
+    outputs = cast(dict[str, Any], compilation_result_source(real_nested_result).workflow["outputs"])
+    assert any("inner_copy/result" in definition["outputSource"] for definition in outputs.values())
 
-    assert [process.name for process in workflow.processes] == ["CHILD___INNER"]
-    assert workflow.connections == (
-        NfWorkflowInputConnection("reference", "CHILD___INNER", "source"),
-        NfWorkflowOutputConnection("CHILD___INNER", "result", "copied"),
+
+@pytest.mark.fast
+def test_nested_output_source_names_an_existing_process(
+    real_nested_result: CompilationResult,
+) -> None:
+    source = compilation_result_source(real_nested_result)
+    process_names = {step_document["id"] for step_document in source.workflow["steps"]}
+    for definition in cast(dict[str, Any], source.workflow["outputs"]).values():
+        assert definition["outputSource"].rsplit("/", maxsplit=1)[0] in process_names
+
+
+@pytest.mark.fast
+def test_inner_input_source_is_taken_from_the_resolved_graph(
+    real_nested_result: CompilationResult,
+) -> None:
+    result = copy.deepcopy(real_nested_result)
+    nested = _nested_artifacts(result)[0]
+    nested.cwl["steps"][0]["in"]["source"] = "ABSENT/result"
+    workflow = compiled_source_to_nextflow(result)
+    assert any(
+        isinstance(edge, NfProcessConnection) and edge.from_process.endswith("write")
+        for edge in workflow.connections
     )
 
 
 @pytest.mark.fast
-def test_an_empty_subworkflow_inlines_to_no_processes() -> None:
-    rose = synthetic_rose(
-        workflow_doc([step("CHILD", **{"in": {}, "out": []})]),
-        [subworkflow_child(workflow_doc([]), [])],
+def test_every_projected_process_connection_names_existing_processes(
+    real_nested_result: CompilationResult,
+) -> None:
+    workflow = compiled_source_to_nextflow(real_nested_result)
+    names = {process.name for process in workflow.processes}
+    for edge in workflow.connections:
+        if isinstance(edge, NfProcessConnection):
+            assert edge.from_process in names and edge.to_process in names
+
+
+@pytest.mark.fast
+def test_accepts_an_inert_nested_subworkflow_feature_requirement() -> None:
+    result = copy.deepcopy(_nested_result())
+    _nested_artifacts(result)[0].cwl["requirements"] = {"SubworkflowFeatureRequirement": {}}
+    assert compiled_source_to_nextflow(result).processes
+
+
+@pytest.mark.fast
+def test_rejects_unsupported_nested_workflow_requirements() -> None:
+    result = copy.deepcopy(_nested_result())
+    _nested_artifacts(result)[0].cwl["requirements"] = {"MultipleInputFeatureRequirement": {}}
+    with pytest.raises(ValueError, match="MultipleInputFeatureRequirement is not supported"):
+        compiled_source_to_nextflow(result)
+
+
+@pytest.mark.fast
+def test_rejects_every_unconsumed_nested_workflow_field() -> None:
+    result = copy.deepcopy(_nested_result())
+    _nested_artifacts(result)[0].cwl["hints"] = {"ResourceRequirement": {}}
+    with pytest.raises(ValueError, match=r"\.run\.hints: hints is not consumed"):
+        compiled_source_to_nextflow(result)
+
+
+@pytest.mark.fast
+def test_rejects_unconsumed_nested_workflow_port_fields() -> None:
+    result = copy.deepcopy(_nested_result())
+    child = _nested_artifacts(result)[0].cwl
+    next(iter(child["inputs"].values()))["secondaryFiles"] = [".fai"]
+    next(iter(child["outputs"].values()))["pickValue"] = "first_non_null"
+    with pytest.raises(ValueError) as error:
+        compiled_source_to_nextflow(result)
+    assert "secondaryFiles is not consumed" in str(error.value)
+    assert "pickValue is not consumed" in str(error.value)
+
+
+@pytest.mark.fast
+def test_rejects_a_nested_workflow_input_default_before_projection() -> None:
+    result = copy.deepcopy(_nested_result())
+    child = _nested_artifacts(result)[0].cwl
+    next(iter(child["inputs"].values()))["default"] = "fallback.txt"
+    with pytest.raises(ValueError, match="default is not consumed"):
+        compiled_source_to_nextflow(result)
+
+
+@pytest.mark.fast
+def test_rejects_unconsumed_workflow_call_input_semantics() -> None:
+    result = _nested_result()
+    wrapper = next(
+        step_node
+        for step_node in result.graph.steps
+        if step_node.emission is not None and step_node.emission.run.child is not None
     )
-
-    assert cwl_rosetree_to_nextflow(rose).processes == ()
-
-
-@pytest.mark.fast
-def test_two_instantiations_of_one_subworkflow_do_not_collide() -> None:
-    """Namespacing by the outer step id is what keeps inner names unique."""
-    rose = synthetic_rose(
-        workflow_doc(
-            [
-                step("FIRST", **{"in": {"source": "reference"}, "out": ["inner_result"]}),
-                step("SECOND", **{"in": {"source": "reference"}, "out": ["inner_result"]}),
-            ],
-            inputs={"reference": {"type": "File"}},
-        ),
-        [
-            subworkflow_child(_child_document(), [_inner_tool()]),
-            subworkflow_child(_child_document(), [_inner_tool()]),
-        ],
-        workflow_inputs={"reference": "reference.txt"},
+    assert wrapper.emission is not None
+    inputs = tuple(
+        (name, {**definition, "valueFrom": "$(self)"})
+        if isinstance(definition, Mapping)
+        else (name, {"source": definition, "valueFrom": "$(self)"})
+        for name, definition in wrapper.emission.inputs
     )
-
-    workflow = cwl_rosetree_to_nextflow(rose)
-
-    assert [process.name for process in workflow.processes] == [
-        "FIRST___INNER",
-        "SECOND___INNER",
-    ]
+    result = _with_wrapper_semantic(result, inputs=inputs)
+    with pytest.raises(ValueError, match="valueFrom is not consumed"):
+        compiled_source_to_nextflow(result)
 
 
 @pytest.mark.fast
-def test_a_subworkflow_output_reaches_a_downstream_outer_step() -> None:
-    consumer = tool(
-        "CONSUMER",
-        inputs={"source": {"type": "File", "inputBinding": {"position": 1}}},
-        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
-    )
-    rose = synthetic_rose(
-        workflow_doc(
-            [
-                step("CHILD", **{"in": {"source": "reference"}, "out": ["inner_result"]}),
-                step("CONSUMER", **{"in": {"source": "CHILD/inner_result"}, "out": ["result"]}),
-            ],
-            inputs={"reference": {"type": "File"}},
-        ),
-        [subworkflow_child(_child_document(), [_inner_tool()]), consumer],
-        workflow_inputs={"reference": "reference.txt"},
-    )
-
-    workflow = cwl_rosetree_to_nextflow(rose)
-
-    assert NfProcessConnection(
-        "CHILD___INNER", "result", "CONSUMER", "source"
-    ) in workflow.connections
-
-
-@pytest.mark.fast
-def test_rejects_nesting_deeper_than_one_level() -> None:
-    grandchild = subworkflow_child(_child_document(), [_inner_tool()])
-    child = RoseTree(
-        node_data("child", _child_document(
-            steps=[step("GRANDCHILD", **{"in": {"source": "source"}, "out": ["inner_result"]})],
-            outputs={"inner_result": {"type": "File", "outputSource": "GRANDCHILD/inner_result"}},
-        )),
-        [grandchild],
-    )
-    rose = synthetic_rose(
-        workflow_doc(
-            [step("CHILD", **{"in": {"source": "reference"}, "out": ["inner_result"]})],
-            inputs={"reference": {"type": "File"}},
-        ),
-        [child],
-        workflow_inputs={"reference": "reference.txt"},
-    )
-
-    assert _findings(rose) == [
-        "steps[0].run.steps[0].run: nested workflows deeper than one level are deferred "
-        "beyond this lowering"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_scatter_on_a_subworkflow_step() -> None:
-    assert _findings(_nested_rose(step_fields={"scatter": ["source"]})) == [
-        "steps[0].scatter: scatter on a nested workflow step is deferred beyond this "
-        "lowering; scattering an inlined sub-DAG is not the single-process shape scatter "
-        "supports"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_when_on_a_subworkflow_step() -> None:
-    assert _findings(_nested_rose(step_fields={"when": "$(true)"})) == [
-        "steps[0].when: CWL step when conditions are not supported in Nextflow Phase 1"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_an_unbound_subworkflow_input() -> None:
-    assert _findings(_nested_rose(step_fields={"in": {}})) == [
-        "steps[0].run.inputs.source: the step does not bind subworkflow input 'source'; "
-        "a subworkflow input is never defaulted from outside"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_a_step_input_naming_no_subworkflow_input() -> None:
-    assert _findings(_nested_rose(
-        step_fields={"in": {"source": "reference", "extra": "reference"}},
-    )) == [
-        "steps[0].in.extra: the subworkflow declares no input named 'extra'"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_an_out_name_the_subworkflow_does_not_declare() -> None:
-    assert _findings(_nested_rose(step_fields={"out": ["inner_result", "missing"]})) == [
-        "steps[0].out: the subworkflow declares no output named 'missing'"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_a_subworkflow_output_forwarding_its_own_input() -> None:
-    child = _child_document(
-        outputs={"inner_result": {"type": "File", "outputSource": "source"}},
-    )
-
-    assert _findings(_nested_rose(child=child)) == [
-        "steps[0].run.outputs.inner_result: subworkflow output 'inner_result' forwards "
-        "subworkflow input 'source'; boundary passthrough is not executable",
-        "steps[0].out: the subworkflow declares no output named 'inner_result'",
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_a_subworkflow_output_naming_no_inner_step() -> None:
-    child = _child_document(
-        outputs={"inner_result": {"type": "File", "outputSource": "ABSENT/result"}},
-    )
-
-    assert _findings(_nested_rose(child=child)) == [
-        "steps[0].run.outputs.inner_result: outputSource 'ABSENT/result' names no step of "
-        "the subworkflow",
-        "steps[0].out: the subworkflow declares no output named 'inner_result'",
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_an_inner_step_source_that_is_neither_bound_nor_inner() -> None:
-    child = _child_document(
-        steps=[step("INNER", **{"in": {"source": "unbound"}, "out": ["result"]})],
-    )
-
-    assert _findings(_nested_rose(child=child)) == [
-        "steps[0].run.steps[0].in.source: 'unbound' is not a subworkflow input"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_an_inner_step_source_naming_no_inner_step() -> None:
-    child = _child_document(
-        steps=[step("INNER", **{"in": {"source": "ABSENT/result"}, "out": ["result"]})],
-    )
-
-    assert _findings(_nested_rose(child=child)) == [
-        "steps[0].run.steps[0].in.source: 'ABSENT/result' names no step of the subworkflow"
-    ]
-
-
-@pytest.mark.fast
-def test_accepts_an_inert_subworkflow_feature_requirement() -> None:
-    rose = _nested_rose(child=_child_document(requirements={"SubworkflowFeatureRequirement": {}}))
-    rose.data.compiled_cwl["requirements"] = {"SubworkflowFeatureRequirement": {}}
-
-    assert [process.name for process in cwl_rosetree_to_nextflow(rose).processes] == [
-        "CHILD___INNER"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_unsupported_subworkflow_level_requirements() -> None:
-    child = _child_document(requirements={"MultipleInputFeatureRequirement": {}})
-
-    assert _findings(_nested_rose(child=child)) == [
-        "steps[0].run.requirements.MultipleInputFeatureRequirement: "
-        "MultipleInputFeatureRequirement is not supported at the Nextflow workflow level"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_every_unconsumed_subworkflow_field() -> None:
-    child = _child_document(hints={"ResourceRequirement": {}})
-
-    assert _findings(_nested_rose(child=child)) == [
-        "steps[0].run.hints: hints is not consumed by Nextflow Phase 1 lowering"
-    ]
-
-
-@pytest.mark.fast
-def test_rejects_unconsumed_subworkflow_port_fields() -> None:
-    child = _child_document(
-        inputs={"source": {"type": "File", "secondaryFiles": [".fai"]}},
-        outputs={
-            "inner_result": {
-                "type": "File",
-                "outputSource": "INNER/result",
-                "pickValue": "first_non_null",
-            }
-        },
-    )
-
-    assert _findings(_nested_rose(child=child)) == [
-        "steps[0].run.inputs.source.secondaryFiles: secondaryFiles is not consumed by "
-        "Nextflow Phase 1 lowering",
-        "steps[0].run.outputs.inner_result.pickValue: pickValue is not consumed by "
-        "Nextflow Phase 1 lowering",
-    ]
-
-
-@pytest.mark.fast
-def test_composition_findings_aggregate_across_nested_steps() -> None:
-    """Composition analysis reports every nested step before the flat graph is built."""
-    rose = synthetic_rose(
-        workflow_doc(
-            [
-                step("FIRST", **{"in": {}, "out": ["inner_result"]}),
-                step("SECOND", **{"in": {}, "out": ["inner_result"]}),
-            ],
-            inputs={"reference": {"type": "File"}},
-        ),
-        [
-            subworkflow_child(_child_document(), [_inner_tool()]),
-            subworkflow_child(_child_document(), [_inner_tool()]),
-        ],
-        workflow_inputs={"reference": "reference.txt"},
-    )
-
-    assert _findings(rose) == [
-        "steps[0].run.inputs.source: the step does not bind subworkflow input 'source'; "
-        "a subworkflow input is never defaulted from outside",
-        "steps[1].run.inputs.source: the step does not bind subworkflow input 'source'; "
-        "a subworkflow input is never defaulted from outside",
-    ]
+def test_nested_capability_findings_aggregate_across_workflow_calls() -> None:
+    result = copy.deepcopy(_nested_result(siblings=2))
+    for child in _nested_artifacts(result):
+        child.cwl["hints"] = {"ResourceRequirement": {}}
+    with pytest.raises(ValueError) as error:
+        compiled_source_to_nextflow(result)
+    assert str(error.value).count("hints is not consumed") == 2
 
 
 @pytest.mark.fast
 def test_a_scattered_step_inside_a_subworkflow_uses_the_outer_scatter_contract() -> None:
-    """After inlining, an inner scattered step is an ordinary scattered step."""
-    inner = tool(
-        "INNER",
-        inputs={"item": {"type": "string", "inputBinding": {"position": 1}}},
-        outputs={"result": {"type": "File", "outputBinding": {"glob": "out.txt"}}},
+    echo_tool = (
+        CommandLineTool(
+            "echo_item",
+            Inputs(item=Input(cwl.string, position=1)),
+            Outputs(result=Output(cwl.file, glob="out.txt")),
+        )
+        .base_command("echo")
+        .stdout("out.txt")
     )
-    child = _child_document(
-        steps=[step(
-            "INNER",
-            **{"in": {"item": "items"}, "out": ["result"], "scatter": ["item"]},
-        )],
-        inputs={"items": {"type": _STRING_ARRAY}},
-        outputs={"inner_result": {"type": "File", "outputSource": "INNER/result"}},
+    echo = Step(echo_tool, step_name="echo_item")
+    echo.inputs.item = ["a", "b"]
+    echo.scatter_on(echo.inputs.item)
+    child = Workflow([echo], "child")
+    workflow = compiled_source_to_nextflow(
+        compile_workflow_result(Workflow([child], "root"))
     )
-    rose = synthetic_rose(
-        workflow_doc(
-            [step("CHILD", **{"in": {"items": "values"}, "out": ["inner_result"]})],
-            inputs={"values": {"type": _STRING_ARRAY}},
-        ),
-        [subworkflow_child(child, [inner])],
-        workflow_inputs={"values": ["a", "b"]},
-    )
-
-    workflow = cwl_rosetree_to_nextflow(rose)
-
-    assert workflow.connections == (
-        NfWorkflowInputConnection("values", "CHILD___INNER", "item", "scatter"),
+    assert any(
+        isinstance(edge, NfWorkflowInputConnection) and edge.adapter == "scatter"
+        for edge in workflow.connections
     )
 
 
@@ -2254,7 +2261,7 @@ def _capture_rose(
     *,
     output_type: str = "File",
     tool_extra: Yaml | None = None,
-) -> RoseTree:
+) -> CompiledNextflowSource:
     """One real-shaped step whose single output carries the given definition."""
     step_tool = tool(
         "make",
@@ -2267,12 +2274,12 @@ def _capture_rose(
         inputs={"message": "string"},
         outputs={"result": {"type": output_type, "outputSource": "make/result"}},
     )
-    return synthetic_rose(document, [step_tool], workflow_inputs={"message": "hi"})
+    return synthetic_source(document, [step_tool], workflow_inputs={"message": "hi"})
 
 
-def _capture_findings(rose: RoseTree) -> list[str]:
+def _capture_findings(rose: CompiledNextflowSource) -> list[str]:
     with pytest.raises(ValueError) as error:
-        cwl_rosetree_to_nextflow(rose)
+        compiled_source_to_nextflow(rose)
     return [
         line.removeprefix("- ")
         for line in str(error.value).splitlines()
@@ -2310,7 +2317,7 @@ def test_the_admitted_output_eval_table_is_closed_in_both_directions() -> None:
 
 @pytest.mark.fast
 def test_the_admitted_cardinality_declaration_lowers_to_a_capture_marker() -> None:
-    workflow = cwl_rosetree_to_nextflow(_capture_rose(
+    workflow = compiled_source_to_nextflow(_capture_rose(
         {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": "$(self[0])"}}
     ))
 
@@ -2321,7 +2328,7 @@ def test_the_admitted_cardinality_declaration_lowers_to_a_capture_marker() -> No
 @pytest.mark.fast
 @pytest.mark.parametrize("text", ["$(self[0])", " $(self[0])\n", "\t$(self[0]) "])
 def test_surrounding_whitespace_is_trimmed_but_internal_variation_is_not(text: str) -> None:
-    workflow = cwl_rosetree_to_nextflow(_capture_rose(
+    workflow = compiled_source_to_nextflow(_capture_rose(
         {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": text}}
     ))
 
@@ -2461,7 +2468,7 @@ def test_load_contents_on_an_input_is_rejected_by_name_at_both_locations() -> No
         inputs={"one": "File", "two": "File"},
         outputs={"result": {"type": "File", "outputSource": "make/result"}},
     )
-    rose = synthetic_rose(document, [step_tool], workflow_inputs={"one": "a.txt", "two": "b.txt"})
+    rose = synthetic_source(document, [step_tool], workflow_inputs={"one": "a.txt", "two": "b.txt"})
 
     findings = _capture_findings(rose)
 
@@ -2479,7 +2486,7 @@ def test_load_contents_on_an_input_is_rejected_by_name_at_both_locations() -> No
 @pytest.mark.fast
 def test_a_declared_but_unused_inline_javascript_requirement_stays_legal() -> None:
     """The requirement is a declaration; the violation is a non-admitted form."""
-    workflow = cwl_rosetree_to_nextflow(_capture_rose(
+    workflow = compiled_source_to_nextflow(_capture_rose(
         {"type": "File", "outputBinding": {"glob": "out.txt", "outputEval": "$(self[0])"}},
         tool_extra={"requirements": {"InlineJavascriptRequirement": {}}},
     ))
@@ -2496,7 +2503,7 @@ _ADMITTED_TEXT_BINDING = {
 
 @pytest.mark.fast
 def test_the_admitted_file_text_capture_lowers_to_a_value_port() -> None:
-    workflow = cwl_rosetree_to_nextflow(_capture_rose(
+    workflow = compiled_source_to_nextflow(_capture_rose(
         {"type": "string", "outputBinding": dict(_ADMITTED_TEXT_BINDING)},
         output_type="string",
     ))
@@ -2598,7 +2605,7 @@ def test_a_captured_value_cannot_feed_another_process() -> None:
         inputs={"message": "string"},
         outputs={"result": {"type": "File", "outputSource": "consume/result"}},
     )
-    rose = synthetic_rose(document, [producer, consumer], workflow_inputs={"message": "hi"})
+    rose = synthetic_source(document, [producer, consumer], workflow_inputs={"message": "hi"})
 
     findings = _capture_findings(rose)
 

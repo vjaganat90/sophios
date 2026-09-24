@@ -6,8 +6,8 @@ Python-facing workflow authoring.
 """
 
 # pylint: disable=protected-access
-# This module is the private adapter layer between the workflow objects and the
-# legacy compiler/runtime internals, so reaching internal state is intentional.
+# This module is the private adapter layer between workflow objects and the
+# compiler/runtime boundary, so reaching internal state is intentional.
 
 import logging
 from collections.abc import Mapping
@@ -19,15 +19,16 @@ from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
-from sophios.input_output_nf import write_nextflow_artifacts
+from sophios.ir.artifacts import CompilationArtifact, CompilationResult
 from sophios.input_output import dump_wic_yaml as _dump_yaml
+from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_types import ExecutableNextflowWorkflow
-from sophios.utils_nf import cwl_rosetree_to_nextflow
-from sophios.cli import get_dicts_for_compilation, get_known_and_unknown_args
-from sophios.runtime_inputs import normalize_rose_tree_cwl, normalize_rose_tree_job_inputs
+from sophios.cli import default_compilation_settings, get_known_and_unknown_args
+from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
 from sophios.utils import convert_args_dict_to_args_list, step_name_str
+from sophios.utils_nf import compiled_source_to_nextflow
 from sophios.utils_graphs import get_graph_reps
-from sophios.wic_types import CompilerInfo, RoseTree, StepId, Tool, Tools, YamlTree
+from sophios.wic_types import StepId, Tool, Tools, YamlTree
 
 from ._errors import InvalidCLTError, InvalidStepError
 from ._compiled import CompiledWorkflow
@@ -70,19 +71,8 @@ def _parameter_name(parameter_id: Any) -> str:
 
 
 def coerce_path(value: str | Path | None, *, field_name: str, allow_none: bool = False) -> Path | None:
-    """Normalize string-like path input to `Path`.
-
-    Args:
-        value (str | Path | None): Incoming path-like value.
-        field_name (str): User-facing parameter name for error messages.
-        allow_none (bool): Whether `None` should be accepted.
-
-    Raises:
-        TypeError: If the value is neither a `Path`, `str`, nor allowed `None`.
-
-    Returns:
-        Path | None: The normalized path or `None`.
-    """
+    """Normalize string-like path input to `Path`. `field_name` names the
+    parameter in the `TypeError` the last branch raises."""
     match value:
         case Path() as path:
             return path
@@ -116,20 +106,8 @@ def lookup_parameter(
     owner_name: str,
     kind: str,
 ) -> ParameterT:
-    """Return a parameter from a named parameter store.
-
-    Args:
-        parameters (ParameterStore[ParameterT]): Store holding the available parameters.
-        name (str): Requested parameter name.
-        owner_name (str): Human-readable process name for error messages.
-        kind (str): Parameter kind, such as `"input"` or `"output"`.
-
-    Raises:
-        AttributeError: If the parameter does not exist.
-
-    Returns:
-        ParameterT: The requested parameter object.
-    """
+    """Return a parameter from a named parameter store. `owner_name` and
+    `kind` appear only in the `AttributeError` raised when it is absent."""
     try:
         return parameters.get(name)
     except KeyError as exc:
@@ -291,16 +269,19 @@ def workflow_document(
     *,
     inline_subtrees: bool,
     directory: Path | None = None,
-    concrete_step_ids: bool = False,
+    document_stem: str | None = None,
 ) -> dict[str, Any]:
     """Render a workflow into its in-memory WIC YAML representation.
+
+    A workflow output's `outputSource` is always written in the compiler's
+    concrete step-id spelling, because the compiler boundary consumes an
+    explicit `outputSource` verbatim. There is no flag: a second spelling
+    would be a second language, selectable per caller.
 
     Args:
         workflow (Workflow): Workflow to serialize.
         inline_subtrees (bool): Whether nested workflows should be embedded inline.
         directory (Path | None): Output directory for sibling `.wic` files.
-        concrete_step_ids (bool): Whether workflow outputs should use the
-            compiler's concrete step ids instead of the user-facing step names.
 
     Returns:
         dict[str, Any]: Serialized workflow document.
@@ -316,23 +297,25 @@ def workflow_document(
             )
         workflow_inputs[parameter.name] = {"type": cwl_type}
 
-    compiled_step_ids = (
-        {
-            step.process_name: step_name_str(
-                workflow.process_name,
-                index,
-                f"{step.process_name}.wic" if isinstance(step, Workflow) else step.process_name,
-            )
-            for index, step in enumerate(workflow.steps)
-        }
-        if concrete_step_ids
-        else None
-    )
+    # The compiler takes the step-id prefix from the *path it loads*, not from
+    # process_name, so a document saved under another name must be spelled for
+    # that name or its outputSource points at steps that do not exist.
+    stem = document_stem if document_stem is not None else workflow.process_name
+    # Keyed by object identity, not by process_name: a step renamed after an
+    # output was bound to it still is the step the output names.
+    compiled_step_ids = {
+        id(step): step_name_str(
+            stem,
+            index,
+            f"{step.process_name}.wic" if isinstance(step, Workflow) else step.process_name,
+        )
+        for index, step in enumerate(workflow.steps)
+    }
 
     workflow_outputs: dict[str, dict[str, Any]] = {}
     for output_parameter in workflow._outputs:
         workflow_outputs[output_parameter.name] = output_parameter.to_workflow_output(
-            step_id_overrides=compiled_step_ids
+            step_ids=compiled_step_ids
         )
 
     steps_yaml = [
@@ -362,6 +345,12 @@ def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:
 
 def workflow_wic_yaml(workflow: "Workflow", *, inline_subworkflows: bool = True) -> str:
     """Render a workflow as `.wic` YAML text.
+
+    The text compiles correctly only when saved as `<process_name>.wic`. The
+    compiler derives step ids from the name of the file it loads, and an
+    explicit `outputSource` is consumed verbatim, so a document saved under
+    another name names steps that do not exist. There is no destination here to
+    spell them for; `write_workflow_wic` takes one and does.
 
     Args:
         workflow (Workflow): Workflow to serialize.
@@ -409,6 +398,7 @@ def write_workflow_wic(
         workflow,
         inline_subtrees=inline_subworkflows,
         directory=output_path.parent if not inline_subworkflows else None,
+        document_stem=output_path.stem,
     )
     output_path.write_text(
         _dump_yaml(document),
@@ -418,14 +408,7 @@ def write_workflow_wic(
 
 
 def _extract_tools_paths_nonportable(steps: list["Step"]) -> Tools:
-    """Extract concrete tool definitions from instantiated steps.
-
-    Args:
-        steps (list[Step]): Steps whose backing CWL tools should be collected.
-
-    Returns:
-        Tools: A registry keyed by `StepId` that preserves local, non-portable paths.
-    """
+    """Extract concrete tool definitions from instantiated steps."""
     return {StepId(step.process_name, "global"): Tool(str(step.clt_path), step.yaml) for step in steps}
 
 
@@ -444,75 +427,61 @@ def _merged_known_tools(steps: list["Step"], tool_registry: Tools | None = None)
     return merged_tools
 
 
-def compile_workflow(
+def compile_workflow_result(
     workflow: "Workflow",
     *,
     write_to_disk: bool = False,
     tool_registry: Tools | None = None,
-) -> CompilerInfo:
-    """Compile a Python API workflow into CWL.
+    lang_version: str | None = None,
+) -> CompilationResult:
+    """Compile a Python API workflow to the graph-derived internal result.
 
     Args:
         workflow (Workflow): Workflow to compile.
         write_to_disk (bool): Whether to also emit generated files under `autogenerated/`.
+        lang_version (str | None): Pin the Sophios language version for this
+            compilation; None (the default) infers it. An explicit setting
+            beats any file tag.
         tool_registry (Tools | None): Optional tool registry override.
 
     Returns:
-        CompilerInfo: The compiler output for the workflow.
+        CompilationResult: The typed compiler output for the workflow.
     """
     workflow._validate()
 
     graph = get_graph_reps(workflow.process_name)
     yaml_tree = YamlTree(
         StepId(workflow.process_name, "global"),
-        workflow_document(workflow, inline_subtrees=True, concrete_step_ids=True),
+        workflow_document(workflow, inline_subtrees=True),
     )
     merged_tools = _merged_known_tools(workflow._flatten_steps(), tool_registry)
 
-    compiler_options, graph_settings, yaml_tag_paths = get_dicts_for_compilation()
-    compiler_info = compiler.compile_workflow(
-        yaml_tree,
-        compiler_options,
-        graph_settings,
-        yaml_tag_paths,
-        [],
-        [graph],
-        {},
-        {},
-        {},
-        {},
-        merged_tools,
-        True,
-        relative_run_path=True,
-        testing=False,
-    )
+    compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
+    if lang_version is not None:
+        compiler_options = {**compiler_options, 'lang_version': lang_version}
+    result = compiler.compile_document(
+        yaml_tree, compiler_options, graph_settings, yaml_tag_paths, merged_tools,
+        relative_run_path=True, testing=False, graph_target=graph)
     if write_to_disk:
-        input_output.write_to_disk(compiler_info.rose, Path("autogenerated/"), True)
+        input_output.write_artifacts_to_disk(result.artifact, Path("autogenerated/"), True)
 
-    return compiler_info
-
-
-def runtime_rose_tree(workflow: "Workflow", *, tool_registry: Tools | None = None) -> RoseTree:
-    """Compile a workflow and inline runtime tags for local execution.
-
-    Args:
-        workflow (Workflow): Workflow to prepare for execution.
-        tool_registry (Tools | None): Optional tool registry override.
-
-    Returns:
-        RoseTree: Runtime-ready rose tree.
-    """
-    return pc.cwl_inline_runtag(compile_workflow(workflow, tool_registry=tool_registry).rose)
+    return result
 
 
-def compiled_workflow_from_compiler_info(
+def runtime_artifact(workflow: "Workflow", *,
+                     tool_registry: Tools | None = None) -> CompilationArtifact:
+    """Compile and embed the graph-derived artifacts for local execution."""
+    result = compile_workflow_result(workflow, tool_registry=tool_registry)
+    return pc.inline_artifact_runs(result.artifact)
+
+
+def compiled_workflow_from_result(
     workflow: "Workflow",
-    compiler_info: CompilerInfo,
+    result: CompilationResult,
 ) -> CompiledWorkflow:
-    """Build the public compiled-workflow boundary from compiler internals."""
-    rose_tree = pc.cwl_inline_runtag(compiler_info.rose)
-    sub_node_data = rose_tree.data
-    cwl_workflow = normalize_rose_tree_cwl(rose_tree)
+    """Build the public boundary from the typed internal result."""
+    artifact = pc.inline_artifact_runs(result.artifact)
+    cwl_workflow = normalize_artifact_cwl(artifact)
     if workflow._outputs:
         match cwl_workflow.get("outputs"):
             case dict() as outputs:
@@ -524,7 +493,8 @@ def compiled_workflow_from_compiler_info(
     return CompiledWorkflow(
         name=workflow.process_name,
         cwl_workflow=cwl_workflow,
-        cwl_job_inputs=normalize_rose_tree_job_inputs(rose_tree, sub_node_data.workflow_inputs_file),
+        cwl_job_inputs=normalize_artifact_job_inputs(artifact, artifact.job_inputs),
+        lang_version=result.lang_version,
     )
 
 
@@ -532,31 +502,40 @@ def compiled_workflow(
     workflow: "Workflow",
     *,
     tool_registry: Tools | None = None,
+    lang_version: str | None = None,
 ) -> CompiledWorkflow:
     """Compile a workflow into the public compiled-workflow boundary object.
 
     Args:
         workflow (Workflow): Workflow to compile.
         tool_registry (Tools | None): Optional tool registry override.
+        lang_version (str | None): Pin the Sophios language version for this
+            compilation; None infers it. An explicit setting beats file tags.
 
     Returns:
         CompiledWorkflow: Compiled CWL workflow plus generated job inputs.
     """
-    compiler_info = compile_workflow(
+    result = compile_workflow_result(
         workflow,
         tool_registry=tool_registry,
+        lang_version=lang_version,
     )
-    return compiled_workflow_from_compiler_info(workflow, compiler_info)
+    return compiled_workflow_from_result(workflow, result)
 
 
 def nextflow_workflow(
     workflow: "Workflow",
     *,
     tool_registry: Tools | None = None,
+    lang_version: str | None = None,
 ) -> ExecutableNextflowWorkflow:
-    """Compile once through Sophios and convert the private semantic tree."""
-    compiler_info = compile_workflow(workflow, tool_registry=tool_registry)
-    return cwl_rosetree_to_nextflow(compiler_info.rose)
+    """Compile once through the core semantic pipeline and lower to Nextflow."""
+    result = compile_workflow_result(
+        workflow,
+        tool_registry=tool_registry,
+        lang_version=lang_version,
+    )
+    return compiled_source_to_nextflow(result)
 
 
 def write_nextflow_workflow(
@@ -564,10 +543,15 @@ def write_nextflow_workflow(
     outdir: str | Path,
     *,
     tool_registry: Tools | None = None,
+    lang_version: str | None = None,
 ) -> tuple[Path, Path, Path, Path]:
     """Compile once and write the versioned IR plus executable artifacts."""
     return write_nextflow_artifacts(
-        nextflow_workflow(workflow, tool_registry=tool_registry),
+        nextflow_workflow(
+            workflow,
+            tool_registry=tool_registry,
+            lang_version=lang_version,
+        ),
         outdir,
     )
 
@@ -616,10 +600,10 @@ def run_workflow(
     plugins.logging_filters()
 
     resolved_run_args = effective_run_args(run_args_dict)
-    rose_tree = runtime_rose_tree(workflow, tool_registry=tool_registry)
+    artifact = runtime_artifact(workflow, tool_registry=tool_registry)
     pc.verify_container_engine_config(resolved_run_args["container_engine"], False)
-    input_output.write_to_disk(
-        rose_tree,
+    input_output.write_artifacts_to_disk(
+        artifact,
         Path(basepath),
         True,
         resolved_run_args.get("inputs_file", ""),
@@ -630,7 +614,8 @@ def run_workflow(
         Path(basepath) / f"{workflow.process_name}.cwl",
     )
     if _run_arg_enabled(resolved_run_args.get("docker_remove_entrypoints")):
-        rose_tree = pc.remove_entrypoints(resolved_run_args["container_engine"], rose_tree)
+        artifact = pc.remove_artifact_entrypoints(
+            resolved_run_args["container_engine"], artifact)
     user_args = convert_args_dict_to_args_list(
         resolved_run_args,
         boolean_flags=_RUN_ARG_BOOLEAN_FLAGS,
