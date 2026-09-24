@@ -27,7 +27,7 @@ from hypothesis import given
 
 from sophios.api.python.workflow import Step, Workflow
 
-from . import ast_strategies as strategies
+from . import ast_strategies as strat
 from .hermetic import ORACLE, compile_hermetic_cwl
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -319,7 +319,7 @@ _DRIVERS: Final[list[dict[str, Any]]] = [
 
 
 @pytest.mark.slow
-@given(strategies.workflows())
+@given(strat.workflows())
 @ORACLE
 def test_manufactured_documents_parse_over_generated_input(yml: dict[str, Any]) -> None:
     """The same claim, quantified over the oracle's generator rather than a list.

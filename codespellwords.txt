@@ -3,3 +3,4 @@ Equil
 nin
 namd
 nd
+strat
