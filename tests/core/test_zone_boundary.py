@@ -141,6 +141,20 @@ def _reachable(start: str, graph: dict[str, set[str]]) -> set[str]:
     return seen
 
 
+def _docstring_nodes(tree: ast.AST) -> set[int]:
+    """The `id()` of every node that is a docstring rather than a value."""
+    holders = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, holders) or not node.body:
+            continue
+        first = node.body[0]
+        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+                and isinstance(first.value.value, str):
+            found.add(id(first.value))
+    return found
+
+
 @pytest.mark.fast
 def test_the_emitted_name_conventions_have_one_spelling() -> None:
     """`types` owns how a derived name is written, and owns it alone.
@@ -149,21 +163,31 @@ def test_the_emitted_name_conventions_have_one_spelling() -> None:
     separator in six, while `NAMESPACE_SEPARATOR` sat beside them unused. Each
     copy is a chance to diverge, and `link._boundary_name`'s docstring calling
     itself "the fallback, not the rule" is what that looks like from inside.
+
+    Scanned as string constants, not as source text. Every copy this PR
+    deleted was an f-string, where the separator is flanked by `}` and `{` and
+    so appears in no quoted literal -- a text scan reports them all absent. An
+    f-string's literal run is an `ast.Constant` inside the `JoinedStr`, so the
+    constant scan sees it. Prose is exempt: a docstring naming the convention
+    describes it rather than spelling it, and cannot diverge silently because
+    nothing computes from it.
     """
     owner = REPO_ROOT / 'src' / 'sophios' / 'ir' / 'types.py'
-    # `utils.py` and `run_local.py` take apart names the emitted document has
-    # already flattened -- there the joined string is all there is, so the
-    # split is the only thing available rather than a second spelling of the
-    # rule. They are the last of the legacy path and go with it.
-    readers = {'utils.py', 'run_local.py'}
     offenders = []
     for path in sorted((REPO_ROOT / 'src' / 'sophios').rglob('*.py')):
-        if path == owner or path.name in readers:
+        if path == owner:
             continue
-        for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
-            code = line.split('#', 1)[0]
-            if "'___'" in code or '__step__' in code:
-                offenders.append(f'{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}')
+        source = path.read_text(encoding='utf-8')
+        tree = ast.parse(source)
+        prose = _docstring_nodes(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if id(node) in prose:
+                continue
+            if '___' in node.value or '__step__' in node.value:
+                offenders.append(
+                    f'{path.relative_to(REPO_ROOT)}:{node.lineno}: {node.value!r}')
     assert not offenders, (
         'derived names are spelled outside ir/types.py:\n' + '\n'.join(offenders))
 

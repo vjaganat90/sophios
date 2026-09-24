@@ -1,6 +1,7 @@
 from urllib.parse import urlparse
 from typing import Any
 
+from .ir.types import emitted_step_id, namespaced, NAMESPACE_SEPARATOR
 from .wic_types import Json, Yaml
 
 
@@ -15,9 +16,8 @@ def step_name_str(yaml_stem: str, i: int, step_key: str) -> str:
     Returns:
         str: The parameters (and the word 'step') joined together with double underscores
     """
-    # Use double underscore so we can '__'.split() below.
     # (This should work as long as yaml_stem and step_key do not contain __)
-    return f'{yaml_stem}__step__{i+1}__{step_key}'
+    return emitted_step_id(yaml_stem, i + 1, step_key)
 
 
 def parse_step_name_str(step_name: str) -> tuple[str, int, str]:
@@ -34,14 +34,14 @@ def parse_step_name_str(step_name: str) -> tuple[str, int, str]:
     """
     vals = step_name.split('__')  # double underscore
     if len(vals) != 4:
-        raise ValueError(f"Error! {step_name} is not of the format \n"
-                         + '{yaml_stem}__step__{i+1}__{step_key}\n'
-                         + 'yaml_stem and step_key should not contain any double underscores.')
+        raise ValueError(f"Error! {step_name} is not of the format produced by "
+                         'step_name_str(). yaml_stem and step_key should not contain '
+                         'any double underscores.')
     try:
         i = int(vals[2])
     except ValueError as ex:
-        raise ValueError(f"Error! {step_name} is not of the format \n"
-                         + '{yaml_stem}__step__{i+1}__{step_key}') from ex
+        raise ValueError(f"Error! {step_name} is not of the format produced by "
+                         'step_name_str().') from ex
     return (vals[0], i-1, vals[3])
 
 
@@ -61,7 +61,7 @@ def shorten_namespaced_output_name(namespaced_output_name: str, sep: str = ' ') 
         and namespaced_output_name, with the embedded yaml_stem prefixes
         removed and double underscores replaced with a single space.
     """
-    split = namespaced_output_name.split('___')
+    split = namespaced_output_name.split(NAMESPACE_SEPARATOR)
     namespaces = split[:-1]
     output_name = split[-1]
     strs = []
@@ -71,7 +71,7 @@ def shorten_namespaced_output_name(namespaced_output_name: str, sep: str = ' ') 
         for stepnamestr in namespaces:
             _, i, step_key = parse_step_name_str(stepnamestr)
             strs.append(f'step{sep}{i+1}{sep}{step_key}')
-    shortened = '___'.join(strs + [output_name])
+    shortened = namespaced(*strs, output_name)
     return (yaml_stem_init, shortened)
 
 

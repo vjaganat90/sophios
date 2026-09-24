@@ -90,7 +90,7 @@ def _synchronize_children(graph: WorkflowGraph) -> WorkflowGraph:
         for boundary in child.workflow_inputs:
             if boundary.name in authored or boundary.name not in child_jobs:
                 continue
-            outer_name = f'{emission.id}___{boundary.name}'
+            outer_name = namespaced(emission.id, boundary.name)
             _put_port(workflow_inputs, WorkflowPort(outer_name, boundary.declaration))
             _put_job(job_bindings, JobBinding(outer_name, child_jobs[boundary.name]))
             sink = next(port.id for port in inputs if port.id.port == boundary.name)
@@ -126,7 +126,7 @@ def _materialize_bindings(graph: WorkflowGraph, partial_failure: bool) -> Workfl
             port = next(port for port in step.inputs if port.id == binding.sink)
             match binding.value:
                 case InlineLiteral(value=value):
-                    name = f'{emission.id}___{port.id.port}'
+                    name = namespaced(emission.id, port.id.port)
                     declaration = _input_declaration(port, emission.scatter)
                     _put_port(workflow_inputs, WorkflowPort(name, declaration))
                     _put_job(job_bindings, JobBinding(
@@ -239,7 +239,7 @@ def _materialize_outputs(graph: WorkflowGraph) -> WorkflowGraph:
         if step.emission is None:
             continue
         for port in step.outputs:
-            name = f'{step.emission.id}___{port.id.port}'
+            name = namespaced(step.emission.id, port.id.port)
             if name in authored:
                 continue
             declaration = _output_declaration(port, step.emission.scatter)

@@ -11,6 +11,7 @@ from .types import (
     Direction,
     Edge,
     emitted_step_id,
+    namespaced,
     EmittedValue,
     Port,
     PortDeclaration,
@@ -332,7 +333,7 @@ def _exported_outputs(
     for step in graph.steps:
         emitted = step.emission.id if step.emission is not None else step.id.name
         for output in step.outputs:
-            name = f'{emitted}___{output.id.port}'
+            name = namespaced(emitted, output.id.port)
             declaration = output.declaration or port_declaration(output.type.declared)
             exported[name] = (replace(
                 declaration,
@@ -379,7 +380,7 @@ def _required(port: Port) -> bool:
 
 def _input_name(step: StepNode, port: Port) -> str:
     emitted = step.emission.id if step.emission is not None else step.id.name
-    return f'{emitted}___{port.id.port}'
+    return namespaced(emitted, port.id.port)
 
 
 def _effective_source_type(step: StepNode, port: Port) -> Any:

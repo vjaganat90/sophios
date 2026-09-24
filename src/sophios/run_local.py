@@ -12,6 +12,7 @@ import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterator
+from sophios.ir.types import NAMESPACE_SEPARATOR
 from sophios.wic_types import Json
 from .compute_request import ComputeRequest
 
@@ -336,7 +337,7 @@ def copy_output_files(yaml_stem: str, basepath: str = '') -> None:
                 yaml_stem_init, shortened = utils.shorten_namespaced_output_name(
                     namespaced_output_name)
                 parentdirs = yaml_stem_init + '/' + \
-                    shortened.replace('___', '/')
+                    shortened.replace(NAMESPACE_SEPARATOR, '/')
             except Exception:
                 parentdirs = namespaced_output_name  # For --allow_raw_cwl
             Path('outdir/' + parentdirs).mkdir(parents=True, exist_ok=True)
