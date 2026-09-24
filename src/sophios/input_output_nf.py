@@ -249,7 +249,12 @@ def _render_process(process: NfProcess) -> str:
         lines.extend(f"    {_process_output(port)}" for port in process.outputs)
 
     command = " ".join(_render_command_token(token) for token in process.command.tokens)
-    for operator, stream in (("<", process.command.stdin), (">", process.command.stdout), ("2>", process.command.stderr)):
+    streams = (
+        ("<", process.command.stdin),
+        (">", process.command.stdout),
+        ("2>", process.command.stderr),
+    )
+    for operator, stream in streams:
         if stream is not None:
             command += f" {operator} {_render_template(stream)}"
     lines.extend(["", "    script:", '    \"\"\"'])

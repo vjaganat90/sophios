@@ -133,6 +133,18 @@ def test_the_census_sees_the_repo() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize('workflow_name', ['build_wheel.yml', 'test_and_publish_pypi.yml'])
+def test_package_lanes_leave_nextflow_runtime_to_its_runtime_lane(workflow_name: str) -> None:
+    """Package lanes do not collect tests whose executable they do not install."""
+    runtime_tests = _collect(['tests/core/nextflow', '-m', 'nextflow'])
+    package_tests = set().union(*(
+        _collect(argv) for argv in _invocations(WORKFLOWS / workflow_name)
+    ))
+    assert runtime_tests
+    assert runtime_tests.isdisjoint(package_tests)
+
+
+@pytest.mark.fast
 def test_collection_is_pytests_answer_and_not_ours() -> None:
     """The helper really asks pytest, and pytest really narrows.
 

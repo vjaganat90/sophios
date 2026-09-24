@@ -27,7 +27,7 @@ from hypothesis import given
 
 from sophios.api.python.workflow import Step, Workflow
 
-from . import ast_strategies as strat
+from . import ast_strategies as strategies
 from .hermetic import ORACLE, compile_hermetic_cwl
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
@@ -55,12 +55,14 @@ MANUFACTURING_SITES: Final[dict[str, str]] = {
     'sophios/cwl_subinterpreter.py::rerun_cwltool': DOCUMENT,
     # Not documents.
     'sophios/ir/emit.py::emit': CWL,
+    'sophios/nf_reader.py::nextflow_to_cwl': CWL,
     'sophios/lang/render.py::_Writer.document': RENDERER,
     'sophios/lang/render.py::_Writer.sidecar': RENDERER,
     'sophios/lang/schema.py::_defs': SCHEMA,
     'sophios/schemas/wic_schema.py::_wic_tag_schema': SCHEMA,
     'sophios/schemas/wic_schema.py::wic_main_schema': SCHEMA,
     'sophios/utils_cwl.py::desugar_into_canonical_normal_form': TOOL,
+    'sophios/utils_nf.py::compilation_result_source': CWL,
     'sophios/contrib/converter.py::wfb_to_wic': CONTRIB,
     'sophios/contrib/rest/api.py::compile_wf': CONTRIB,
 }
@@ -317,7 +319,7 @@ _DRIVERS: Final[list[dict[str, Any]]] = [
 
 
 @pytest.mark.slow
-@given(strat.workflows())
+@given(strategies.workflows())
 @ORACLE
 def test_manufactured_documents_parse_over_generated_input(yml: dict[str, Any]) -> None:
     """The same claim, quantified over the oracle's generator rather than a list.
