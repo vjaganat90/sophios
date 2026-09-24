@@ -114,7 +114,7 @@ jobs:
 
     - name: Setup miniforge (linux, macos)
       if: always()
-      uses: conda-incubator/setup-miniconda@v3.0.1
+      uses: conda-incubator/setup-miniconda@v4.0.1
       with:
         miniforge-variant: Miniforge3
         miniforge-version: 24.7.1-2
@@ -159,7 +159,7 @@ jobs:
 
     - name: Generate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd sophios/ && pytest tests/core/test_python_api.py -k test_compile_python_workflows
+      run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_compile_python_workflows
 
     - name: Generate Sophios Validation Jsonschema
       if: always()
@@ -170,7 +170,7 @@ jobs:
       # WIC Python API workflows as well as the WIC Python API itself.
     - name: Validate Sophios Python API Workflows (*.py -> *.wic)
       if: always()
-      run: cd sophios/ && pytest tests/core/test_python_api.py -k test_validate_generated_python_workflows
+      run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_validate_generated_python_workflows
 
     - name: cwl-docker-extract (i.e. recursively docker pull)
       if: always()
@@ -179,11 +179,11 @@ jobs:
 
     - name: PyTest Tool Builder
       if: always()
-      run: cd sophios/ && pytest tests/core/test_tool_builder.py -k test_tool_builder
+      run: cd sophios/ && pytest tests/core/test_python_api_tool_builder.py
 
     - name: PyTest Python API
       if: always()
-      run: cd sophios/ && pytest tests/core/test_python_api.py -k "not test_compile_python_workflows and not test_validate_generated_python_workflows"
+      run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k "not test_compile_python_workflows and not test_validate_generated_python_workflows"
 
     - name: PyTest Run REST Core Tests
       if: always()
@@ -207,6 +207,14 @@ jobs:
     - name: PyTest Run Workflows
       if: always()
       run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_workflows_on_push --workers "${PYTEST_WORKERS}" --cwl_runner cwltool # --cov
+
+    # test_run_partial_failures_pass is skip_pypi_ci, so the packaging lane
+    # excludes it, and every other invocation of this file selects a different
+    # -k — it ran nowhere. Its sibling test_run_partial_failures_fail_without_flag
+    # carries no marker and is already covered by default collection.
+    - name: PyTest Run Partial Failures
+      if: always()
+      run: cd sophios/ && pytest tests/core/test_examples.py -k test_run_partial_failures_pass --cwl_runner cwltool
 
     # NOTE: The steps below are for repository_dispatch only. For all other steps, please insert above
     # this comment.
@@ -232,10 +240,14 @@ jobs:
     - name: Generate a token
       if: always()
       id: generate_token
-      uses: tibdex/github-app-token@b62528385c34dbc9f38e5f4225ac829252d1ea92
+      uses: actions/create-github-app-token@v3
       with:
-        app_id: ${{ secrets.APP_ID }}
-        private_key: ${{ secrets.APP_PRIVATE_KEY }}
+        app-id: ${{ secrets.APP_ID }}
+        private-key: ${{ secrets.APP_PRIVATE_KEY }}
+        # tibdex minted a token for the whole app installation; the official
+        # action defaults to the current repository only. owner: restores
+        # installation scope, which cross-repo branch dispatch requires.
+        owner: ${{ github.repository_owner }}
 
     - name: Reply CI results to sender
       # In case of failure, we still need to return the failure status to the original repository.

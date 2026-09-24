@@ -4,6 +4,9 @@ from pathlib import Path
 import sys
 from types import ModuleType
 from typing import Any
+from .lang.cwl import CWL_VERSION
+from .lang.diagnostics import SophiosError
+from .lang.error_codes import SophiosErrorCode
 
 DRIVER_SCRIPT = '/python_cwl_driver.py'
 TYPES_SCRIPT = '/workflow_types.py'
@@ -86,19 +89,14 @@ def check_args_match_inputs(module_: ModuleType, args: dict[str, Any], check: bo
         module_ (ModuleType): A ModuleType object returned from import_python_file
         args (dict[str, Any]): A dictionary of keys value pairs
     """
-    error = False
-    for arg in args:
-        if arg not in module_.inputs:
-            print(f'Error! wic argument {arg} not in python arguments {module_.inputs}')
-            error = True
+    problems = [f'Error! wic argument {arg} not in python arguments {module_.inputs}'
+                for arg in args if arg not in module_.inputs]
     # Wait until after inference
     if check:
-        for arg in module_.inputs:
-            if arg not in args:
-                print(f'Error! Python argument {arg} not in wic arguments {args}')
-                error = True
-    if error:
-        sys.exit(1)
+        problems += [f'Error! Python argument {arg} not in wic arguments {args}'
+                     for arg in module_.inputs if arg not in args]
+    if problems:
+        raise SophiosError.error(SophiosErrorCode.SCRIPT_ARGUMENT_MISMATCH, *problems)
 
 
 def generate_CWL_CommandLineTool(module_inputs: dict[str, Any], module_outputs: dict[str, Any],
@@ -114,7 +112,7 @@ def generate_CWL_CommandLineTool(module_inputs: dict[str, Any], module_outputs: 
         dict[str, Any]: A CWL CommandLineTool with the given inputs and outputs.
     """
     yaml_tree: dict[str, Any] = {}
-    yaml_tree['cwlVersion'] = 'v1.0'
+    yaml_tree['cwlVersion'] = CWL_VERSION
     yaml_tree['class'] = 'CommandLineTool'
     yaml_tree['$namespaces'] = {'edam': 'https://edamontology.org/'}
     yaml_tree['$schemas'] = ['https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl']

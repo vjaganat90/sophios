@@ -1,4 +1,5 @@
-from typing import Any, NamedTuple, TypeAlias, TypedDict
+from dataclasses import dataclass, field
+from typing import Any, NamedTuple, NotRequired, TypeAlias, TypedDict
 
 import networkx as nx
 
@@ -16,7 +17,6 @@ RawJson: TypeAlias = str
 Yaml: TypeAlias = dict[str, Any]
 
 # In python there are unfortunately an enormous number of ways to represent the humble struct.
-# See https://stackoverflow.com/questions/53409117/what-are-the-main-differences-of-namedtuple-and-typeddict-in-python-mypy
 # I have chosen to use NamedTuple to emphasize the immutability aspect (see below).
 # See https://mypy.readthedocs.io/en/stable/kinds_of_types.html#named-tuples
 
@@ -33,36 +33,23 @@ class StepId(NamedTuple):
 
 Tools: TypeAlias = dict[StepId, Tool]
 
-# NOTE: Please read the Namespacing section of docs/devguide.md !!!
+# NOTE: Please read the Namespacing section of docs/dev/devguide.md !!!
 Namespace: TypeAlias = str
 Namespaces: TypeAlias = list[Namespace]
 
-WorkflowInputs: TypeAlias = dict[str, Any]
-WorkflowInputsFile: TypeAlias = dict[str, Any]
-WorkflowOutputs: TypeAlias = list[Yaml]
-InternalOutputs: TypeAlias = list[str]
-ExplicitEdgeDef: TypeAlias = tuple[Namespaces, str]
-ExplicitEdgeDefs: TypeAlias = dict[str, ExplicitEdgeDef]
-ExplicitEdgeCalls: TypeAlias = dict[str, ExplicitEdgeDef]
 DiGraph: TypeAlias = Any  # graphviz.DiGraph
 
 
-class GraphData():
-    # pylint:disable=too-few-public-methods
-    def __init__(self,
-                 name: str,  # TODO: Should this be StepId?
-                 nodes: list[tuple[str, dict]] | None = None,
-                 edges: list[tuple[str, str, dict]] | None = None,
-                 subgraphs: list[Any] | None = None,
-                 ranksame: list[str] | None = None) -> None:
-        # NOTE: Use None as the sentinel default (instead of a mutable list literal)
-        # so each instance gets its own fresh list; a literal [] default would be
-        # shared (and mutated!) across every instance that doesn't pass an argument.
-        self.name = name
-        self.nodes = [] if nodes is None else nodes
-        self.edges = [] if edges is None else edges
-        self.subgraphs = [] if subgraphs is None else subgraphs
-        self.ranksame = [] if ranksame is None else ranksame
+@dataclass(slots=True)
+class GraphData:
+    # `default_factory` gives each instance its own list; a bare `[]` default
+    # would be shared and mutated across every instance. Not `frozen=True`:
+    # the compiler rebinds these fields in place while building a graph.
+    name: str  # TODO: Should this be StepId?
+    nodes: list[tuple[str, dict]] = field(default_factory=list)
+    edges: list[tuple[str, str, dict]] = field(default_factory=list)
+    subgraphs: list[Any] = field(default_factory=list)
+    ranksame: list[str] = field(default_factory=list)
 
 
 # This groups together the classes which represent our graph.
@@ -73,59 +60,6 @@ class GraphReps(NamedTuple):
     networkx: nx.DiGraph
     graphdata: GraphData
 
-
-# Since we cannot store extra tags in CWL files, we need a data structure
-# to store temporary compiler info that gets passed through the recursion.
-# The number of subworkflows is arbitrary (zero or more), so what we want is a
-# Rose Tree https://en.wikipedia.org/wiki/Rose_tree
-# Unfortunately, since mypy does not support Algebraic Data Types (ADTs)
-# we have to break the recursion by replacing the recursive instance of RoseTree with Any :(
-
-
-class RoseTree(NamedTuple):
-    data: Any
-    sub_trees: list[Any]  # Any = RoseTree
-# Note that instead of Any we could provide a specific type, but remember that
-# a Rose Tree is defined by its structure, not by the specific type of data it contains.
-# We can simply cast to a specific type at each call site, i.e.
-# data: SpecificType = rose_tree.data
-
-# Now we can define a specific data type for a single node in our Abstract Syntax Tree.
-
-
-class NodeData(NamedTuple):
-    namespaces: Namespaces
-    name: str
-    yml: Yaml  # i.e. The AST that was compiled.
-    # If this is not the AST that was passed in, then the compiler introduced
-    # some modifications (i.e. --insert_steps_automatically) and you need to recompile
-    compiled_cwl: Cwl
-    tool: Tool
-    workflow_inputs_file: WorkflowInputsFile
-    explicit_edge_defs: ExplicitEdgeDefs
-    explicit_edge_calls: ExplicitEdgeCalls
-    graph: GraphReps
-    inputs_workflow: WorkflowInputs
-    step_name_1: str
-
-
-class EnvData(NamedTuple):
-    input_mapping: dict[str, list[str]]
-    output_mapping: dict[str, str]
-    inputs_file_workflow: WorkflowInputsFile
-    vars_workflow_output_internal: InternalOutputs
-    explicit_edge_defs: ExplicitEdgeDefs
-    explicit_edge_calls: ExplicitEdgeCalls
-
-
-class CompilerInfo(NamedTuple):
-    rose: RoseTree
-    env: EnvData
-# Note that while Tuples and NamedTuples are immutable, they can contain mutable entries!
-# Let's partition the data into entries which are immutable / fixed
-# (well, at least after compilation of the subworkflow is complete) and entries
-# which are mutably updated throughout the recursion. The latter are essentially
-# environment variables of sorts, and they do not need to be stored in the Rose Tree.
 
 # Create a type for our Abstract Syntax Tree (AST).
 # We can probably use Dict here if str is step_name_i not just yaml_stem.
@@ -139,11 +73,6 @@ class YamlTree(NamedTuple):
     yml: Yaml
 
 
-class YamlForest(NamedTuple):
-    yaml_tree: YamlTree
-    sub_forests: list[tuple[StepId, Any]]  # Any = YamlForest
-
-
 class CompilerOptions(TypedDict):
     """Core compiler flags needed for compilation and transformation into CWL."""
     partial_failure_enable: bool
@@ -151,6 +80,11 @@ class CompilerOptions(TypedDict):
     insert_steps_automatically: bool
     inference_disable: bool
     allow_raw_cwl: bool
+    #: The explicit language version, if the user set one; None means infer.
+    #: NotRequired so existing constructors of this dict stay valid.
+    lang_version: NotRequired[str | None]
+    inference_rules: NotRequired[dict[str, str]]
+    renaming_conventions: NotRequired[list[tuple[str, str]]]
 
 
 class GraphSettings(TypedDict):

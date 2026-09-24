@@ -20,7 +20,7 @@ Use this guide when you need:
 
 ```yaml
 steps:
-- echo:
+  echo:
     in:
       message: !ii Hello World
 ```
@@ -66,12 +66,10 @@ sophios --generate_schemas
 sophios --generate_config
 ```
 
-Intermediate compiler `.wic` trees are not written by default. If you need them
-while debugging the compiler, opt in explicitly:
-
-```bash
-sophios --yaml workflow.wic --generate_cwl_workflow --write_intermediate_wic
-```
+Intermediate compiler `.wic` trees are not written, and there is no flag that
+writes them. The compiler reads the files you wrote rather than assembling a
+document of its own, so a diagnostic names a line in your `.wic` and there is
+no intermediate tree left to inspect.
 
 Useful flags:
 
@@ -126,9 +124,9 @@ Use `!ii` when a value is known directly in the workflow file:
 
 ```yaml
 steps:
-- echo:
-    in:
-      message: !ii Hello World
+- id: echo
+  in:
+    message: !ii Hello World
 ```
 
 Sophios extracts inline values into the generated CWL job inputs document during
@@ -141,14 +139,14 @@ Use anchors when inference is not the right communication tool.
 
 ```yaml
 steps:
-- touch:
-    in:
-      filename: !ii empty.txt
-    out:
-    - file: !& created_file
-- cat:
-    in:
-      file: !* created_file
+- id: touch
+  in:
+    filename: !ii empty.txt
+  out:
+  - file: !& created_file
+- id: cat
+  in:
+    file: !* created_file
 ```
 
 The output anchor `!& created_file` is consumed later with `!* created_file`.
@@ -275,17 +273,17 @@ wic:
   implementations:
     implementation1:
       steps:
-      - implementation1.wic:
+      - id: implementation1.wic
     implementation2:
       steps:
-      - implementation2.wic:
+      - id: implementation2.wic
 ```
 
 Call-site override:
 
 ```yaml
 steps:
-- static_dispatch.wic:
+- id: static_dispatch.wic
 
 wic:
   steps:

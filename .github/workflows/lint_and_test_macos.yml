@@ -40,7 +40,9 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/sophios
-          ref: master
+          # See run_workflows_weekly.yml: the triggering ref, so a dispatch on
+          # a branch tests that branch.
+          ref: ${{ github.ref }}
           path: sophios
           fetch-depth: 0 # setuptools-scm needs full history to resolve the version from tags
 
@@ -70,7 +72,7 @@ jobs:
 
       - name: Setup miniforge (linux, macos)
         if: runner.os != 'Windows'
-        uses: conda-incubator/setup-miniconda@v2.2.0
+        uses: conda-incubator/setup-miniconda@v4.0.1
         with:
           miniforge-variant: Miniforge3
           miniforge-version: 24.7.1-2
@@ -109,7 +111,7 @@ jobs:
 
       - name: Generate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest tests/core/test_python_api.py -k test_compile_python_workflows
+        run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_compile_python_workflows
 
       - name: Generate Sophios Validation Jsonschema
         if: always()
@@ -120,7 +122,7 @@ jobs:
         # Sophios Python API workflows as well as the Sophios Python API itself.
       - name: Validate Sophios Python API Workflows (*.py -> *.wic)
         if: always()
-        run: cd sophios/ && pytest tests/core/test_python_api.py -k test_validate_generated_python_workflows
+        run: cd sophios/ && pytest tests/core/test_python_api_workflow.py -k test_validate_generated_python_workflows
 
       - name: Build Documentation
         if: always()
@@ -154,8 +156,16 @@ jobs:
         # NOTE: This test MUST be run in serial! See is_isomorphic_with_timeout()
         timeout-minutes: 20 # backup timeout for windows
 
+      # Two defect classes cwltool already catches -- a Sophios key written
+      # into `in:`, and a promoted port carrying a tool-only `inputBinding` --
+      # but only in run_workflows, behind a container pull. Measured at 21s
+      # over the full corpus here, against the minutes that round trip costs.
+      - name: PyTest Emitted CWL Residue
+        if: always()
+        run: cd sophios/ && pytest -k test_emitted_cwl_says_nothing_cwl_cannot_read
+        timeout-minutes: 20 # backup timeout for windows
+
       - name: PyTest Inline Subworkflows
         if: always()
         run: cd sophios/ && pytest -k test_inline_subworkflows # --cov --cov-config=.coveragerc_serial
-        # NOTE: This test MUST be run in serial! See is_isomorphic_with_timeout()
         timeout-minutes: 20 # backup timeout for windows

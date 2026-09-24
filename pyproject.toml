@@ -32,6 +32,14 @@ dependencies = [
     # CommandInputParameter attr changed from `type_` to `type` and back to `type_`
     # between versions 0.30, 0.31, 0.32
     # See https://github.com/common-workflow-language/cwl-utils/releases/
+    #
+    # No upper bound. 0.43+ will not read a document whose embedded process
+    # declares a `cwlVersion` other than the root's, but the fix for that is
+    # ours: inlining no longer copies the field into a `run:`, which is what
+    # the spec says a packed document means anyway. Pinning would only hide
+    # that, and an upper bound on a package whose parsers are regenerated from
+    # an evolving schema costs more than it saves. See
+    # https://github.com/common-workflow-language/cwl-utils/issues/470.
     "pydantic>=2.6",
     "pydantic[email]",
     "docker",
@@ -104,7 +112,7 @@ mypy-types = [
 # toml language has problem with underscore in array name
 runners = [
     "toil[cwl]",
-    "cwl-utils",
+    "cwl-utils>=0.32",
 ]
 runners-src = [
     "cwl-utils @ git+https://github.com/sameeul/cwl-utils.git",
@@ -224,6 +232,8 @@ markers = [
     "docker: requires a working Docker daemon",
     "skip_pypi_ci: tests intentionally excluded from PyPI package-build CI",
     "contrib: exercises a peripheral surface (ICT, Workflow Builder, REST) rather than the core compiler; run core only with 'pytest -m \"not contrib\"'",
+    "needs_cwltool: calls cwltool in-process; skipped off POSIX, see conftest.py",
+    "sanity: a static scan over the repository rather than a claim about a compilation; runs in the weekly lane, see run_workflows_weekly.yml",
 ]
 addopts = ""
 
@@ -255,9 +265,6 @@ disable=[
 fail-under=9.25
 
 [tool.pylint.format]
-
-# Regexp for a line that is allowed to be longer than the limit.
-ignore-long-lines='^\s*(# )?(See )?(and )?<?https?://\S+>?$'
 
 # Maximum number of characters on a single line.
 max-line-length=120

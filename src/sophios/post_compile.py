@@ -1,10 +1,14 @@
 from pathlib import Path
 import sys
 import copy
+from dataclasses import replace
 import shutil
 import subprocess as sub
 from . import plugins
-from .wic_types import RoseTree, NodeData, Yaml
+from .wic_types import Yaml
+from .ir.artifacts import CompilationArtifact
+from .lang.diagnostics import SophiosError
+from .lang.error_codes import SophiosErrorCode
 
 
 def verify_container_engine_config(container_engine: str, ignore_container_install: bool) -> None:
@@ -39,19 +43,21 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
         if not docker_ok and not ignore_container_install:
 
             if permission_denied in output:
-                print('Warning! docker appears to be installed, but not configured as a non-root user.')
-                print('See https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user')
-                print('TL;DR you probably just need to run the following command (and then restart your machine)')
-                print('sudo usermod -aG docker $USER')
-                sys.exit(1)
+                raise SophiosError.error(
+                    SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
+                    'Warning! docker appears to be installed, but not configured as a non-root user.',
+                    'See https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user',
+                    'TL;DR you probably just need to run the following command (and then restart your machine)',
+                    'sudo usermod -aG docker $USER')
 
-            print(f'Warning! The {container_cmd} command does not appear to be installed.')
-            print(f"""Most workflows require docker containers and
-                  will fail at runtime if {container_cmd} is not installed.""")
-            print('If you want to try running the workflow anyway, use --ignore_docker_install')
-            print("""Note that --ignore_docker_install does
+            raise SophiosError.error(
+                SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
+                f'Warning! The {container_cmd} command does not appear to be installed.',
+                f"""Most workflows require docker containers and
+                  will fail at runtime if {container_cmd} is not installed.""",
+                'If you want to try running the workflow anyway, use --ignore_docker_install',
+                """Note that --ignore_docker_install does
                   NOT change whether or not any step in your workflow uses docker""")
-            sys.exit(1)
 
         # If docker is installed, check for too many running processes. (on linux, macos)
         if container_cmd_exists and sys.platform != "win32":
@@ -62,13 +68,14 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
             max_processes = 1000
             too_many_processes = num_processes > max_processes
             if too_many_processes and not ignore_container_install:
-                print(f'Warning! There are {num_processes} running docker processes.')
-                print(f'More than {max_processes} may potentially cause intermittent hanging issues.')
-                print('It is recommended to terminate the processes using the command')
-                print('`sudo pkill com.docker && sudo pkill Docker`')
-                print('and then restart Docker.')
-                print('If you want to run the workflow anyway, use --ignore_docker_processes')
-                sys.exit(1)
+                raise SophiosError.error(
+                    SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
+                    f'Warning! There are {num_processes} running docker processes.',
+                    f'More than {max_processes} may potentially cause intermittent hanging issues.',
+                    'It is recommended to terminate the processes using the command',
+                    '`sudo pkill com.docker && sudo pkill Docker`',
+                    'and then restart Docker.',
+                    'If you want to run the workflow anyway, use --ignore_docker_processes')
     else:
         cmd = [container_cmd, '--version']
         output = ''
@@ -81,11 +88,12 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
         singularity_ok = container_cmd_exists
 
         if not singularity_ok and not ignore_container_install:
-            print(f'Warning! The {container_cmd} command does not appear to be installed.')
-            print('If you want to try running the workflow anyway, use --ignore_docker_install')
-            print('Note that --ignore_docker_install does NOT change whether or not')
-            print('any step in your workflow uses docker or any other containers')
-            sys.exit(1)
+            raise SophiosError.error(
+                SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
+                f'Warning! The {container_cmd} command does not appear to be installed.',
+                'If you want to try running the workflow anyway, use --ignore_docker_install',
+                'Note that --ignore_docker_install does NOT change whether or not',
+                'any step in your workflow uses docker or any other containers')
 
 
 def cwl_docker_extract(container_engine: str, pull_dir: str, cwl_path: str | Path) -> None:
@@ -110,44 +118,47 @@ def cwl_docker_extract(container_engine: str, pull_dir: str, cwl_path: str | Pat
     sub.run(cmd, check=True)
 
 
-def cwl_inline_runtag(rose_tree: RoseTree) -> RoseTree:
-    """Transforms the compiled CWL within the rose_tree with inline cwl of steps in the runtag
-    Args:
-        rose_tree (RoseTree): The data associated with compiled subworkflows
-    Returns:
-        RoseTree: The updated rose_tree with inline cwl in runtag
-    """
-    rose_tree_mod = copy.deepcopy(rose_tree)
-    node_data: NodeData = rose_tree_mod.data
-    cwl_tree = node_data.compiled_cwl
+#: Fields that belong to a CWL *document* rather than to a process. An embedded
+#: process is not a document, so each has to leave the `run:` it is embedded
+#: into -- either by moving up to the document that now contains it, or by
+#: being dropped because that document already states it.
+DOCUMENT_FIELDS = ('$namespaces', '$schemas', 'cwlVersion')
 
-    if cwl_tree.get('class', '') == 'Workflow':
-        for sub_rose_tree in rose_tree_mod.sub_trees:
-            # Inline descendants before embedding this child into the parent run tag.
-            sub_rose_tree = cwl_inline_runtag(sub_rose_tree)
-            sub_node_data: NodeData = sub_rose_tree.data
-            sub_step_name = sub_node_data.namespaces[-1]
-            step_to_update = next(
-                item for item in cwl_tree['steps'] if item.get('id') == sub_step_name)
-            step_to_update['run'] = sub_node_data.compiled_cwl
-            # merge the steps/clt namespaces to global namespaces
-            # as the run tag can't have namespaces and schemas
-            cwl_tree['$namespaces'] = cwl_tree.get('$namespaces', {}) | step_to_update['run'].get(
+
+def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
+    """Embed every emitted child in its parent's ``run`` field."""
+    children = tuple(inline_artifact_runs(child) for child in artifact.children)
+    cwl = copy.deepcopy(artifact.cwl)
+    if cwl.get('class') == 'Workflow':
+        for child in children:
+            step_id = child.namespace[-1]
+            step = next(item for item in cwl['steps'] if item.get('id') == step_id)
+            step['run'] = copy.deepcopy(child.cwl)
+            # A prefix and an ontology must be declared in the document that
+            # uses them, so these move up. `cwlVersion` is dropped instead:
+            # the parent already names one, and a second on an embedded
+            # process is resolved as a reference and fails validation -- which
+            # is what a tool declaring `v1.0` did to every inlined corpus
+            # workflow, in a lane that runs weekly.
+            cwl['$namespaces'] = cwl.get('$namespaces', {}) | step['run'].get(
                 '$namespaces', {})
-            # and then get rid of $namespaces and $schemas in the run tag
-            step_to_update['run'].pop('$namespaces', None)
-            step_to_update['run'].pop('$schemas', None)
-    return rose_tree_mod
+            cwl['$schemas'] = list(dict.fromkeys(
+                list(cwl.get('$schemas', [])) + list(step['run'].get('$schemas', []))))
+            if not cwl['$schemas']:
+                cwl.pop('$schemas')
+            for field in DOCUMENT_FIELDS:
+                step['run'].pop(field, None)
+    return replace(artifact, cwl=cwl, children=children)
 
 
-def remove_entrypoints(container_engine: str, rose_tree: RoseTree) -> RoseTree:
-    """Remove entry points"""
-    # Requires root, so guard behind CLI option
+def remove_artifact_entrypoints(container_engine: str,
+                                artifact: CompilationArtifact) -> CompilationArtifact:
+    """Build no-entrypoint images and rewrite the immutable artifact tree."""
     if container_engine == 'docker':
         plugins.remove_entrypoints_docker()
     elif container_engine == 'podman':
         plugins.remove_entrypoints_podman()
-    return plugins.dockerPull_append_noentrypoint_rosetree(rose_tree)
+    return plugins.dockerPull_append_noentrypoint_artifact(artifact)
 
 
 def stage_input_files(yml_inputs: Yaml,
@@ -174,8 +185,7 @@ def stage_input_files(yml_inputs: Yaml,
             case {"class": "File", "location": location, **_rest_val}:
                 src_path = root_yml_dir_abs / Path(location)
                 if not src_path.exists() and throw:
-                    print(f"Error! {src_path} does not exist!")
-                    sys.exit(1)
+                    raise SophiosError.error(SophiosErrorCode.MISSING_INPUT_FILE, f"Error! {src_path} does not exist!")
 
                 relroot = Path(basepath) if use_subdirs_cwl else Path(".")
                 dst_path = relroot / Path(location)
