@@ -25,16 +25,17 @@ from .types import (
     DeferredObligation,
     Direction,
     Edge,
+    emitted_step_id,
     Namespace,
-    ProcessRun,
     Port,
     PortId,
+    ProcessRun,
     Resolution,
     StepEmission,
     StepId,
     StepNode,
-    WorkflowPort,
     WorkflowGraph,
+    WorkflowPort,
 )
 
 
@@ -222,7 +223,7 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
                                       defined_anywhere, diagnostics))
                      for name, value in source.inputs if name in by_input)
     interpreted = dict(source.interpreted)
-    emitted_id = f'{workflow_name}__step__{identity.index}__{source.id}'
+    emitted_id = emitted_step_id(workflow_name, identity.index, source.id)
     field_order = list(source.field_order)
     if 'id' in field_order:
         field_order.remove('id')

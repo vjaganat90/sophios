@@ -10,6 +10,7 @@ from .declarations import boundary_declaration, port_declaration
 from .types import (
     Edge,
     Namespace,
+    namespaced,
     Port,
     WorkflowPort,
     PortId,
@@ -365,7 +366,7 @@ def _boundary_name(graph: WorkflowGraph, port: PortId) -> str:
         return port.port
     step = path[-1][1]
     assert step.emission is not None
-    return f'{step.emission.id}___{port.port}'
+    return namespaced(step.emission.id, port.port)
 
 
 def _raw_type(graph: WorkflowGraph, port: PortId) -> Any:
@@ -447,7 +448,7 @@ def _expose_cross_scope_inputs(graph: WorkflowGraph,
             # workflow exposes then depends on who called it.
             relayed = next((entry for entry, sinks in mappings if edge.sink in sinks), None)
             derived_from: PortId | None = None if relayed is not None else edge.sink
-            name = relayed if relayed is not None else f'{step.emission.id}___{edge.sink.port}'
+            name = relayed if relayed is not None else namespaced(step.emission.id, edge.sink.port)
         elif any(_namespace_contains(child.namespace, edge.sink.step.namespace)
                  for child in current.children):
             child = next(child for child in current.children

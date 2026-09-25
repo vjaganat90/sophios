@@ -10,6 +10,8 @@ from .resolve import RegistrySnapshot
 from .types import (
     Direction,
     Edge,
+    emitted_step_id,
+    namespaced,
     EmittedValue,
     Port,
     PortDeclaration,
@@ -256,7 +258,7 @@ def _insert(graph: WorkflowGraph, position: int, insertion: Insertion,
     outputs = tuple(Port(PortId(identity, Direction.OUTPUT, name), declaration.type,
                          declaration) for name, declaration in insertion.outputs)
     descriptor = StepEmission(
-        id=f'{graph.name}__step__{position + 1}__{insertion.name}',
+        id=emitted_step_id(graph.name, position + 1, insertion.name),
         inputs=(),
         run=ProcessRun(insertion.run_path,
                        RegistryKey(insertion.namespace, insertion.name)),
@@ -280,7 +282,7 @@ def _renumber_emission(name: str, index: int, step: StepNode) -> StepNode:
     if step.emission is None:
         return step
     return replace(step, emission=replace(
-        step.emission, id=f'{name}__step__{index}__{step.id.name}'))
+        step.emission, id=emitted_step_id(name, index, step.id.name)))
 
 
 def _propagate_child_interface(graph: WorkflowGraph) -> WorkflowGraph:
@@ -331,7 +333,7 @@ def _exported_outputs(
     for step in graph.steps:
         emitted = step.emission.id if step.emission is not None else step.id.name
         for output in step.outputs:
-            name = f'{emitted}___{output.id.port}'
+            name = namespaced(emitted, output.id.port)
             declaration = output.declaration or port_declaration(output.type.declared)
             exported[name] = (replace(
                 declaration,
@@ -378,7 +380,7 @@ def _required(port: Port) -> bool:
 
 def _input_name(step: StepNode, port: Port) -> str:
     emitted = step.emission.id if step.emission is not None else step.id.name
-    return f'{emitted}___{port.id.port}'
+    return namespaced(emitted, port.id.port)
 
 
 def _effective_source_type(step: StepNode, port: Port) -> Any:
