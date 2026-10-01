@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .ir.artifacts import CompilationArtifact, CompilationResult
+from .ir.names import Names
 from .ir.types import Direction, Edge, PortId, StepNode, WorkflowGraph
 from .nf_expr import Expr, check as check_safe_subset, is_safe_subset_text, parse as parse_safe_subset
 from .nf_symbols import normalize_nextflow_identifier
@@ -1194,7 +1195,7 @@ _NESTED_WORKFLOW_INPUT_CONSUMED_FIELDS = (
 _WORKFLOW_OUTPUT_CONSUMED_FIELDS = (
     frozenset({"outputSource", "type"}) | _INERT_DOCUMENTATION_FIELDS
 )
-_STEP_CONSUMED_FIELDS = frozenset({
+_STEP_CORE_FIELDS = frozenset({
     "id",
     "in",
     "out",
@@ -1202,7 +1203,8 @@ _STEP_CONSUMED_FIELDS = frozenset({
     "scatter",
     "scatterMethod",
     "when",
-}) | _INERT_DOCUMENTATION_FIELDS
+})
+_STEP_CONSUMED_FIELDS = _STEP_CORE_FIELDS | _INERT_DOCUMENTATION_FIELDS
 _STEP_INPUT_CONSUMED_FIELDS = frozenset({"source"})
 
 
@@ -1442,23 +1444,35 @@ def _basename_source_findings(tool: Mapping[str, Any], *, path: str) -> list[str
     return findings
 
 
+def _emitted_steps(artifact: CompilationArtifact) -> list[Mapping[str, Any]]:
+    """The steps the artifact's emitted workflow document lists, in graph order."""
+    raw_steps = _as_list(
+        artifact.cwl.get("steps", []),
+        error="compiled CWL Workflow steps must be a list",
+    )
+    return [
+        _as_mapping(step, error="compiled CWL Workflow steps must be mappings")
+        for step in raw_steps
+    ]
+
+
 def _graph_steps_with_artifacts(
     graph: WorkflowGraph,
     artifact: CompilationArtifact,
-) -> list[tuple[StepNode, CompilationArtifact]]:
-    """Pair every resolved leaf step with the tool artifact it executes."""
-    if len(graph.steps) != len(artifact.children):
+) -> list[tuple[StepNode, Mapping[str, Any], CompilationArtifact]]:
+    """Pair every resolved leaf step with its emitted step and the tool artifact it executes."""
+    emitted_steps = _emitted_steps(artifact)
+    if len(graph.steps) != len(artifact.children) or len(graph.steps) != len(emitted_steps):
         raise ValueError("resolved graph steps do not match compilation artifacts")
-    leaves: list[tuple[StepNode, CompilationArtifact]] = []
-    for step, child_artifact in zip(graph.steps, artifact.children, strict=True):
-        emission = step.emission
-        if emission is None:
-            raise ValueError(f"resolved step {step.id} has no completed emission")
-        child_graph = emission.run.child
+    leaves: list[tuple[StepNode, Mapping[str, Any], CompilationArtifact]] = []
+    for step, emitted, child_artifact in zip(graph.steps, emitted_steps, artifact.children, strict=True):
+        if step.run is None:
+            raise ValueError(f"resolved step {step.id} has no run")
+        child_graph = step.run.child
         if child_graph is None:
             if child_artifact.graph is not None:
                 raise ValueError(f"tool step {step.id} unexpectedly owns a workflow artifact")
-            leaves.append((step, child_artifact))
+            leaves.append((step, emitted, child_artifact))
             continue
         if child_artifact.graph is None:
             raise ValueError(f"workflow step {step.id} has no resolved child artifact")
@@ -1471,22 +1485,15 @@ def _graph_edges(graph: WorkflowGraph) -> tuple[Edge, ...]:
     return graph.edges + tuple(edge for child in graph.children for edge in _graph_edges(child))
 
 
-def _flat_step_name(step: StepNode) -> str:
-    """Project a resolved occurrence identity into one backend step name."""
-    if step.emission is None:
-        raise ValueError(f"resolved step {step.id} has no completed emission")
-    return "___".join((*step.id.namespace.parts, step.emission.id))
-
-
 def _expanded_boundary_port(
     port_id: PortId,
     steps: Mapping[Any, StepNode],
 ) -> tuple[PortId, ...]:
     """Follow a resolved workflow-call boundary to its declared leaf port."""
     step = steps.get(port_id.step)
-    if step is None or step.emission is None or step.emission.run.child is None:
+    if step is None or step.run is None or step.run.child is None:
         return (port_id,)
-    child = step.emission.run.child
+    child = step.run.child
     if port_id.direction is Direction.INPUT:
         mapped = next((ports for name, ports in child.input_mapping if name == port_id.port), ())
         return tuple(
@@ -1505,11 +1512,11 @@ def _expanded_boundary_port(
     )
 
 
-def _source_port_name(port_id: PortId, leaf_names: Mapping[Any, str]) -> str:
+def _source_port_name(port_id: PortId, leaf_names: Mapping[Any, str], names: Names) -> str:
     process = leaf_names.get(port_id.step)
     if process is None:
         raise ValueError(f"resolved edge names non-executable source step {port_id.step}")
-    return f"{process}/{port_id.port}"
+    return f"{process}/{names.port(port_id.port)}"
 
 
 def _replace_step_source(raw: Any, source: str) -> Any:
@@ -1521,35 +1528,27 @@ def _replace_step_source(raw: Any, source: str) -> Any:
 
 def _leaf_step_document(
     step: StepNode,
+    emitted: Mapping[str, Any],
     *,
+    names: Names,
     edge_sources: Mapping[PortId, str],
     boundary_sources: Mapping[PortId, str],
 ) -> dict[str, Any]:
     """Project one resolved leaf step without repeating inference or inlining."""
-    emission = step.emission
-    if emission is None or emission.run.child is not None:
+    if step.run is None or step.run.child is not None:
         raise ValueError(f"{step.id} is not a completed executable leaf step")
-    raw_inputs = dict(emission.inputs)
+    ports = {names.port(port.id.port): port for port in step.inputs}
+    raw_inputs = _as_mapping(emitted.get("in", {}), error="compiled step inputs must be a mapping")
     inputs: dict[str, Any] = {}
     for port_name, raw in raw_inputs.items():
-        port = next((candidate for candidate in step.inputs if candidate.id.port == port_name), None)
+        port = ports.get(port_name)
         source = None if port is None else edge_sources.get(
             port.id, boundary_sources.get(port.id)
         )
         inputs[port_name] = copy.deepcopy(raw) if source is None else _replace_step_source(raw, source)
-    document: dict[str, Any] = {
-        "id": _flat_step_name(step),
-        "in": inputs,
-        "out": copy.deepcopy(list(emission.outputs)),
-        "run": copy.deepcopy(emission.run.target),
-    }
-    if emission.scatter is not None:
-        document["scatter"] = copy.deepcopy(emission.scatter)
-    if emission.scatter_method is not None:
-        document["scatterMethod"] = copy.deepcopy(emission.scatter_method)
-    if emission.when is not None:
-        document["when"] = copy.deepcopy(emission.when)
-    document.update(copy.deepcopy(dict(emission.passthrough)))
+    document = copy.deepcopy(dict(emitted))
+    document["id"] = names.qualified(step.id)
+    document["in"] = inputs
     return document
 
 
@@ -1558,9 +1557,10 @@ def compilation_result_source(result: CompilationResult) -> CompiledNextflowSour
     if not isinstance(result, CompilationResult):
         raise TypeError("Nextflow conversion requires a CompilationResult")
     graph = result.graph
+    names = Names.of(graph)
     leaves = _graph_steps_with_artifacts(graph, result.artifact)
     all_steps = {step.id: step for step in graph.all_steps}
-    leaf_names = {step.id: _flat_step_name(step) for step, _artifact in leaves}
+    leaf_names = {step.id: names.qualified(step.id) for step, _emitted, _artifact in leaves}
 
     edge_sources: dict[PortId, str] = {}
     for edge in _graph_edges(graph):
@@ -1568,7 +1568,7 @@ def compilation_result_source(result: CompilationResult) -> CompiledNextflowSour
         sinks = _expanded_boundary_port(edge.sink, all_steps)
         if len(sources) != 1:
             raise ValueError(f"resolved edge source {edge.source} is not singular")
-        source = _source_port_name(sources[0], leaf_names)
+        source = _source_port_name(sources[0], leaf_names, names)
         for sink in sinks:
             previous = edge_sources.setdefault(sink, source)
             if previous != source:
@@ -1578,24 +1578,26 @@ def compilation_result_source(result: CompilationResult) -> CompiledNextflowSour
     for name, mapped_ports in graph.input_mapping:
         for mapped_port in mapped_ports:
             for sink in _expanded_boundary_port(mapped_port, all_steps):
-                previous = boundary_sources.setdefault(sink, name)
-                if previous != name:
+                previous = boundary_sources.setdefault(sink, names.port(name))
+                if previous != names.port(name):
                     raise ValueError(f"resolved input {sink} has conflicting workflow parameters")
 
     workflow = copy.deepcopy(dict(result.artifact.cwl))
     workflow["steps"] = [
         _leaf_step_document(
             step,
+            emitted,
+            names=names,
             edge_sources=edge_sources,
             boundary_sources=boundary_sources,
         )
-        for step, _artifact in leaves
+        for step, emitted, _artifact in leaves
     ]
 
     outputs = workflow.get("outputs", {})
     if isinstance(outputs, Mapping):
         projected_outputs: dict[str, Any] = {}
-        mapped_outputs = dict(graph.output_mapping)
+        mapped_outputs = {names.port(name): port for name, port in graph.output_mapping}
         for name, raw_definition in outputs.items():
             definition = copy.deepcopy(raw_definition)
             output_port = mapped_outputs.get(str(name))
@@ -1603,7 +1605,7 @@ def compilation_result_source(result: CompilationResult) -> CompiledNextflowSour
                 expanded = _expanded_boundary_port(output_port, all_steps)
                 if len(expanded) != 1:
                     raise ValueError(f"workflow output {name!r} is not singular")
-                source = _source_port_name(expanded[0], leaf_names)
+                source = _source_port_name(expanded[0], leaf_names, names)
                 if isinstance(definition, Mapping):
                     definition = {**dict(definition), "outputSource": source}
             projected_outputs[str(name)] = definition
@@ -1612,7 +1614,7 @@ def compilation_result_source(result: CompilationResult) -> CompiledNextflowSour
     return CompiledNextflowSource(
         graph.name or result.artifact.name,
         workflow,
-        tuple(copy.deepcopy(dict(artifact.cwl)) for _step, artifact in leaves),
+        tuple(copy.deepcopy(dict(artifact.cwl)) for _step, _emitted, artifact in leaves),
         copy.deepcopy(dict(result.artifact.job_inputs)),
     )
 
@@ -1630,40 +1632,41 @@ def _nested_workflow_capability_findings(
     workflow call or child workflow must be either consumed here or rejected
     before the call node is projected away.
     """
-    if len(graph.steps) != len(artifact.children):
+    emitted_steps = _emitted_steps(artifact)
+    if len(graph.steps) != len(artifact.children) or len(graph.steps) != len(emitted_steps):
         return [f"{path}.steps: resolved graph steps do not match compilation artifacts"]
     findings: list[str] = []
-    for index, (step, child_artifact) in enumerate(
-        zip(graph.steps, artifact.children, strict=True)
+    for index, (step, emitted, child_artifact) in enumerate(
+        zip(graph.steps, emitted_steps, artifact.children, strict=True)
     ):
-        emission = step.emission
-        if emission is None or emission.run.child is None:
+        if step.run is None or step.run.child is None:
             continue
         step_path = f"{path}.steps[{index}]"
-        if emission.when is not None:
+        if emitted.get("when") is not None:
             findings.append(
                 f"{step_path}.when: CWL step when conditions are not supported in "
                 "Nextflow Phase 1"
             )
-        if emission.scatter is not None:
+        if emitted.get("scatter") is not None:
             findings.append(
                 f"{step_path}.scatter: scatter on a nested workflow step is deferred "
                 "beyond this lowering; scattering a sub-DAG is not the single-process "
                 "shape scatter supports"
             )
-        elif emission.scatter_method is not None:
+        elif emitted.get("scatterMethod") is not None:
             findings.append(
                 f"{step_path}.scatterMethod: scatterMethod without scatter is not executable"
             )
-        wrapper_fields = dict(emission.passthrough)
         findings.extend(
             _unconsumed_field_findings(
-                wrapper_fields,
+                {name: value for name, value in emitted.items() if name not in _STEP_CORE_FIELDS},
                 consumed=_INERT_DOCUMENTATION_FIELDS,
                 path=step_path,
             )
         )
-        for raw_name, definition in emission.inputs:
+        for raw_name, definition in _as_mapping(
+            emitted.get("in", {}), error="compiled step inputs must be a mapping"
+        ).items():
             if isinstance(definition, Mapping):
                 findings.extend(
                     _unconsumed_field_findings(
@@ -1705,7 +1708,7 @@ def _nested_workflow_capability_findings(
                     )
         findings.extend(
             _nested_workflow_capability_findings(
-                emission.run.child,
+                step.run.child,
                 child_artifact,
                 path=child_path,
             )
