@@ -37,6 +37,7 @@ from .nf_types import (
     NfWorkflowInputConnection,
     NfWorkflowOutputConnection,
 )
+from .utils_cwl import desugar_into_canonical_normal_form
 
 
 @dataclass(frozen=True, slots=True)
@@ -1614,7 +1615,10 @@ def compilation_result_source(result: CompilationResult) -> CompiledNextflowSour
     return CompiledNextflowSource(
         graph.name or result.artifact.name,
         workflow,
-        tuple(copy.deepcopy(dict(artifact.cwl)) for _step, _emitted, artifact in leaves),
+        tuple(
+            desugar_into_canonical_normal_form(copy.deepcopy(dict(artifact.cwl)))
+            for _step, _emitted, artifact in leaves
+        ),
         copy.deepcopy(dict(result.artifact.job_inputs)),
     )
 
