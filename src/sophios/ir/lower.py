@@ -9,32 +9,36 @@ READS THE AST AND NOTHING ELSE -- no registry, no filesystem, no config.
 Resolving a step's tool against the environment is `Resolve`'s job, so a port's
 type is what the document declared and inference has not run.
 """
+import difflib
 from typing import Final
 from dataclasses import dataclass
 
 from ..lang.cwl import CWL_VERSION
 from ..lang.diagnostics import Diagnostics, Locator
 from ..lang.error_codes import SophiosErrorCode
-from ..lang.nodes import Document, EdgeRef, InputValue, UnresolvedName
+from ..lang.nodes import Document, EdgeRef, InputValue, Step, UnresolvedName
 from ..lang.versions import (ANNOTATION_KEY, ANNOTATION_NAMESPACE,
                              ANNOTATION_NAMESPACE_URI)
 from .declarations import port_declaration
+from .names import render_step_id
 from .resolve import ResolvedDocument, ResolvedStep
 from .types import (
+    AuthoredName,
     Binding,
+    BoundaryDeclaration,
     DeferredObligation,
     Direction,
     Edge,
     Namespace,
-    ProcessRun,
     Port,
     PortId,
+    PortName,
+    ProcessRun,
     Resolution,
-    StepEmission,
     StepId,
     StepNode,
-    WorkflowPort,
     WorkflowGraph,
+    WorkflowPort,
 )
 
 
@@ -89,17 +93,18 @@ def _lower_resolved(document: ResolvedDocument,
     children: list[WorkflowGraph] = []
 
     for identity, resolved_step in zip(identities, document.steps, strict=True):
-        node = _resolved_step_node(document.name, identity, resolved_step,
-                                   defined_so_far, defined_anywhere, diagnostics)
+        # Lowered before its step, so the child's diagnostics travel with it.
+        child = (_lower_resolved(resolved_step.process.child, here.child(identity))
+                 if resolved_step.process.child is not None else None)
+        node = _resolved_step_node(identity, resolved_step, defined_so_far,
+                                   defined_anywhere, diagnostics)
         nodes.append(node)
         for authored in resolved_step.source.outputs:
             if authored.edge_def is not None:
                 defined_so_far.setdefault(
                     authored.edge_def.name,
-                    PortId(identity, Direction.OUTPUT, authored.name))
-        if resolved_step.process.child is not None:
-            child_namespace = here.child(node.emission.id if node.emission is not None else identity.name)
-            child = _lower_resolved(resolved_step.process.child, child_namespace)
+                    PortId(identity, Direction.OUTPUT, AuthoredName(authored.name)))
+        if child is not None:
             if child.graph is not None:
                 children.append(child.graph)
             for diagnostic in child.diagnostics:
@@ -117,7 +122,7 @@ def _lower_resolved(document: ResolvedDocument,
     output_mapping = tuple(
         (port.name, source)
         for port in workflow_outputs
-        for source in [_output_port(nodes, port.output_source)]
+        for source in [_output_port(document.name, nodes, port.output_source)]
         if source is not None
     )
     namespaces_raw = passthrough.get('$namespaces', {})
@@ -127,10 +132,8 @@ def _lower_resolved(document: ResolvedDocument,
                            (ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI),)
     schemas_raw = passthrough.get('$schemas', ())
     schemas = tuple(schemas_raw) if isinstance(schemas_raw, list) else ()
-    # CWL also spells `requirements:` as a list, and a bare `requirements:`
-    # parses to None. Sophios merges into the mapping form, so that is the one
-    # shape the graph models; any other is residue it carries opaquely and
-    # Emit writes back unchanged. Dropping it silently rewrote the document.
+    # Only the mapping form of `requirements:` is modeled; any other shape
+    # (list, or None from a bare key) is carried opaquely and Emit writes it back unchanged.
     requirements_raw = passthrough.get('requirements', {})
     requirements = (tuple(requirements_raw.items())
                     if isinstance(requirements_raw, dict) else ())
@@ -140,14 +143,6 @@ def _lower_resolved(document: ResolvedDocument,
         reserved.add('requirements')
     opaque = tuple((key, value) for key, value in document.source.passthrough
                    if key not in reserved)
-    field_order_list = [key for key in document.source.field_order if key != 'wic']
-    for key in ('cwlVersion', 'class', '$namespaces', '$schemas', 'inputs',
-                ANNOTATION_KEY, 'outputs'):
-        if key not in field_order_list:
-            field_order_list.append(key)
-    field_order: tuple[str, ...] = tuple(field_order_list)
-    if requirements and 'requirements' not in field_order:
-        field_order += ('requirements',)
     known_ports = {port.id for node in nodes for port in node.inputs + node.outputs}
     graph = WorkflowGraph(
         namespace=here,
@@ -171,7 +166,6 @@ def _lower_resolved(document: ResolvedDocument,
         namespaces=namespaces,
         schemas=schemas,
         children=tuple(children),
-        field_order=field_order,
     )
     return Lowered(graph if not diagnostics.has_errors else None, diagnostics)
 
@@ -181,17 +175,14 @@ def _lower_resolved(document: ResolvedDocument,
 _GENERATION_PARAMETERS: Final = ('script', 'dockerPull')
 
 
-def _resolved_step_node(workflow_name: str, identity: StepId, resolved: ResolvedStep,
+def _resolved_step_node(identity: StepId, resolved: ResolvedStep,
                         defined_so_far: dict[str, PortId], defined_anywhere: dict[str, PortId],
                         diagnostics: Diagnostics) -> StepNode:
     source = resolved.source
-    declared_inputs = {port.name: port.declaration for port in resolved.process.inputs}
-    declared_outputs = {port.name: port.declaration for port in resolved.process.outputs}
-    # A generated process consumes its generation parameters rather than
-    # declaring them: `script` becomes the command and `dockerPull` a container
-    # hint, so neither survives into the tool's interface. The document still
-    # binds them, and that binding is what produced the tool -- not a port the
-    # step got wrong.
+    declared_inputs = {AuthoredName(port.name): port.declaration for port in resolved.process.inputs}
+    declared_outputs = {AuthoredName(port.name): port.declaration for port in resolved.process.outputs}
+    # A generated process consumes `script`/`dockerPull` to build its tool;
+    # neither survives into the tool's declared interface.
     consumed = _GENERATION_PARAMETERS if resolved.process.generated else ()
     for name, _ in source.inputs:
         if name not in declared_inputs and name not in consumed:
@@ -217,39 +208,75 @@ def _resolved_step_node(workflow_name: str, identity: StepId, resolved: Resolved
                          declaration, source.span)
                     for name, declaration in declared_outputs.items())
     by_input = {port.id.port: port for port in inputs}
-    bindings = tuple(Binding(by_input[name].id, value,
-                             _resolve(value, by_input[name], defined_so_far,
-                                      defined_anywhere, diagnostics))
-                     for name, value in source.inputs if name in by_input)
+    bindings = tuple(Binding(port.id, value,
+                             _resolve(value, port, defined_so_far, defined_anywhere, diagnostics))
+                     for name, value in source.inputs
+                     if (port := by_input.get(AuthoredName(name))) is not None)
     interpreted = dict(source.interpreted)
-    emitted_id = f'{workflow_name}__step__{identity.index}__{source.id}'
-    field_order = list(source.field_order)
-    if 'id' in field_order:
-        field_order.remove('id')
-    field_order.insert(0, 'id')
-    for key in ('run', 'in', 'out'):
-        if key not in field_order:
-            field_order.append(key)
-    emission = StepEmission(
-        id=emitted_id,
-        # Empty, deliberately. Every authored input naming a declared port
-        # becomes a `Binding` above, and Complete writes each one: a literal to
-        # a workflow input, a raw reference to its expression, a name to
-        # itself, an edge to its source. Seeding this with the spelling the
-        # document used made the *default* state invalid CWL -- a `wic_alias:`
-        # nobody replaced reached the runner instead of the compiler.
-        inputs=(),
-        run=ProcessRun(resolved.process.run_path, resolved.process.key),
-        outputs=tuple(declared_outputs),
-        scatter=interpreted.get('scatter'),
-        scatter_method=interpreted.get('scatterMethod'),
-        when=interpreted.get('when'),
-        passthrough=source.passthrough,
-        field_order=tuple(field_order),
-    )
+    run = ProcessRun(resolved.process.run_path, resolved.process.key)
+    scatter_ports = _scatter_ports(source, identity, inputs, diagnostics,
+                                   calls_workflow=resolved.process.child is not None)
     return StepNode(identity, inputs, outputs, bindings, source.interpreted,
-                    source.passthrough, source.span, emission,
+                    source.passthrough, source.span, run, scatter_ports,
                     _inference_rules(resolved.sidecar))
+
+
+def _scatter_ports(source: Step, identity: StepId, inputs: tuple[Port, ...],
+                   diagnostics: Diagnostics, *, calls_workflow: bool) -> tuple[PortName, ...]:
+    """The ports an authored `scatter:` names, in the order written.
+
+    A name must be an input of the step itself; on a subworkflow call those
+    are exactly the inputs the subworkflow declares. Any other name is
+    `wic032`, as is an entry that is not a name at all and a `scatter:` that is
+    neither a name nor a list of them. A name the compiler generates for a port
+    inside the subworkflow never resolves, so a caller cannot depend on how its
+    callee is laid out.
+    """
+    scatter = dict(source.interpreted).get('scatter')
+    locator = Locator(step=source.id, index=identity.index)
+    if scatter is not None and not isinstance(scatter, (str, list)):
+        diagnostics.error(SophiosErrorCode.UNKNOWN_SCATTER_PORT,
+                          f"step '{source.id}' has `scatter: {scatter!r}`, which names no input. "
+                          "`scatter:` is an input name or a list of them.",
+                          source.span, locator)
+    written: list[object] = [scatter] if isinstance(scatter, str) else (
+        list(scatter) if isinstance(scatter, list) else [])
+    ports: dict[str, PortName] = {str(port.id.port): port.id.port for port in inputs}
+    found: list[PortName] = []
+    for text in written:
+        if not isinstance(text, str):
+            diagnostics.error(SophiosErrorCode.UNKNOWN_SCATTER_PORT,
+                              f"step '{source.id}' has the scatter entry {text!r}, which is not "
+                              "a name. Each `scatter:` entry names one of the step's inputs.",
+                              source.span, locator)
+            continue
+        if text in ports:
+            found.append(ports[text])
+            continue
+        diagnostics.error(SophiosErrorCode.UNKNOWN_SCATTER_PORT,
+                          _unknown_scatter(source.id, text, list(ports), calls_workflow),
+                          source.span, locator)
+    return tuple(found)
+
+
+def _unknown_scatter(step: str, text: str, ports: list[str], calls_workflow: bool) -> str:
+    """Name the step and the bad name, then the closest valid one, then all of them."""
+    message = f"step '{step}' scatters over '{text}', which is not one of its inputs."
+    close = difflib.get_close_matches(text, ports, n=1)
+    if close:
+        message += f" Did you mean '{close[0]}'?"
+    if ports:
+        shown = ', '.join(f"'{name}'" for name in ports[:_SHOWN_NAMES])
+        more = f' and {len(ports) - _SHOWN_NAMES} more' if len(ports) > _SHOWN_NAMES else ''
+        message += f' Its inputs: {shown}{more}.'
+    if calls_workflow:
+        message += (" A subworkflow call's inputs are the ones the subworkflow declares in "
+                    "`inputs:`; to scatter over one of its steps' inputs, declare it there.")
+    return message
+
+
+#: How many valid names an unknown-scatter message lists before truncating.
+_SHOWN_NAMES: Final = 8
 
 
 def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
@@ -257,22 +284,26 @@ def _workflow_ports(raw: object, *, output: bool) -> tuple[WorkflowPort, ...]:
         return ()
     ports: list[WorkflowPort] = []
     for name, declaration_raw in raw.items():
-        declaration = port_declaration(declaration_raw, output=output)
+        # Asserted, not reduced via `boundary_declaration`: it is already a
+        # boundary declaration by where it's written, and reducing it would
+        # discard fields the author wrote at the boundary on purpose.
+        declaration = BoundaryDeclaration(port_declaration(declaration_raw, output=output))
         has_source = output and isinstance(declaration_raw, dict) \
             and 'outputSource' in declaration_raw
         source = declaration_raw.get('outputSource') if has_source else None
-        ports.append(WorkflowPort(str(name), declaration, source, has_source))
+        ports.append(WorkflowPort(AuthoredName(str(name)), declaration, source, has_source))
     return tuple(ports)
 
 
-def _output_port(nodes: list[StepNode], raw: object) -> PortId | None:
+def _output_port(workflow_name: str, nodes: list[StepNode], raw: object) -> PortId | None:
+    """The step output an authored `outputSource: <step>/<port>` names, if any."""
     if not isinstance(raw, str) or '/' not in raw:
         return None
     step_name, port_name = raw.rsplit('/', 1)
-    for node in nodes:
-        emitted = node.emission.id if node.emission is not None else node.id.name
-        if step_name in {emitted, node.id.name}:
-            return next((port.id for port in node.outputs if port.id.port == port_name), None)
+    for position, node in enumerate(nodes, start=1):
+        if step_name in {render_step_id(workflow_name, position, node.id.name), node.id.name}:
+            return next((port.id for port in node.outputs
+                         if port.id.port == AuthoredName(port_name)), None)
     return None
 
 
@@ -296,12 +327,9 @@ def _inference_rules(sidecar: object) -> tuple[tuple[str, str], ...]:
 
 def _step_identities(document: Document, here: Namespace,
                      diagnostics: Diagnostics) -> tuple[StepId, ...] | None:
-    """One occurrence identity per step, or None when a step cannot have one.
+    """One occurrence identity per step, or None when a step lacks an id.
 
-    A repeated `id` is not an error: sequence-form `steps:` exists so that a
-    tool can be invoked twice, and `docs/tutorials/append_twice.wic` does. What
-    cannot be lowered is a step the parser recovered without a name, which is
-    reported rather than raised.
+    A repeated `id` is not an error: sequence-form `steps:` invokes one tool twice.
     """
     identities: list[StepId] = []
     for index, step in enumerate(document.steps, start=1):
@@ -314,16 +342,8 @@ def _step_identities(document: Document, here: Namespace,
 
 
 def _every_name_is_present(document: Document, diagnostics: Diagnostics) -> bool:
-    """Report every position where the document left a name empty.
-
-    The types refuse an unnamed port or obligation, and refusing is right --
-    but the refusal is a `ValueError`, and `parse` accepts `in: {"": ...}`.
-    Checking here is what keeps lowering total: the same reason `_step_identities`
-    reports an unnamed step rather than letting `StepId` raise.
-
-    All of them report one code. They are one mistake in four positions, and a
-    reader who wrote nothing where a name goes is not helped by being told which
-    of the four the checker noticed first.
+    """Report every position where the document left a name empty, all under
+    one error code, so lowering stays total rather than raising `ValueError`.
     """
     found = False
     for index, step in enumerate(document.steps, start=1):
@@ -355,12 +375,7 @@ def _every_name_is_present(document: Document, diagnostics: Diagnostics) -> bool
 
 def _edge_definitions(identities: tuple[StepId, ...], document: Document,
                       diagnostics: Diagnostics) -> dict[str, PortId]:
-    """Which port defines each explicit edge name, reporting any defined twice.
-
-    Every definition is visited before any is dropped, so a repeat is a
-    diagnostic rather than a silently discarded second entry that no later phase
-    could report.
-    """
+    """Which port defines each explicit edge name, reporting any defined twice."""
     defined: dict[str, PortId] = {}
     for step_id, step in zip(identities, document.steps, strict=True):
         for binding in step.outputs:
@@ -371,9 +386,10 @@ def _edge_definitions(identities: tuple[StepId, ...], document: Document,
                 diagnostics.error(
                     SophiosErrorCode.DUPLICATE_EDGE_DEF,
                     f"'&{name}' is defined more than once. An edge name identifies one producer.",
-                    binding.edge_def.span)
+                    binding.edge_def.span,
+                    Locator(step=step.id, index=step_id.index, port=binding.name))
                 continue
-            defined[name] = PortId(step_id, Direction.OUTPUT, binding.name)
+            defined[name] = PortId(step_id, Direction.OUTPUT, AuthoredName(binding.name))
     return defined
 
 
@@ -389,6 +405,7 @@ def _resolve(value: InputValue, port: Port, defined_so_far: dict[str, PortId],
         diagnostics.error(
             SophiosErrorCode.UNDEFINED_EDGE,
             f"'!* {value.name}' is referenced before '!& {value.name}' defines it.",
-            value.span)
+            value.span,
+            Locator(step=port.id.step.name, index=port.id.step.index, port=str(port.id.port)))
         return None
     return DeferredObligation(port.id, value.name, port.type, span=value.span)

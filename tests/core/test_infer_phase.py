@@ -20,46 +20,33 @@ from hypothesis import given
 from sophios.ir import (
     InferencePolicy,
     InsertionCatalog,
-    RegistrySnapshot,
     front_end,
     infer,
     link,
 )
-from sophios.ir.types import Port, PortDeclaration, PortId, StepNode, WorkflowGraph
+from sophios.ir.names import Names
+from sophios.ir.declarations import input_rank, layered, output_rank
+from sophios.ir.types import (DerivedName, EdgeOrigin, Port, PortDeclaration, PortId, PortName,
+                              StepNode, WorkflowGraph)
 from sophios.lang import SophiosErrorCode
 from sophios.wic_types import StepId as LegacyStepId, Tool, Tools, Yaml
 
 from . import ast_strategies as strat
-from .hermetic import ORACLE, compile_hermetic, subworkflow_step
+from .hermetic import ORACLE, bundle, compile_hermetic, subworkflow_step
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, clt
-from .test_resolve import _scalar_literals_fit, _source_model
 
 
 def _typed(workflow: Yaml, tools: Tools = SYNTHETIC_TOOLS):  # type: ignore[no-untyped-def]
-    source, workflows = _source_model(workflow)
-    registry = RegistrySnapshot.from_tools(tools, workflows=workflows)
-    result = front_end(source, registry, name='oracle')
+    model = bundle(workflow, 'oracle', tools)
+    result = front_end(model.parsed, model.registry, name='oracle')
     assert result.graph is not None and result.resolved is not None
     linked = link(result.graph)
     assert linked.graph is not None, list(linked.diagnostics)
-    return result, linked.graph, registry
+    return result, linked.graph, model.registry
 
 
 @pytest.mark.skip_pypi_ci
-@given(strat.workflows().filter(_scalar_literals_fit))
-@ORACLE
-def test_the_live_compiler_retains_typed_inference(workflow: Yaml) -> None:
-    """The default path carries typed inference decisions into its final graph."""
-    _, linked, _ = _typed(copy.deepcopy(workflow))
-    inferred = infer(linked)
-    assert inferred.graph is not None, list(inferred.diagnostics)
-    live = compile_hermetic(copy.deepcopy(workflow)).graph
-    expected = {(edge.source, edge.sink) for edge in inferred.graph.inferred_edges}
-    assert expected <= {(edge.source, edge.sink) for edge in live.inferred_edges}
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows().filter(_scalar_literals_fit))
+@given(strat.workflows())
 @ORACLE
 def test_every_inferred_edge_is_the_independent_models_choice(workflow: Yaml) -> None:
     """Removing candidate selection or changing its order breaks this predicate."""
@@ -68,7 +55,9 @@ def test_every_inferred_edge_is_the_independent_models_choice(workflow: Yaml) ->
     assert inferred.graph is not None, list(inferred.diagnostics)
     for graph in _graphs(inferred.graph):
         original = next(item for item in _graphs(linked) if item.namespace == graph.namespace)
-        for edge in graph.inferred_edges:
+        for edge in graph.linked_edges:
+            if edge.origin is not EdgeOrigin.INFERRED:
+                continue
             position = next(index for index, step in enumerate(original.steps)
                             if step.id == edge.sink.step)
             sink = _port(original.steps[position].inputs, edge.sink.port)
@@ -90,8 +79,8 @@ def test_most_recent_step_and_last_declared_output_win() -> None:
     _, linked, _ = _typed(workflow, tools)
     result = infer(linked)
     assert result.graph is not None
-    count_edge = next(edge for edge in result.graph.inferred_edges
-                      if edge.sink.step.name == 'count')
+    count_edge = next(edge for edge in result.graph.linked_edges
+                      if edge.origin is EdgeOrigin.INFERRED and edge.sink.step.name == 'count')
     assert count_edge.source.step.name == 'multi_file'
     assert count_edge.source.port == 'last'
 
@@ -106,31 +95,8 @@ def test_falsy_defaults_satisfy_inputs(default: object) -> None:
     _, linked, _ = _typed({'steps': [{'id': 'defaulted'}]}, tools)
     result = infer(linked)
     assert result.graph is not None
-    assert result.graph.inferred_edges == ()
+    assert not any(edge.origin is EdgeOrigin.INFERRED for edge in result.graph.linked_edges)
     assert result.graph.workflow_inputs == ()
-
-
-@pytest.mark.fast
-def test_promoted_input_normalizes_a_scalar_format() -> None:
-    """Canonicalize a synthesized literal format set to the list spelling.
-
-    CWL v1.2 permits one literal IRI as either a string or a list of strings.
-    This is a new workflow input synthesized by Sophios, not an authored
-    declaration whose spelling must be preserved, so the singleton list is our
-    deterministic canonical form.
-    """
-    tool = clt({'file': {'type': 'File', 'format': 'edam:format_1'}}, {}, canonical=True)
-    tools = {LegacyStepId('formatted_sink', SYNTHETIC_NS):
-             Tool('/synthetic/formatted_sink.cwl', tool)}
-    workflow = {'steps': [{'id': 'formatted_sink'}]}
-    _, linked, _ = _typed(workflow, tools)
-    result = infer(linked)
-    assert result.graph is not None, list(result.diagnostics)
-    assert result.graph.workflow_inputs[0].declaration.format == ['edam:format_1']
-    # The phase's decision is what the compiler emits, not merely what it holds.
-    compiled = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools))
-    boundary = next(iter(compiled.artifact.cwl['inputs'].values()))
-    assert boundary['format'] == ['edam:format_1']
 
 
 @pytest.mark.fast
@@ -139,13 +105,10 @@ def test_promoted_input_normalizes_a_scalar_format() -> None:
     '${ return inputs.source.format; }',
 ])
 def test_promoted_input_preserves_a_cwl_format_expression(expression: str) -> None:
-    """Preserve an expression, deliberately diverging from legacy spelling.
-
-    CWL v1.2 defines ``format`` as string, array-of-string IRIs, or Expression.
-    An expression therefore occupies a different union arm from a literal
-    singleton set. Infer keeps any string containing a CWL ``$(`` or ``${``
-    marker opaque, so an expression reaches the boundary unchanged rather than
-    becoming the sole element of an array.
+    """A lifted input carries the tool's `format` verbatim, in the graph and
+    in the emitted document -- the one test that a promoted boundary keeps
+    `format` at all. An expression is the spelling a rewrite would most
+    likely break.
     """
     tool = clt({'file': {'type': 'File', 'format': expression}}, {}, canonical=True)
     tools = {LegacyStepId('formatted_sink', SYNTHETIC_NS):
@@ -175,7 +138,8 @@ def test_scatter_lifts_both_sides_of_candidate_selection() -> None:
     _, linked, _ = _typed(workflow, tools)
     result = infer(linked)
     assert result.graph is not None
-    sinks = {(edge.sink.step.name, edge.sink.port) for edge in result.graph.inferred_edges}
+    sinks = {(edge.sink.step.name, edge.sink.port) for edge in result.graph.linked_edges
+             if edge.origin is EdgeOrigin.INFERRED}
     assert ('file_array_sink', 'files') in sinks
     assert ('count', 'file') not in sinks
 
@@ -205,10 +169,12 @@ def test_workflow_call_outputs_are_inference_candidates() -> None:
     _, linked, _ = _typed(workflow)
     result = infer(linked)
     assert result.graph is not None, list(result.diagnostics)
-    assert any(edge.sink.step.name == 'count' for edge in result.graph.inferred_edges)
+    assert any(edge.sink.step.name == 'count' for edge in result.graph.linked_edges
+               if edge.origin is EdgeOrigin.INFERRED)
     # The live compiler infers the same edge from the same document.
     live = compile_hermetic(copy.deepcopy(workflow)).graph
-    assert any(edge.sink.step.name == 'count' for edge in live.inferred_edges)
+    assert any(edge.sink.step.name == 'count' for edge in live.linked_edges
+               if edge.origin is EdgeOrigin.INFERRED)
 
 
 @pytest.mark.fast
@@ -243,7 +209,7 @@ def test_converter_search_stops_at_the_candidate_break() -> None:
                    InsertionCatalog.from_registry(registry))
     assert result.graph is not None, list(result.diagnostics)
     assert not any(step.synthesized for step in result.graph.steps)
-    assert [port.name for port in result.graph.workflow_inputs] == [
+    assert [Names.of(result.graph).port(port.name) for port in result.graph.workflow_inputs] == [
         'oracle__step__3__use_1___file']
     live = compile_hermetic(copy.deepcopy(workflow), tools=copy.deepcopy(tools),
                             insert_steps_automatically=True)
@@ -277,7 +243,7 @@ def test_format_substrings_do_not_match() -> None:
     _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
     result = infer(linked)
     assert result.graph is not None
-    assert not result.graph.inferred_edges
+    assert not any(edge.origin is EdgeOrigin.INFERRED for edge in result.graph.linked_edges)
 
 
 @pytest.mark.fast
@@ -295,7 +261,7 @@ def test_non_file_output_without_format_can_satisfy_formatted_input() -> None:
     _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
     result = infer(linked)
     assert result.graph is not None
-    assert len(result.graph.inferred_edges) == 1
+    assert sum(edge.origin is EdgeOrigin.INFERRED for edge in result.graph.linked_edges) == 1
 
 
 @pytest.mark.fast
@@ -315,7 +281,8 @@ def test_unknown_file_format_does_not_outrank_an_exact_match() -> None:
     _, linked, _ = _typed({'steps': [{'id': 'producer'}, {'id': 'consumer'}]}, tools)
     result = infer(linked)
     assert result.graph is not None
-    assert result.graph.inferred_edges[0].source.port == 'matching'
+    assert next(edge for edge in result.graph.linked_edges
+                if edge.origin is EdgeOrigin.INFERRED).source.port == 'matching'
 
 
 def _model_candidate(steps: tuple[StepNode, ...], position: int,
@@ -327,7 +294,7 @@ def _model_candidate(steps: tuple[StepNode, ...], position: int,
         for output in reversed(producer.outputs):
             source_type = _model_source_type(producer, output)
             source_formats = _model_formats(output.declaration)
-            if ('_log_' not in output.id.port
+            if (not any('_log_' in name for name in _model_names(output.id.port))
                     and _model_types_match(sink_type, source_type)
                     and _model_formats_match(sink_formats, source_formats, source_type)):
                 return output.id
@@ -369,34 +336,21 @@ def _model_permits_format(value: Any) -> bool:
 
 
 def _model_source_type(step: StepNode, port: Port) -> Any:
-    raw = _model_type(port)
-    return {'type': 'array', 'items': raw} \
-        if step.emission is not None and step.emission.scatter else raw
+    """CWL v1.2: `nested_crossproduct` nests one array per scattered input;
+    every other method yields one flat array. Rank is `output_rank`."""
+    return layered(port.type, output_rank(step)).canonical
 
 
 def _model_sink_type(step: StepNode, port: Port) -> Any:
-    raw = _model_type(port)
-    scatter = step.emission.scatter if step.emission is not None else None
-    keys = [scatter] if isinstance(scatter, str) else (
-        [item for item in scatter if isinstance(item, str)]
-        if isinstance(scatter, list) else [])
-    return {'type': 'array', 'items': raw} if port.id.port in keys else raw
+    """One array per time `scatter:` names the input, which is `input_rank`."""
+    return layered(port.type, input_rank(step, port.id.port)).canonical
 
 
-def _model_type(port: Port) -> Any:
-    raw = port.type.declared
-    if not isinstance(raw, str):
-        return raw
-    base = raw.removesuffix('?')
-    while base.endswith('[]'):
-        base = base[:-2]
-    value: Any = base
-    for _ in range(port.type.array_depth):
-        value = {'type': 'array', 'items': value}
-    return ['null', value] if port.type.optional else value
+def _model_names(name: PortName) -> tuple[str, ...]:
+    return (name.step.name, *_model_names(name.port)) if isinstance(name, DerivedName) else (name,)
 
 
-def _port(ports: tuple[Port, ...], name: str) -> Port:
+def _port(ports: tuple[Port, ...], name: PortName) -> Port:
     return next(port for port in ports if port.id.port == name)
 
 

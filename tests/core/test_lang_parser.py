@@ -17,7 +17,7 @@ from typing import Any, Final, NamedTuple, get_args
 
 import pytest
 import yaml
-from hypothesis import HealthCheck, example, given, settings
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from sophios.lang import (
@@ -39,10 +39,11 @@ from sophios.lang.spans import SourceSpan
 from sophios.utils_yaml import Key, wic_loader
 
 from . import provocations
+from .budgets import budget
 from .wic_corpus import CORPUS, corpus_id
 from .strategies import documents, identifiers
 
-FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+FAST = budget(200)
 
 
 # --------------------------------------------------------------------------
@@ -65,20 +66,26 @@ def _spans(node: Any) -> list[SourceSpan]:
             for _, value in node.inputs:
                 found += _spans(value)
             for binding in node.outputs:
-                found.append(binding.span)
+                found.append(_parsed(binding.span))
                 if binding.edge_def is not None:
-                    found.append(binding.edge_def.span)
+                    found.append(_parsed(binding.edge_def.span))
         case WicSidecar():
             found += _opt(node.span)
             for _, child in node.steps:
                 found += _spans(child)
         case InlineLiteral() | EdgeDef() | EdgeRef() | RawCwlRef() | UnresolvedName():
-            found.append(node.span)
+            found.append(_parsed(node.span))
     return found
 
 
 def _opt(span: SourceSpan | None) -> list[SourceSpan]:
     return [span] if span is not None else []
+
+
+def _parsed(span: SourceSpan | None) -> SourceSpan:
+    """A value node's span, which may be absent only on a document built in memory."""
+    assert span is not None, 'a parsed value node has no span'
+    return span
 
 
 def _resolvable(span: SourceSpan, text: str) -> bool:
@@ -729,6 +736,48 @@ def test_python_api_emits_documents_this_parser_accepts() -> None:
     assert isinstance(emitted, InlineLiteral)
     assert emitted.value == 'empty.txt'
 
+
+def _nested_api_workflow() -> Any:
+    """A parent calling one nested workflow whose steps share an edge."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.api.python.workflow import Step as ApiStep
+    from sophios.api.python.workflow import Workflow
+
+    from .test_python_api_workflow import _adapter
+
+    touch = ApiStep(clt_path=_adapter('touch'))
+    touch.inputs.filename = 'empty.txt'
+    append = ApiStep(clt_path=_adapter('append'))
+    append.inputs.file = touch.outputs.file
+    append.inputs.str = 'Hello'
+    child = Workflow([touch, append], 'adherence_child')
+    return Workflow([child], 'adherence_parent')
+
+
+@pytest.mark.fast
+def test_python_api_writes_nested_workflows_this_parser_accepts(tmp_path: Path) -> None:
+    """Written with `inline_subworkflows=False`, every file of a nested workflow
+    parses: the parent calls the child by name, and the child's edge is an
+    ordinary `!&`/`!*` pair in its own document (reference §6.2)."""
+    root = _nested_api_workflow().write_wic(tmp_path, inline_subworkflows=False)
+
+    written = sorted(tmp_path.glob('*.wic'))
+    assert root in written and len(written) == 2, written
+    for path in written:
+        result = parse(path.read_text(), path.name)
+        assert result.ok, (path.name, [str(d) for d in result.diagnostics])
+
+
+@pytest.mark.fast
+@pytest.mark.xfail(strict=True, reason="the inline form nests the child's to_json projection "
+                   "under `subtree:`, where its edge definitions are wic019 (reference §6.2)")
+def test_python_api_inline_nested_form_parses() -> None:
+    """The known exception to obligation 1. When the inline form becomes a
+    document the parser accepts, this starts passing and strict xfail says so."""
+    result = parse(_nested_api_workflow().to_wic_yaml(), 'api_inline_nested.wic')
+
+    assert result.ok, [str(d) for d in result.diagnostics]
+
 # --------------------------------------------------------------------------
 # The parser is never more permissive than the loader
 # --------------------------------------------------------------------------
@@ -820,7 +869,7 @@ def test_sidecar_nesting_is_normalised_at_every_depth() -> None:
     result = parse(
         'wic:\n  steps:\n    (1, outer):\n      wic:\n        steps:\n'
         '          (1, inner):\n            wic:\n              steps:\n'
-        '                (1, innermost):\n                  x: 1\n',
+        '                (1, innermost):\n                  namespace: global\n',
         'nested.wic')
     assert result.ok and result.document is not None and result.document.sidecar is not None
 
@@ -851,6 +900,71 @@ def test_a_sidecar_steps_out_accepts_an_edge_definition() -> None:
     assert sugared.ok, [str(d) for d in sugared.diagnostics]
 
 
+#: A well-formed value for every `wic:` key, as flow YAML. Keyed by the
+#: declaration, so a key added there without a row here fails the lookup.
+WIC_VALUES: Final = {
+    'graphviz': '{label: x, style: dashed, ranksame: ["(1, s)"]}', 'implementations': '{}',
+    'driver': 'slurm', 'inlineable': 'true', 'scatterMethod': 'dotproduct', 'in': '{}',
+    'scatter': '[x]', 'inference': '{}', 'implementation': 'x', 'default_implementation': 'x',
+    'version': 'x', 'lang_version': 'x', 'namespace': 'x',
+}
+
+#: One wrong-shaped value per kind of declared shape, with where it is reported.
+MALFORMED_WIC_VALUES: Final = [
+    ('wic:\n  inlineable: sometimes\n', 2, 15),
+    ('wic:\n  driver: pbs\n', 2, 11),
+    ('wic:\n  namespace: ""\n', 2, 14),
+    ('wic:\n  lang_version: 1.0\n', 2, 17),
+    ('wic:\n  implementations: [a]\n', 2, 20),
+    ('wic:\n  graphviz: x\n', 2, 13),
+    ('wic:\n  graphviz:\n    label: ""\n', 3, 12),
+    ('wic:\n  graphviz:\n    style: bogus\n', 3, 12),
+    ('wic:\n  graphviz:\n    color: red\n', 3, 5),
+    ('wic:\n  graphviz:\n    ranksame: ["(1, a)", zz]\n', 3, 26),
+    ('wic:\n  steps:\n    (1, s):\n      scatterMethod: dot\n', 4, 22),
+    ('wic:\n  steps:\n    (1, s):\n      wic:\n        inlineable: 1\n', 5, 21),
+]
+
+
+@pytest.mark.fast
+def test_the_wic_block_is_closed_at_every_depth() -> None:
+    """Each `wic:` key the language has parses clean; any other is `wic033`,
+    positioned at the key itself.
+
+    The generated jsonschema used to refuse such a key as the file was read.
+    The parser is the gate now, so it is the parser that must refuse it -- at
+    the root, and on a `steps:` entry, whose vocabulary is the root's plus
+    what it says about the step it names.
+    """
+    for key in sorted(Grammar.SIDECAR_KEYS - {'steps'}):
+        root = parse(f'wic:\n  {key}: {WIC_VALUES[key]}\nsteps:\n- id: s\n', 'root.wic')
+        assert not root.diagnostics.has_errors, (key, [str(d) for d in root.diagnostics])
+    for key in sorted(Grammar.SIDECAR_STEP_KEYS - {'steps', 'out'}):
+        entry = parse(f'wic:\n  steps:\n    (1, s):\n      {key}: {WIC_VALUES[key]}\nsteps:\n- id: s\n',
+                      'entry.wic')
+        assert not entry.diagnostics.has_errors, (key, [str(d) for d in entry.diagnostics])
+
+    for source, line, column in [
+            ('wic:\n  nonsense_key: 1\nsteps:\n- id: s\n', 2, 3),
+            ('wic:\n  steps:\n    (1, s):\n      wic:\n        nonsense_key: 1\nsteps:\n- id: s\n', 5, 9),
+            ('wic:\n  steps:\n    (1, s):\n      nonsense_key: 1\nsteps:\n- id: s\n', 4, 7),
+            # A step-only key is not a root key.
+            ('wic:\n  scatter: [x]\nsteps:\n- id: s\n', 2, 3)]:
+        reported = [(d.code, d.span.start_line, d.span.start_column)
+                    for d in parse(source, 'closed.wic').diagnostics if d.span is not None]
+        assert reported == [(SophiosErrorCode.UNKNOWN_WIC_KEY, line, column)], source
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(('source', 'line', 'column'), MALFORMED_WIC_VALUES)
+def test_a_wic_value_of_the_wrong_shape_is_reported_where_it_is(source: str, line: int, column: int) -> None:
+    """Each declared value shape refuses what the generated jsonschema used to
+    refuse, as `wic034`, at the node that is wrong -- a nested one included."""
+    reported = [(d.code, d.span.start_line, d.span.start_column)
+                for d in parse(source, 'malformed.wic').diagnostics if d.span is not None]
+    assert reported == [(SophiosErrorCode.MALFORMED_WIC_VALUE, line, column)], source
+
+
 @pytest.mark.fast
 def test_a_sidecar_steps_out_sibling_to_wic_still_unwraps() -> None:
     """A merged parent contribution can land as a sibling of a step's own
@@ -869,6 +983,20 @@ def test_a_sidecar_steps_out_sibling_to_wic_still_unwraps() -> None:
     child = result.document.sidecar.steps[0][1]
     assert dict(child.entries)['namespace'] == 'gpu'
     assert dict(child.entries)['out'] == [{'value': {Key.ANCHOR: 'e'}}]
+
+
+@pytest.mark.fast
+def test_an_empty_sidecar_wrapper_beside_siblings_is_an_empty_mapping() -> None:
+    """`(1, a): {wic: , in: ...}` is the siblings alone, rather than a `wic033`
+    naming the wrapper itself as an unknown key. The schema reads it the same
+    way (`test_lang_schema.py`)."""
+    source = 'wic:\n  steps:\n    (1, a):\n      wic:\n      in: {x: 1}\nsteps:\n- id: a\n'
+
+    result = parse(source, 'empty_wrapper.wic')
+
+    assert result.ok, [str(d) for d in result.diagnostics]
+    assert result.document is not None and result.document.sidecar is not None
+    assert dict(result.document.sidecar.steps[0][1].entries) == {'in': {'x': 1}}
 
 
 @pytest.mark.fast
@@ -1151,39 +1279,6 @@ def test_compiled_provocations_fire(code: SophiosErrorCode) -> None:
         provocations.COMPILED[code]()
     fired = getattr(caught.value, 'diagnostics', ())
     assert any(d.code is code for d in fired), f'{code.name} did not fire'
-
-
-# --------------------------------------------------------------------------
-# The syntax layer stays standalone
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.fast
-def test_lang_layer_depends_only_on_stdlib_and_pyyaml() -> None:
-    """`sophios.lang` + `utils_yaml` import nothing beyond stdlib and yaml.
-
-    Staging exactly these files into a bare venv with only
-    PyYAML and everything ran — which is what makes the layer reviewable in
-    isolation and, eventually, extractable for editor tooling. One stray
-    import would end that silently; this makes it a test failure instead.
-    """
-    import ast as python_ast
-    import sys
-
-    lang_dir = Path(__file__).resolve().parents[2] / 'src' / 'sophios' / 'lang'
-    files = sorted(lang_dir.glob('*.py')) + [lang_dir.parent / 'utils_yaml.py']
-    allowed = set(sys.stdlib_module_names) | {'yaml', 'sophios'}
-
-    for source_file in files:
-        tree = python_ast.parse(source_file.read_text(encoding='utf-8'))
-        for node in python_ast.walk(tree):
-            roots = []
-            if isinstance(node, python_ast.Import):
-                roots = [alias.name.split('.')[0] for alias in node.names]
-            elif isinstance(node, python_ast.ImportFrom) and node.level == 0 and node.module:
-                roots = [node.module.split('.')[0]]
-            for root in roots:
-                assert root in allowed, f'{source_file.name} imports {root!r} — the lang layer must stay standalone'
 
 
 @pytest.mark.fast

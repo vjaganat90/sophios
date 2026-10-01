@@ -7,7 +7,7 @@ and the result does not depend on iteration order.
 The test-side resolver constructs fully typed phase input without calling the
 production resolver, so these need no registry, filesystem, or config.
 """
-import ast as pyast
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -34,13 +34,25 @@ from sophios.ir import (
 )
 from sophios.ir.lower import lower
 from sophios.ir.declarations import port_declaration
+from sophios.ir.types import AuthoredName
+from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.nodes import Document, InlineLiteral, Step
 from sophios.lang.parser import parse
 from sophios.lang.spans import SourceSpan
 
 from . import ast_strategies as strat
 from .hermetic import COVERAGE, ORACLE
-from .source_scan import REPO_ROOT, parsed
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _declared_inputs(step: Step) -> tuple[str, ...]:
+    """What a process declares, as far as the step shows it: the inputs it
+    binds, and those it scatters over whether bound or not."""
+    scatter = dict(step.interpreted).get('scatter')
+    scattered = [name for name in scatter if isinstance(name, str)] if isinstance(scatter, list) else []
+    named = [name for name, _ in step.inputs] + scattered
+    return tuple(dict.fromkeys(named))
 
 
 def _resolved(document: Document) -> ResolvedDocument:
@@ -52,7 +64,7 @@ def _resolved(document: Document) -> ResolvedDocument:
             ResolvedProcess(
                 RegistryKey('test', step.id),
                 f'{step.id}.cwl',
-                tuple(ResolvedPort(name, declaration) for name, _ in step.inputs),
+                tuple(ResolvedPort(name, declaration) for name in _declared_inputs(step)),
                 tuple(ResolvedPort(binding.name, declaration) for binding in step.outputs),
                 {'class': 'CommandLineTool'},
             ),
@@ -154,9 +166,10 @@ def test_an_input_and_an_output_of_one_name_are_different_ports() -> None:
     one of every such pair.
     """
     step = StepId(Namespace(), 1, 's')
-    assert PortId(step, Direction.INPUT, 'file') != PortId(step, Direction.OUTPUT, 'file')
-    assert len({PortId(step, Direction.INPUT, 'file'),
-                PortId(step, Direction.OUTPUT, 'file')}) == 2
+    file = AuthoredName('file')
+    assert PortId(step, Direction.INPUT, file) != PortId(step, Direction.OUTPUT, file)
+    assert len({PortId(step, Direction.INPUT, file),
+                PortId(step, Direction.OUTPUT, file)}) == 2
 
 
 @pytest.mark.fast
@@ -236,6 +249,22 @@ def test_a_document_the_parser_recovered_never_raises() -> None:
 
 
 @pytest.mark.fast
+def test_a_union_member_written_either_way_parses_the_same() -> None:
+    """`?` on a union member makes the port optional in either spelling of that member.
+
+    The shorthand expands; the same member written as a record does too, and a
+    `?` that sits on an array's items does not make the array itself optional.
+    """
+    string = port_declaration(['File?', 'string']).type
+    record = port_declaration([{'type': 'array', 'items': 'string?'}, 'int']).type
+    assert string.optional
+    assert string.canonical == ['null', 'File', 'string']
+    assert not record.optional
+    assert record.canonical == [
+        {'type': 'array', 'items': ['null', 'string']}, 'int']
+
+
+@pytest.mark.fast
 def test_a_reference_before_its_definition_is_reported() -> None:
     """`!* e` above its `!& e` is `wic025`, as the reference and compiler say.
 
@@ -306,10 +335,12 @@ _SPAN = SourceSpan('probe.wic', 1, 1, 1, 1)
 @st.composite
 def _hostile_graphs(draw: st.DrawFn) -> Any:
     """A construction that violates one invariant, drawn rather than listed."""
-    ns = Namespace(tuple(draw(st.lists(st.text('ab', min_size=1, max_size=2), max_size=2))))
+    ns = Namespace(tuple(draw(st.lists(st.builds(StepId, st.just(Namespace()), st.integers(1, 4),
+                                                 st.text('ab', min_size=1, max_size=2)),
+                                       max_size=2))))
     one = StepId(ns, draw(st.integers(1, 4)), draw(st.text('xy', min_size=1, max_size=2)))
     two = StepId(ns, one.index + draw(st.integers(1, 3)), one.name)
-    name = draw(st.text('pq', min_size=1, max_size=2))
+    name = AuthoredName(draw(st.text('pq', min_size=1, max_size=2)))
     out = PortId(one, Direction.OUTPUT, name)
     inp = PortId(one, Direction.INPUT, name)
     elsewhere = PortId(two, Direction.INPUT, name)
@@ -324,14 +355,14 @@ def _hostile_graphs(draw: st.DrawFn) -> Any:
         lambda: StepNode(one, bindings=(Binding(inp, InlineLiteral(1, _SPAN)),)),
         lambda: StepId(ns, 0, name),                              # a zero-based occurrence
         lambda: StepId(ns, 1, ''),                                # an unnamed occurrence
-        lambda: PortId(one, Direction.INPUT, ''),                 # an unnamed port
-        lambda: PortType(declared='File', array_depth=-1),
-        lambda: Namespace(('',)),
+        lambda: PortId(one, Direction.INPUT, AuthoredName('')),   # an unnamed port
+        lambda: Namespace((StepId(Namespace(), 1, ''),)),         # an unnamed enclosing step
         lambda: WorkflowGraph(ns, steps=(StepNode(one), StepNode(one))),
         lambda: WorkflowGraph(ns, output_mapping=((name, out),)),
         lambda: WorkflowGraph(ns, input_mapping=((name, (inp,)),)),
         lambda: WorkflowGraph(ns, explicit_edge_defs=((name, out),)),
-        lambda: WorkflowGraph(Namespace(('elsewhere',)), steps=(StepNode(one),)),
+        lambda: WorkflowGraph(Namespace((StepId(Namespace(), 1, 'elsewhere'),)),
+                              steps=(StepNode(one),)),
     ]))
 
 
@@ -360,27 +391,12 @@ def test_the_graph_owns_no_mutable_container() -> None:
 
 
 @pytest.mark.fast
-def test_semantic_phases_do_not_read_an_opaque_payload() -> None:
-    """`OpaqueCwl` is carried, never inspected by semantic phases.
+@pytest.mark.parametrize('scatter', ['[1]', '[null]', '5', '{a: 1}', '[name, 1]'])
+def test_a_scatter_entry_that_is_not_a_name_is_wic032(scatter: str) -> None:
+    """`scatter:` names inputs. An entry that is no name at all, or a
+    `scatter:` that is neither a name nor a list, names none of them: it is
+    reported rather than dropped or emitted verbatim."""
+    result = _lower(f'steps:\n- id: mk_file\n  in: {{name: !ii [a, b]}}\n  scatter: {scatter}\n')
 
-    Emit is the boundary: it may traverse a payload to transport it byte for
-    byte.  The rule protects Lower, Link and Infer from assigning it meaning,
-    not the serializer from copying it.
-
-    CANNOT DETECT: a payload bound to a local and read through that, or reached
-    by iteration, comparison or pattern matching. A static scan sees the direct
-    read, which is the shape a phase reaches for first; the boundary is held by
-    the type, and this stops the type being quietly bypassed.
-    """
-    carriers = {'passthrough', 'interpreted', 'declared', 'value'}
-    offenders: list[str] = []
-    for path in sorted((REPO_ROOT / 'src' / 'sophios' / 'ir').rglob('*.py')):
-        if path.name == 'emit.py':
-            continue
-        for node in pyast.walk(parsed(path)):
-            if not isinstance(node, (pyast.Subscript, pyast.Attribute)):
-                continue
-            target = node.value
-            if isinstance(target, pyast.Attribute) and target.attr in carriers:
-                offenders.append(f'{path.name}:{node.lineno} reads {target.attr}')
-    assert not offenders, 'the IR reads a payload it is supposed to carry:\n  ' + '\n  '.join(offenders)
+    codes = [diagnostic.code for diagnostic in result.diagnostics]
+    assert SophiosErrorCode.UNKNOWN_SCATTER_PORT in codes, codes

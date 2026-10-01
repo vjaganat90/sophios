@@ -4,6 +4,9 @@ import copy
 from dataclasses import replace
 import shutil
 import subprocess as sub
+import docker
+import podman
+from podman.domain.images_build import BuildMixin
 from . import plugins
 from .wic_types import Yaml
 from .ir.artifacts import CompilationArtifact
@@ -11,12 +14,15 @@ from .lang.diagnostics import SophiosError
 from .lang.error_codes import SophiosErrorCode
 
 
-def verify_container_engine_config(container_engine: str, ignore_container_install: bool) -> None:
+def verify_container_engine_config(container_engine: str, ignore_container_install: bool,
+                                   ignore_container_processes: bool = False) -> None:
     """Verify that the container_engine is correctly installed and has
     correct permissions for the user.
     Args:
         container_engine (str): The container engine command
         ignore_container_install (bool): whether to ignore if container engine is not installed and run workflow anyway
+        ignore_container_processes (bool): whether to run the workflow anyway when too many container
+            engine processes are running
     """
     docker_like_engines = ['docker', 'podman']
     container_cmd: str = container_engine
@@ -67,7 +73,7 @@ def verify_container_engine_config(container_engine: str, ignore_container_insta
             num_processes = int(output.strip())
             max_processes = 1000
             too_many_processes = num_processes > max_processes
-            if too_many_processes and not ignore_container_install:
+            if too_many_processes and not ignore_container_processes:
                 raise SophiosError.error(
                     SophiosErrorCode.CONTAINER_ENGINE_UNAVAILABLE,
                     f'Warning! There are {num_processes} running docker processes.',
@@ -133,7 +139,9 @@ def inline_artifact_runs(artifact: CompilationArtifact) -> CompilationArtifact:
         for child in children:
             step_id = child.namespace[-1]
             step = next(item for item in cwl['steps'] if item.get('id') == step_id)
-            step['run'] = copy.deepcopy(child.cwl)
+            # An embedded process has no location of its own, so a relative
+            # `$include` would resolve against whichever document embeds it.
+            step['run'] = plugins.cwl_prepend_dockerFile_include_path(child.cwl, child.run_path)
             # A prefix and an ontology must be declared in the document that
             # uses them, so these move up. `cwlVersion` is dropped instead:
             # the parent already names one, and a second on an embedded
@@ -155,9 +163,13 @@ def remove_artifact_entrypoints(container_engine: str,
                                 artifact: CompilationArtifact) -> CompilationArtifact:
     """Build no-entrypoint images and rewrite the immutable artifact tree."""
     if container_engine == 'docker':
-        plugins.remove_entrypoints_docker()
+        client = docker.from_env()  # type: ignore
+        plugins.remove_entrypoints(client, client.images)
     elif container_engine == 'podman':
-        plugins.remove_entrypoints_podman()
+        # See https://github.com/containers/podman-py?tab=readme-ov-file#example-usage
+        uri = "unix:///run/user/1000/podman/podman.sock"
+        with podman.PodmanClient(base_url=uri) as client:
+            plugins.remove_entrypoints(client, BuildMixin())
     return plugins.dockerPull_append_noentrypoint_artifact(artifact)
 
 
@@ -180,8 +192,11 @@ def stage_input_files(yml_inputs: Yaml,
         FileNotFoundError: If throw and any of the input files do not exist.
     """
 
-    for val in yml_inputs.values():
+    values = list(yml_inputs.values())
+    for val in values:  # grows: a scattered value is a list of File objects
         match val:
+            case list() as items:
+                values.extend(items)
             case {"class": "File", "location": location, **_rest_val}:
                 src_path = root_yml_dir_abs / Path(location)
                 if not src_path.exists() and throw:

@@ -5,19 +5,20 @@ result and most want only emitted CWL.
 """
 import graphviz
 import networkx as nx
-from hypothesis import HealthCheck, settings
 
 import sophios.cli
 import sophios.compiler
 from sophios.ir.artifacts import CompilationResult
-from sophios.wic_types import GraphData, GraphReps, StepId, Yaml, YamlTree
+from sophios.wic_types import GraphData, GraphReps, Yaml
 
+from .budgets import budget
+from .hermetic import bundle
 from .test_setup import load_test_registry
 
 #: Shared Hypothesis budgets. Compiled properties are an order of magnitude
 #: slower than parse-only ones, so they get their own, smaller, count.
-FAST = settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-COMPILED = settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+FAST = budget(200)
+COMPILED = budget(100)
 
 #: A minimal real workflow: one tool step, one inline literal input.
 TOUCH: Yaml = {'steps': [{'id': 'touch', 'in': {'filename': {'wic_inline_input': 'empty.txt'}}}]}
@@ -37,10 +38,9 @@ def compile_info(yml: Yaml, name: str = 'harness', *,
     if allow_raw_cwl is not None:
         compiler_options['allow_raw_cwl'] = allow_raw_cwl
     graph = GraphReps(graphviz.Digraph(name=f'cluster_{name}'), nx.DiGraph(), GraphData(name))
-    tools = load_test_registry().tools
-    return sophios.compiler.compile_document(
-        YamlTree(StepId(name, 'global'), yml),
-        compiler_options, graph_settings, tag_paths, tools,
+    return sophios.compiler.compile_source(
+        bundle(yml, name, load_test_registry().tools),
+        compiler_options, graph_settings, tag_paths,
         relative_run_path=True, testing=True, graph_target=graph)
 
 

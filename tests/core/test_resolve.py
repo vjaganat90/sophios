@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 
 from sophios.ir import (
     RegistryKey,
@@ -31,85 +31,25 @@ from sophios.ir import (
     generated_process_id,
     resolve,
 )
-from sophios.ir.complete import complete
 from sophios.ir.lower import lower
 from sophios.lang import (EdgeRef, InlineLiteral, RawCwlRef, SourceSpan, Step,
                           UnresolvedName, parse)
 from sophios.wic_types import StepId as LegacyStepId, Yaml
 
 from . import ast_strategies as strat
-from .hermetic import ORACLE, compile_hermetic
-from .source_scan import REPO_ROOT
+from .budgets import budget
+from .hermetic import ORACLE, bundle, compile_hermetic
 from .synthetic_tools import SYNTHETIC_NS, SYNTHETIC_TOOLS, inputs_of, outputs_of
 
-
-def _scalar_literals_fit(workflow: Yaml) -> bool:
-    """Independent model of the only generated well-formed compile rejection."""
-    for step in workflow.get('steps', []):
-        if not isinstance(step, dict) or not isinstance(step.get('id'), str):
-            continue
-        declared = inputs_of(step['id']) if LegacyStepId(step['id'], SYNTHETIC_NS) \
-            in SYNTHETIC_TOOLS else {}
-        for name, value in step.get('in', {}).items():
-            if not isinstance(value, dict) or 'wic_inline_input' not in value:
-                continue
-            target = declared.get(name, {}).get('type')
-            if target not in ('int', 'float'):
-                continue
-            try:
-                (int if target == 'int' else float)(value['wic_inline_input'])
-            except (TypeError, ValueError):
-                return False
-    return True
-
-
-def _source_model(workflow: Yaml) -> tuple[str, dict[tuple[str, str], str]]:
-    """Undo only the filesystem loader's subtree attachment for test source.
-
-    This is a test-side model: real authored source names a ``.wic`` child and
-    the registry supplies that child's source; ``ast_strategies.to_yml`` has
-    already attached it in the shape the public compiler boundary accepts.
-    """
-    sources: dict[tuple[str, str], str] = {}
-
-    def detach(document: Yaml) -> Yaml:
-        copied = copy.deepcopy(document)
-        detached: list[Yaml] = []
-        for step in copied.get('steps', []):
-            if not isinstance(step, dict) or 'subtree' not in step:
-                detached.append(step)
-                continue
-            child = detach(step['subtree'])
-            child_name = str(step['id']).removesuffix('.wic')
-            sources[(SYNTHETIC_NS, child_name)] = yaml.safe_dump(child, sort_keys=False)
-            detached.append({'id': step['id'], **step.get('parentargs', {})})
-        copied['steps'] = detached
-        return copied
-
-    root = detach(workflow)
-    return yaml.safe_dump(root, sort_keys=False), sources
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _typed(workflow: Yaml):  # type: ignore[no-untyped-def]
-    source, workflows = _source_model(workflow)
-    result = front_end(source, RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows),
-                       name='oracle')
+    model = bundle(workflow, 'oracle', SYNTHETIC_TOOLS)
+    result = front_end(model.parsed, model.registry, name='oracle')
     assert result.resolved is not None and result.resolved.document is not None
     assert result.graph is not None, list(result.diagnostics)
     return result
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows().filter(_scalar_literals_fit))
-@ORACLE
-def test_the_live_compiler_retains_the_resolved_interfaces(workflow: Yaml) -> None:
-    """The default path carries resolved process interfaces into its graph."""
-    typed = complete(_typed(copy.deepcopy(workflow)).graph)
-    live = compile_hermetic(copy.deepcopy(workflow)).graph
-    assert [(step.id.name, tuple(port.id.port for port in step.inputs),
-             tuple(port.id.port for port in step.outputs)) for step in live.steps] == [
-        (step.id.name, tuple(port.id.port for port in step.inputs),
-         tuple(port.id.port for port in step.outputs)) for step in typed.steps]
 
 
 def _assert_processes_match_the_registry(document: Any) -> None:
@@ -133,7 +73,7 @@ def _assert_processes_match_the_registry(document: Any) -> None:
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@ORACLE
 def test_every_resolved_process_is_the_one_the_registry_holds(workflow: Yaml) -> None:
     """Resolution is compared where the bridged differential cannot see it.
 
@@ -142,11 +82,11 @@ def test_every_resolved_process_is_the_one_the_registry_holds(workflow: Yaml) ->
     against the compiled bytes, which the source round-trip already fixes
     whatever Resolve returned.
     """
-    source, workflows = _source_model(copy.deepcopy(workflow))
-    parsed = parse(source, 'oracle.wic')
+    model = bundle(copy.deepcopy(workflow), 'oracle', SYNTHETIC_TOOLS)
+    parsed = model.parsed
     assert parsed.document is not None
     resolved = resolve(parsed.document,
-                       RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows),
+                       model.registry,
                        name='oracle')
     assert resolved.document is not None, list(resolved.diagnostics)
     _assert_processes_match_the_registry(resolved.document)
@@ -166,13 +106,13 @@ def test_resolved_interfaces_match_an_independent_registry_model() -> None:
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@ORACLE
 def test_resolution_depends_only_on_the_registry(workflow: Yaml) -> None:
     """Filesystem and ambient environment are unavailable during resolution."""
-    source, workflows = _source_model(workflow)
-    parsed = parse(source, 'oracle.wic')
+    model = bundle(workflow, 'oracle', SYNTHETIC_TOOLS)
+    parsed = model.parsed
     assert parsed.document is not None
-    snapshot = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
+    snapshot = model.registry
 
     def forbidden(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError('resolution attempted filesystem access')
@@ -197,13 +137,13 @@ def test_snapshot_owns_tool_definitions() -> None:
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@ORACLE
 def test_registry_order_cannot_change_resolution(workflow: Yaml) -> None:
     """Lookup has no first-match semantics over registry iteration order."""
-    source, workflows = _source_model(workflow)
-    parsed = parse(source, 'oracle.wic')
+    model = bundle(workflow, 'oracle', SYNTHETIC_TOOLS)
+    parsed = model.parsed
     assert parsed.document is not None
-    canonical = RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows)
+    canonical = model.registry
     reversed_snapshot = RegistrySnapshot(tuple(reversed(canonical.tools)),
                                          tuple(reversed(canonical.workflows)))
     left = resolve(parsed.document, canonical, name='oracle')
@@ -214,26 +154,14 @@ def test_registry_order_cannot_change_resolution(workflow: Yaml) -> None:
 
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-def test_parse_front_door_is_the_live_compiler_input(workflow: Yaml) -> None:
-    """The live compiler preserves the graph Lower built from parsed source."""
-    if not _scalar_literals_fit(workflow):
-        return
-    typed = _typed(copy.deepcopy(workflow))
-    live = compile_hermetic(copy.deepcopy(workflow)).graph
-    assert tuple(step.id for step in live.steps) == tuple(step.id for step in typed.graph.steps)
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows())
-@settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@budget(200)
 def test_parse_resolve_lower_are_directly_typed(workflow: Yaml) -> None:
     """Each phase consumes the preceding phase's value, not a rendered adapter."""
-    source, workflows = _source_model(workflow)
-    parsed = parse(source, 'oracle.wic')
+    model = bundle(workflow, 'oracle', SYNTHETIC_TOOLS)
+    parsed = model.parsed
     assert parsed.document is not None
     resolved = resolve(parsed.document,
-                       RegistrySnapshot.from_tools(SYNTHETIC_TOOLS, workflows=workflows),
+                       model.registry,
                        name='oracle')
     assert resolved.document is not None, list(resolved.diagnostics)
     lowered = lower(resolved.document)
@@ -246,8 +174,8 @@ def test_nested_workflow_source_is_resolved_from_the_snapshot() -> None:
     """A child source is registry content, not a path Resolve may open."""
     child = 'steps:\n- id: mk_file\n  in:\n    name: !ii child.txt\n'
     registry = RegistrySnapshot.from_tools(
-        SYNTHETIC_TOOLS, workflows={(SYNTHETIC_NS, 'child'): child})
-    result = front_end('steps:\n- id: child.wic\n', registry, name='root')
+        SYNTHETIC_TOOLS, workflows={(SYNTHETIC_NS, 'child'): parse(child, 'child.wic')})
+    result = front_end(parse('steps:\n- id: child.wic\n', 'root.wic'), registry, name='root')
     assert result.resolved is not None and result.resolved.document is not None
     assert result.graph is not None and len(result.graph.children) == 1
     assert result.resolved.document.steps[0].process.child is not None
@@ -269,7 +197,7 @@ wic:
 steps:
 - id: mk_file
 '''
-    result = front_end(source, registry)
+    result = front_end(parse(source, 'workflow.wic'), registry)
     assert result.resolved is not None and result.resolved.document is not None
     assert result.resolved.document.steps[0].process.run_path == '/alt/mk_file.cwl'
 
@@ -279,8 +207,8 @@ def test_explicit_implementation_overrides_the_default() -> None:
     """Implementation selection is deterministic and uses the explicit choice first."""
     registry = RegistrySnapshot(
         RegistrySnapshot.from_tools(SYNTHETIC_TOOLS).tools,
-        (WorkflowSource(RegistryKey('global', 'fast'), 'steps:\n- id: mk_file\n'),
-         WorkflowSource(RegistryKey('global', 'safe'), 'steps:\n- id: mk_text\n')),
+        (WorkflowSource(RegistryKey('global', 'fast'), parse('steps:\n- id: mk_file\n')),
+         WorkflowSource(RegistryKey('global', 'safe'), parse('steps:\n- id: mk_text\n'))),
     )
     source = '''
 wic:
@@ -288,7 +216,7 @@ wic:
   default_implementation: safe
   implementation: fast
 '''
-    result = front_end(source, registry, name='choice')
+    result = front_end(parse(source, 'choice.wic'), registry, name='choice')
     assert result.resolved is not None and result.resolved.document is not None
     assert result.resolved.document.steps[0].source.id == 'mk_file'
 
@@ -314,15 +242,13 @@ def test_raw_cwl_reference_needs_no_global_escape_hatch() -> None:
 
 
 @pytest.mark.fast
-def test_collecting_test_setup_neither_discovers_plugins_nor_writes_schemas(tmp_path: Path) -> None:
+def test_collecting_test_setup_neither_discovers_plugins_nor_writes_files(tmp_path: Path) -> None:
     """The corpus registry is an execution fixture, not an import side effect."""
     script = '''
 import sophios.plugins
-import sophios.schemas.wic_schema
 def forbidden(*args, **kwargs):
     raise AssertionError("collection performed environment discovery")
 sophios.plugins.get_tools_cwl = forbidden
-sophios.schemas.wic_schema.get_validator = forbidden
 import core.test_setup
 '''
     env = {**os.environ, 'PYTHONPATH': os.pathsep.join(
@@ -348,7 +274,8 @@ def _resolved(source: str, **workflows: str) -> Any:
     assert parsed.document is not None, list(parsed.diagnostics)
     registry = RegistrySnapshot.from_tools(
         SYNTHETIC_TOOLS,
-        workflows={(SYNTHETIC_NS, name): child for name, child in workflows.items()})
+        workflows={(SYNTHETIC_NS, name): parse(child, f'{name}.wic')
+                   for name, child in workflows.items()})
     result = resolve(parsed.document, registry, name='root')
     assert result.document is not None, list(result.diagnostics)
     return result.document

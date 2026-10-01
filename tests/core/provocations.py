@@ -32,6 +32,9 @@ PARSE: Final[dict[SophiosErrorCode, str]] = {
     SophiosErrorCode.RECURSIVE_ALIAS: 'top: &a [*a]\n',
     SophiosErrorCode.MISPLACED_EDGE_DEF: 'top: !& e\n',
     SophiosErrorCode.RESERVED_KEY: 'steps:\n- id: s\n  in:\n    f:\n      wic_inline_inpt: 1\n',
+    SophiosErrorCode.UNKNOWN_WIC_KEY: 'wic:\n  nonsense_key: 1\n',
+    SophiosErrorCode.MALFORMED_WIC_VALUE: 'wic:\n  inlineable: sometimes\n',
+    SophiosErrorCode.UNSUPPORTED_CWL_VERSION: 'cwlVersion: draft-3\n',
 }
 
 #: Codes provoked through the compiler or its helpers. Callables raise
@@ -161,15 +164,13 @@ COMPILED.update({
 
 
 def _never_converges() -> None:
-    """The fixed-point guard's provocation.
-
-    Imported lazily from the suite that owns the mechanism, matching how
-    `_compile_minimal` reaches `compile_harness` here. The direction matters:
-    `test_predicates` must not import this module, which reaches plugin
-    discovery through `compile_harness` and would break its hermeticity.
-    """
-    from .test_predicates import never_converges  # pylint: disable=import-outside-toplevel
-    never_converges()
+    """Drive the typed Infer fixed-point guard to its explicit limit."""
+    # pylint: disable=import-outside-toplevel
+    from sophios.ir import InferencePolicy, Namespace, WorkflowGraph, infer
+    from sophios.lang.diagnostics import SophiosError
+    result = infer(WorkflowGraph(Namespace()), InferencePolicy(iteration_limit=0))
+    if result.graph is None:
+        raise SophiosError(result.diagnostics)
 
 
 COMPILED.update({
@@ -279,6 +280,30 @@ def _provoke_invalid_link() -> None:
     workflow.outputs.out = 3
 
 
+def _provoke_duplicate_document_name() -> None:
+    """Author a workflow input spelled like the one a literal is lifted to.
+
+    The two are different ports -- one written, one derived -- that the
+    emitted document would spell the same way, so neither can be emitted.
+
+    Raises:
+        SophiosError: Always, carrying `wic031`.
+    """
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'inputs': {'provoke__step__1__mk_file___name': 'string'},
+                      'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]},
+                     'provoke')
+
+
+def _provoke_unknown_scatter_port() -> None:
+    """Scatter a step over a name that is none of its inputs."""
+    from .hermetic import compile_hermetic  # pylint: disable=import-outside-toplevel
+
+    compile_hermetic({'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': ['a']}},
+                                 'scatter': ['nope']}]}, 'provoke')
+
+
 def _provoke_invalid_tool() -> None:
     """A CWL tool that cannot be loaded."""
     from sophios.api.python.workflow import Step  # pylint: disable=import-outside-toplevel
@@ -295,4 +320,6 @@ COMPILED.update({
     SophiosErrorCode.DUPLICATE_EDGE_DEF: _provoke_duplicate_edge_def,
     SophiosErrorCode.EMPTY_NAME: _provoke_empty_name,
     SophiosErrorCode.UNDECLARED_PORT: _provoke_undeclared_port,
+    SophiosErrorCode.DUPLICATE_DOCUMENT_NAME: _provoke_duplicate_document_name,
+    SophiosErrorCode.UNKNOWN_SCATTER_PORT: _provoke_unknown_scatter_port,
 })
