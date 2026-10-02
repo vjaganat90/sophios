@@ -78,9 +78,11 @@ broad enough to cover them would have to be weak enough to say nothing:
 - `cwlVersion` is **written by the compiler**: it is always the one declared
   substrate version, whatever the document says. Sophios generates constructs
   from that version — a workflow that declared `v1.0` and used `when:` used to
-  keep the declaration and emit CWL that is invalid against it. Supplying the
-  tag is not an error; it is ignored, with a warning naming the version that
-  was used instead.
+  keep the declaration and emit CWL that is invalid against it. Supplying
+  `v1.0`, `v1.1` or `v1.2` is not an error; it is ignored, with a warning
+  naming the version that was used instead. Any other value is `wic035`,
+  reported by the parser at the value: accepting a version is a promise to
+  process it, and the toolchain processes no other.
 - `requirements` is **merged into**: your entries survive, and Sophios adds
   what the workflow needs — `ScatterFeatureRequirement` for a scattering step,
   `InlineJavascriptRequirement` for `when`,
@@ -377,6 +379,32 @@ scatter    scatterMethod    when    run
 
 Everything else on a step is passthrough.
 
+Each `scatter:` entry must name an input of its step. On a subworkflow call,
+those are exactly the inputs the subworkflow declares in its `inputs:`, the
+same names its caller's `in:` may bind. A name the compiler generates for a
+step inside the subworkflow, such as `child__step__1__touch___filename`, is
+not an input of the call: depending on it would tie the caller to how the
+callee's steps are laid out. To scatter over such an input, declare it in
+the subworkflow and bind the inner step to it:
+
+```yaml
+# child.wic
+inputs:
+  filename: string
+steps:
+  touch:
+    in:
+      filename: filename
+
+# caller
+  child.wic:
+    scatter: [filename]
+    in:
+      filename: !ii [a.txt, b.txt]
+```
+
+Any other name is `wic032`.
+
 ---
 
 ## 5. The `wic:` block
@@ -398,6 +426,25 @@ wic:
 Step keys inside `wic: steps:` have the form `(index, name)` — the index is
 1-based and matches the step's position. Sophios parses these into a structured
 key; you should never have to parse that string yourself.
+
+The block is Sophios's own, not passthrough CWL, so it is closed, and each key
+declares the shape of its value:
+
+| Key | Value |
+|---|---|
+| `steps` | a mapping keyed `(index, name)` |
+| `graphviz` | a mapping of `label` (a non-empty string), `style` (Graphviz styles, comma separated) and `ranksame` (a list of `(index, name)` keys), each optional |
+| `implementation`, `default_implementation`, `version`, `lang_version`, `namespace` | a non-empty string |
+| `implementations` | a mapping |
+| `driver` | `slurm` or `argo` |
+| `inlineable` | `true` or `false` |
+
+An entry under `steps:` may also say something about the step it names:
+`in`, `out`, `scatter` and `inference`, whose values are not checked here, and
+`scatterMethod`, one of `dotproduct`, `flat_crossproduct` and
+`nested_crossproduct`. Any other key is `wic033`, reported at the key; a value
+of the wrong shape is `wic034`, reported at the value. The parser and the
+schema (§6.3) read one declaration of these, `Grammar.SIDECAR_VALUES`.
 
 A bare `wic:` with nothing under it is an empty block, not an error. Nested
 step entries keep their `wic:` wrapper through a render — every consumer reads
@@ -460,13 +507,27 @@ its single home, so a disagreement between this text and the implementation
 shows up as a test failure rather than as three subtly different sentences.
 
 **The Python API** (`Workflow`, `Step`) is the second surface of the same
-language. `Workflow.write_wic()` and `.to_wic_yaml()` emit `.wic` documents,
-using the desugared spelling and sequence-form steps with explicit `id:`.
+language. It builds a `sophios.lang.Document` directly, compiles it through
+the same door as a `.wic` file, and writes it with `sophios.lang.render`:
+`Workflow.write_wic()` and `.to_wic_yaml()` emit the tagged spelling with
+sequence-form steps and explicit `id:`, and `Workflow.yaml` is the same
+document's `to_json` projection.
+
+A workflow that contains a nested `Workflow` can be written two ways. With
+`inline_subworkflows=False`, each nested workflow is written as its own `.wic`
+file and the parent calls it by name, like any other subworkflow. The default,
+inline form instead nests the child's `to_json` projection under a `subtree:`
+key of the calling step. That form is what the compiler consumes in memory; it
+is not yet a `.wic` document the parser accepts, because the child's edge
+definitions sit inside passthrough, where they are `wic019` (§4.1.1).
 
 Two obligations follow, and both are enforced by tests rather than convention:
 
-1. **Whatever the Python API emits must parse.** An API that produced
-   documents its own parser rejects would mean two languages wearing one name.
+1. **Whatever the Python API writes as a `.wic` file must parse.** An API that
+   produced documents its own parser rejects would mean two languages wearing
+   one name. This holds for a flat workflow and for nested workflows written
+   with `inline_subworkflows=False`; the inline `subtree:` form above is the
+   known exception.
 2. **Both spellings must produce the same result.** `!ii x` and
    `{wic_inline_input: x}` are the same input, so compiling either must give
    the same answer.
@@ -477,7 +538,8 @@ example — see `tests/core/test_lang_parser.py`.
 ### 6.3 The machine-readable schema
 
 `sophios.lang.wic_schema()` exports a JSON Schema for editors. It is generated
-from the AST, not written by hand.
+from the AST, not written by hand, and it is the only schema Sophios produces:
+`sophios --generate_schemas` writes it to `autogenerated/schemas/wic.json`.
 
 Every field of every AST node declares how it is written, next to the field
 itself:
@@ -515,7 +577,9 @@ itself rather than from any shortcut:
   object that might carry passthrough CWL.
 
 So the schema catches structural mistakes — `steps:` that is a string, `in:`
-that is a list, a malformed `(index, name)` key — and admits everything else.
+that is a list, a malformed `(index, name)` key, a `wic:` key or value §5 does
+not admit — and admits everything else. The `wic:` block is not passthrough, so
+it is the one object the schema closes.
 It is an editor aid, not a second implementation of this document.
 
 ### 6.4 What this does *not* cover

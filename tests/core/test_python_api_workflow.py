@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any, Iterator, cast
 from unittest.mock import patch
 
+from jsonschema import Draft202012Validator
 import pytest
 import yaml
 
@@ -21,15 +22,14 @@ import sophios.plugins
 from sophios import input_output as io
 from sophios import run_local
 from sophios import run_local_async
-from sophios import utils, utils_cwl
 from sophios.api.python.tool_builder import CommandLineTool, Input, Inputs, Output, Outputs, cwl
 from sophios.api.python.workflow import (_python_api_types_match, ApiError, CompiledWorkflow,
                                          InvalidCLTError, InvalidInputValueError, InvalidLinkError,
                                          InvalidStepError, SophiosError, SophiosErrorCode, Step,
                                          Workflow)
+from sophios.lang import InlineLiteral, parse, to_json, wic_schema
 from sophios.compute_request import ComputeExecutionConfig, ComputeOutputConfig, ComputeRequest, ComputeSubmission
 from sophios.python_cwl_adapter import import_python_file
-from sophios.schemas import wic_schema
 from sophios.utils_yaml import wic_loader
 from sophios.wic_types import Json, Tools
 
@@ -96,7 +96,7 @@ def _load_global_config() -> Json:
 
 def _iter_python_workflow_paths(global_config: Json) -> list[tuple[str, Path]]:
     """Every discovered Python workflow, minus the corpora with their own lanes."""
-    paths = sophios.plugins.get_py_paths(global_config)
+    paths = sophios.plugins.get_workflow_paths(global_config, 'py')
     return [
         (path_str, path)
         for _, paths_dict in paths.items()
@@ -172,7 +172,7 @@ def test_linear_python_workflow_reuses_compiler_edge_inference() -> None:
     workflow = Workflow([touch, append, cat], "wf")
     workflow_yaml = workflow.yaml
     assert "file" not in workflow_yaml["steps"][1]["in"]
-    assert "file" not in workflow_yaml["steps"][2]["in"]
+    assert "file" not in workflow_yaml["steps"][2].get("in", {})
 
     compiled = workflow.compile()
 
@@ -471,11 +471,9 @@ def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters() -> N
     subworkflow_step = root_yaml["steps"][1]
 
     assert subworkflow_step["id"] == "child.wic"
-    assert subworkflow_step["parentargs"] == {
-        "in": {
-            "file": {"wic_alias": "filechild"},
-            "str": {"wic_inline_input": "Hello"},
-        }
+    assert subworkflow_step["in"] == {
+        "file": {"wic_alias": "filechild"},
+        "str": {"wic_inline_input": "Hello"},
     }
     assert subworkflow_step["subtree"]["inputs"] == {
         "file": {"type": "File"},
@@ -483,22 +481,6 @@ def test_subworkflow_inputs_use_child_workflow_name_and_formal_parameters() -> N
     }
     assert subworkflow_step["subtree"]["steps"][0]["in"]["file"] == "file"
     assert subworkflow_step["subtree"]["steps"][0]["in"]["str"] == "str"
-
-
-@pytest.mark.fast
-def test_inline_subworkflow_always_emits_parentargs_key() -> None:
-    """`parentargs` is present even when empty.
-
-    A reader that expects the key would otherwise have to distinguish absent
-    from empty, which are the same thing here."""
-    sub_step = Step(clt_path=_adapter("append"))
-    subworkflow = Workflow([sub_step], "child")
-
-    root_yaml = Workflow([subworkflow], "root").yaml
-    subworkflow_step = root_yaml["steps"][0]
-
-    assert subworkflow_step["id"] == "child.wic"
-    assert subworkflow_step["parentargs"] == {}
 
 
 @pytest.mark.fast
@@ -637,7 +619,7 @@ def test_workflow_write_wic_exports_source_workflow_with_inferred_edges(tmp_path
     output_path = workflow.write_wic(tmp_path / "linear_export.wic")
 
     assert output_path == tmp_path / "linear_export.wic"
-    exported = yaml.safe_load(output_path.read_text(encoding="utf-8"))
+    exported = yaml.load(output_path.read_text(encoding="utf-8"), Loader=wic_loader())
     assert exported == workflow.yaml
     assert "file" not in exported["steps"][1]["in"]
 
@@ -721,8 +703,8 @@ def test_config_yaml_normalizes_cwl_file_and_directory_objects(tmp_path: Path) -
         encoding="utf-8",
     )
     subdirectory = Step(clt_path=_adapter("subdirectory"), config_path=subdirectory_cfg)
-    assert subdirectory._yml["in"]["directory"] == {
-        "wic_inline_input": str(input_dir)}
+    assert subdirectory._as_workflow_step(inline_subtrees=False).input("directory") == \
+        InlineLiteral(str(input_dir))
 
     append_cfg = tmp_path / "append.yml"
     append_cfg.write_text(
@@ -736,7 +718,7 @@ def test_config_yaml_normalizes_cwl_file_and_directory_objects(tmp_path: Path) -
         encoding="utf-8",
     )
     append = Step(clt_path=_adapter("append"), config_path=append_cfg)
-    assert append._yml["in"]["file"] == {"wic_inline_input": str(input_file)}
+    assert append._as_workflow_step(inline_subtrees=False).input("file") == InlineLiteral(str(input_file))
 
 
 @pytest.mark.fast
@@ -950,8 +932,9 @@ def test_workflow_run_uses_basepath_for_docker_extract(
         workflow_name: str,
         basepath: str,
         user_env_vars: dict[str, str] | None = None,
+        output_directories: dict[str, str] | None = None,
     ) -> int:
-        del run_args_dict, use_subprocess, passthrough_args, workflow_name, basepath, user_env_vars
+        del run_args_dict, use_subprocess, passthrough_args, workflow_name, basepath, user_env_vars, output_directories
         return 0
 
     monkeypatch.setattr(python_runtime.pc,
@@ -996,6 +979,7 @@ def test_workflow_run_does_not_forward_python_run_flags_to_runner(
         workflow_name: str,
         basepath: str,
         user_env_vars: dict[str, str] | None = None,
+        output_directories: dict[str, str] | None = None,
     ) -> int:
         captured["run_args_dict"] = run_args_dict
         captured["use_subprocess"] = use_subprocess
@@ -1040,7 +1024,8 @@ def test_workflow_run_writes_virtual_output_directories_without_orphans(
     monkeypatch.setattr(
         python_runtime.rl,
         "run_local",
-        lambda run_args_dict, use_subprocess, passthrough_args, workflow_name, basepath, user_env_vars=None: 0,
+        lambda run_args_dict, use_subprocess, passthrough_args, workflow_name, basepath,
+        user_env_vars=None, output_directories=None: 0,
     )
 
     workflow.run(basepath=str(tmp_path))
@@ -1145,31 +1130,25 @@ def test_compile_python_workflows() -> None:
 
 @pytest.mark.fast
 def test_validate_generated_python_workflows() -> None:
-    """Every `.wic` the discovery step generated validates against the exported schema."""
+    """Every `.wic` the discovery step generated parses clean and validates
+    against the exported schema."""
     if not PYTHON_WORKFLOW_MANIFEST.exists():
         pytest.fail(
             f"Missing generated workflow manifest: {PYTHON_WORKFLOW_MANIFEST}")
 
-    global_config = _load_global_config()
-    tools_cwl = sophios.plugins.get_tools_cwl(global_config)
-    yml_paths = sophios.plugins.get_yml_paths(global_config)
-    yaml_stems = utils.flatten([list(paths) for paths in yml_paths.values()])
-    validator = wic_schema.get_validator(
-        tools_cwl, yaml_stems, {}, write_to_disk=False)
-
+    validator = Draft202012Validator(wic_schema())
     workflow_paths = json.loads(
         PYTHON_WORKFLOW_MANIFEST.read_text(encoding="utf-8"))
     validation_errors: list[str] = []
     for workflow_path_str in workflow_paths:
         workflow_path = Path(workflow_path_str)
-        try:
-            with workflow_path.open("r", encoding="utf-8") as handle:
-                yaml_tree = yaml.load(handle.read(), Loader=wic_loader())
-            validator.validate(
-                utils_cwl.desugar_into_canonical_normal_form(yaml_tree))
-        except Exception as exc:  # pylint: disable=W0718:broad-exception-caught
-            validation_errors.append(
-                f"{workflow_path}: {type(exc).__name__}: {exc}")
+        parsed = parse(workflow_path.read_text(encoding="utf-8"), workflow_path.name)
+        if not parsed.ok or parsed.document is None:
+            validation_errors.extend(str(d) for d in parsed.diagnostics)
+            continue
+        validation_errors.extend(
+            f"{workflow_path}: {error.message}"
+            for error in validator.iter_errors(to_json(parsed.document)))
 
     if validation_errors:
         pytest.fail("Generated workflow validation failed:\n" +

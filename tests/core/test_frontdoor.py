@@ -1,6 +1,6 @@
-"""The text front door: Parse reads the file, not a regenerated document.
+"""The file front door: each file is parsed as written, not as a regenerated document.
 
-Every claim here is about bytes. A bundle built from disk hands Parse the
+Every claim here is about bytes. A bundle built from disk is the parse of the
 user's own text, so a span it reports is a position a reader can open an
 editor at. `test_span_names_the_line_in_the_authored_file` is the one that
 says so directly: it locates the failing construct by searching the file it
@@ -14,8 +14,18 @@ import yaml
 
 from sophios.ir.frontdoor import bundle_from_disk
 from sophios.ir.pipeline import front_end
-from sophios.ir.resolve import RegistryKey, generated_process_id
-from sophios.lang import SophiosErrorCode, parse
+from sophios.ir.resolve import RegistryKey, RegistrySnapshot, generated_process_id
+from sophios.lang import (
+    Diagnostics,
+    Document,
+    EdgeDef,
+    EdgeRef,
+    OutputBinding,
+    ParseResult,
+    SophiosErrorCode,
+    Step,
+    parse,
+)
 from sophios.utils_yaml import wic_loader
 
 from .synthetic_tools import SYNTHETIC_TOOLS
@@ -63,7 +73,7 @@ def _redump(text: str) -> str:
 
 @pytest.mark.fast
 def test_source_is_the_file_verbatim(tmp_path: Path) -> None:
-    """The root's own bytes reach Parse, comments and blank lines included."""
+    """The root is parsed from its own bytes, comments and blank lines included."""
     text = ('# a leading comment\n'
             '\n'
             'wic:\n'
@@ -79,13 +89,13 @@ def test_source_is_the_file_verbatim(tmp_path: Path) -> None:
 
     bundle = bundle_from_disk(root, {'global': {}}, SYNTHETIC_TOOLS)
 
-    assert bundle.source == text
+    assert bundle.parsed.document == parse(text, 'tutorial.wic').document
     assert bundle.name == 'tutorial'
 
 
 @pytest.mark.fast
-def test_child_workflow_is_registered_as_its_own_text(tmp_path: Path) -> None:
-    """A called `.wic` enters the registry as the file, not as a re-dump."""
+def test_child_workflow_is_registered_as_its_own_parse(tmp_path: Path) -> None:
+    """A called `.wic` enters the registry parsed from the file, not from a re-dump."""
     child_text = ('# the child keeps its comments too\n'
                   'steps:\n'
                   '- id: mk_file\n'
@@ -100,9 +110,9 @@ def test_child_workflow_is_registered_as_its_own_text(tmp_path: Path) -> None:
 
     entry = bundle.registry.workflow(RegistryKey('global', 'child'))
     assert entry is not None
-    assert entry.source == child_text
-    assert entry.source != _redump(child_text)
-    assert front_end(bundle.source, bundle.registry, name=bundle.name).graph is not None
+    assert entry.parsed.document == parse(child_text, 'child.wic').document
+    assert entry.parsed.document != parse(_redump(child_text), 'child.wic').document
+    assert front_end(bundle.parsed, bundle.registry, name=bundle.name).graph is not None
 
 
 @pytest.mark.fast
@@ -162,7 +172,7 @@ def test_span_names_the_line_in_the_authored_file(tmp_path: Path) -> None:
     root.write_text(FORWARD_EDGE, encoding='utf-8')
     bundle = bundle_from_disk(root, {'global': {}}, SYNTHETIC_TOOLS)
 
-    result = front_end(bundle.source, bundle.registry, name=bundle.name)
+    result = front_end(bundle.parsed, bundle.registry, name=bundle.name)
 
     undefined = [item for item in result.diagnostics
                  if item.code is SophiosErrorCode.UNDEFINED_EDGE]
@@ -170,12 +180,32 @@ def test_span_names_the_line_in_the_authored_file(tmp_path: Path) -> None:
     assert undefined[0].span is not None
     assert undefined[0].span.start_line == _line_of(FORWARD_EDGE, '!* later')
 
-    dumped = [item for item in front_end(_redump(FORWARD_EDGE), bundle.registry,
-                                         name=bundle.name).diagnostics
+    redumped = parse(_redump(FORWARD_EDGE), 'forward.wic')
+    dumped = [item for item in front_end(redumped, bundle.registry, name=bundle.name).diagnostics
               if item.code is SophiosErrorCode.UNDEFINED_EDGE]
     assert len(dumped) == 1
     assert dumped[0].span is not None
     assert dumped[0].span.start_line != undefined[0].span.start_line
+
+
+@pytest.mark.fast
+def test_a_spanless_forward_edge_names_its_consuming_step() -> None:
+    """An in-memory document has no span, so the locator is where the edge failed."""
+    document = Document(steps=(
+        Step('xform', inputs=(('file', EdgeRef('later', None)),)),
+        Step('mk_file', outputs=(OutputBinding('file', EdgeDef('later', None), None),)),
+    ))
+    result = front_end(ParseResult(document, Diagnostics()),
+                       RegistrySnapshot.from_tools(SYNTHETIC_TOOLS), name='memory')
+
+    undefined = [item for item in result.diagnostics
+                 if item.code is SophiosErrorCode.UNDEFINED_EDGE]
+    assert len(undefined) == 1
+    assert undefined[0].span is None
+    assert undefined[0].locator is not None
+    assert undefined[0].locator.step == 'xform'
+    assert undefined[0].locator.index == 1
+    assert undefined[0].locator.port == 'file'
 
 
 @pytest.mark.fast
@@ -206,7 +236,7 @@ def test_python_script_resolves_without_writing_a_file(tmp_path: Path,
     expected = RegistryKey('global', generated_process_id(document.steps[0]))
     assert bundle.registry.tool(expected) is not None
 
-    result = front_end(bundle.source, bundle.registry, name=bundle.name)
+    result = front_end(bundle.parsed, bundle.registry, name=bundle.name)
     assert result.resolved is not None and result.resolved.document is not None
     process = result.resolved.document.steps[0].process
     assert process.key == expected
@@ -215,27 +245,19 @@ def test_python_script_resolves_without_writing_a_file(tmp_path: Path,
 
 
 @pytest.mark.fast
-def test_the_schema_gate_runs_before_anything_reads_the_document(tmp_path: Path) -> None:
-    """A document the schema refuses is refused as it is read.
+def test_the_parser_is_the_gate_a_file_passes_as_it_is_read(tmp_path: Path) -> None:
+    """A document with a `wic:` key the language does not have is refused as
+    it is read, at the key, and by the parser.
 
-    The `wic:` block is closed, so a key the language does not have is caught
-    here rather than carried through as opaque data -- which is what happened
-    while nothing validated. Supplying no validator is the other half of the
-    claim: it is the gate that rejects, not the parser.
+    A generated jsonschema used to be applied here, and the parser let the key
+    through as opaque data. Nothing validates against a schema now, so the
+    refusal is the parser's -- positioned, and with no environment involved:
+    the registry is empty.
     """
-    from sophios.lang.diagnostics import SophiosError  # pylint: disable=import-outside-toplevel
-
-    from .test_setup import load_test_registry  # pylint: disable=import-outside-toplevel
-
-    registry = load_test_registry()
     written = tmp_path / 'probe.wic'
     written.write_text('wic:\n  nonsense_key: 1\nsteps:\n- id: mk_file\n  in:\n    name: !ii a\n',
                        encoding='utf-8')
 
-    with pytest.raises(SophiosError) as caught:
-        bundle_from_disk(written, {'global': {}}, registry.tools, registry.validator)
-    assert [item.code for item in caught.value.diagnostics][0] is SophiosErrorCode.SUBWORKFLOW_INVALID
-
-    # Without the gate the same document is accepted, so the rejection above
-    # is the validator's and not something the parser would have caught.
-    assert bundle_from_disk(written, {'global': {}}, registry.tools) is not None
+    diagnostics = bundle_from_disk(written, {'global': {}}, {}).parsed.diagnostics
+    assert [(d.code, d.span.start_line if d.span else None) for d in diagnostics] == [
+        (SophiosErrorCode.UNKNOWN_WIC_KEY, 2)]

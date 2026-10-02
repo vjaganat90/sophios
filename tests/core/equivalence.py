@@ -5,6 +5,7 @@ may ignore and why that is legitimate rather than convenient — a normalisation
 without a reason is a place for a real difference to hide.
 
     IDENTICAL          nothing is ignored.
+    UP_TO_ORDER        mapping key order is ignored.
     UP_TO_EMBEDDING    `run:` paths are ignored.
     UP_TO_RENAMING     namespaced names are ignored; the DAG must match.
 
@@ -13,12 +14,13 @@ declared on `equivalent`.
 """
 from dataclasses import dataclass
 from enum import IntEnum
+from pathlib import PurePosixPath
 from typing import Any, Final, Iterator
 
 import networkx as nx
 from networkx.algorithms import isomorphism
 
-from sophios.utils import parse_step_name_str, recursively_delete_dict_key
+from sophios.utils import recursively_delete_dict_key
 from sophios.wic_types import Yaml
 
 
@@ -41,6 +43,12 @@ class Strength(IntEnum):
     #: (src/sophios/compiler.py:626-634) — which is embedding, not meaning.
     UP_TO_EMBEDDING = 2
 
+    #: Mapping key order may differ; nothing else may. Legitimate because a
+    #: YAML mapping is unordered by its own specification and CWL reads these
+    #: documents as mappings. The compatibility gate for emitted CWL: every
+    #: name, value, list order and `run:` path is compared.
+    UP_TO_ORDER = 3
+
     #: Byte-for-byte, after nothing — mapping *key order* included. Available
     #: as a real strength only because emission is canonical (see the
     #: canonical-emission predicate): while `requirements` key order came from
@@ -56,7 +64,7 @@ class Strength(IntEnum):
     #: CWL reads these documents as mappings, so two orderings are the same
     #: workflow. IDENTICAL is not a claim about the workflow, it is a claim
     #: about the bytes, and it is the only strength that makes one.
-    IDENTICAL = 3
+    IDENTICAL = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +94,9 @@ def equivalent(left: Yaml, right: Yaml, strength: Strength) -> Divergence | None
     *exclusion*: a key this module has never heard of is compared, not ignored.
     The stronger strengths forgive only what their own docstrings name.
 
-      * `steps[].id` and `steps[].run` — a namespaced name and a path.
+      * `steps[].id`, a namespaced name, and the directory of a `steps[].run`
+        path, which is embedding. The process `run:` names is compared
+        (`_process`).
       * `steps[].in[].source` and `outputs[].outputSource`, which name a
         producing step or a workflow input. Forgiven as names, but not
         dropped: `_dataflow` re-expresses each as a labelled edge carrying the
@@ -121,6 +131,8 @@ def equivalent(left: Yaml, right: Yaml, strength: Strength) -> Divergence | None
     match strength:
         case Strength.IDENTICAL:
             return _first_difference(left, right, strength, '', ordered=True)
+        case Strength.UP_TO_ORDER:
+            return _first_difference(left, right, strength, '', ordered=False)
         case Strength.UP_TO_EMBEDDING:
             # `$namespaces` goes with `run:`, and not as a convenience. A
             # prefix must be declared in the document that uses it, so
@@ -201,19 +213,23 @@ _INPUT_NODE: Final = '<input> '
 _OUTPUT_NODE: Final = '<output> '
 
 
-def _stem(step_id: str) -> str:
-    """The tool key inside a namespaced step id, or the id itself.
+def _process(step: Yaml) -> Any:
+    """The process a step runs, read from its `run:` and never from its id.
 
-    `parse_step_name_str` raises on anything that is not
-    `{yaml_stem}__step__{i}__{step_key}`. Falling back to the whole string is
-    the *stricter* choice — two unparsable ids then have to be equal rather
-    than being lumped together as "unknown" — and emitted CWL has no such ids
-    anyway, so the fallback only ever fires on hand-written fixtures.
+    A path contributes its final segment: the compiler writes the process file
+    as `{process}.cwl` under a directory recording where the document sits
+    (`step_id/`, `../`), and that directory is embedding, which a renaming
+    re-roots. An embedded process contributes the whole of itself. Neither is
+    a decoding of an id, so an id's spelling can change without this moving.
+
+    So a path and an embedded copy of the same process label differently:
+    `UP_TO_RENAMING` does not forgive embedding, and a document compared
+    with its own inlined form belongs at `UP_TO_EMBEDDING`.
     """
-    try:
-        return str(parse_step_name_str(step_id)[2])
-    except ValueError:
-        return step_id
+    run = step.get('run')
+    if isinstance(run, str):
+        return PurePosixPath(run).name
+    return _canonical(run)
 
 
 def _steps_of(document: Yaml) -> list[Yaml]:
@@ -304,8 +320,8 @@ def _canonical(node: Any) -> Any:
 
 
 #: Keys inside a step that UP_TO_RENAMING forgives, and the only ones. `id` is
-#: what a renaming renames; `run` is a path, forgiven a strength lower down and
-#: so forgiven here too; `in` is handled separately because only the `source`
+#: what a renaming renames; `run` is read only through `_process`, because the
+#: rest of a path is embedding, forgiven a strength lower down; `in` is handled separately because only the `source`
 #: inside a binding is a name — the binding's own key and everything else under
 #: it is compared. Written as an exclusion so that a step key nobody here has
 #: heard of is *compared*: a wrongly-compared key is a loud false divergence, a
@@ -335,8 +351,8 @@ def _step_body(step: Yaml) -> Any:
 def _dataflow(document: Yaml) -> nx.DiGraph:
     """The document's dataflow DAG, in a form renaming cannot change.
 
-    Nodes are steps, labelled with the tool stem *and the whole step body*
-    (`_step_body`); edges are `producer/port` references out of `in:`,
+    Nodes are steps, labelled with the process they run (`_process`) *and the
+    whole step body* (`_step_body`); edges are `producer/port` references out of `in:`,
     labelled with the `(output port, input name)` pairs that justify them.
     Every one of those labels is built from tool port names and literal
     values, which a namespace re-rooting does not touch, so the labelled graph
@@ -348,9 +364,9 @@ def _dataflow(document: Yaml) -> nx.DiGraph:
     and one where it is the third are then not equivalent, which a multiset
     could not see.
 
-    A separate multiset-of-tool-stems check used to sit alongside this and has
-    been deleted. It discriminated nothing: a stem-labelled node isomorphism
-    already implies equal stem multisets, so the only thing the check
+    A separate multiset-of-tools check used to sit alongside this and has
+    been deleted. It discriminated nothing: a process-labelled node isomorphism
+    already implies equal process multisets, so the only thing the check
     contributed was the string in the `Divergence.path` — and the test that
     named it was asserting on that string rather than on a verdict, which is
     this project's recurring failure, in the artifact everything imports.
@@ -359,8 +375,10 @@ def _dataflow(document: Yaml) -> nx.DiGraph:
     own rather than being dropped. Dropping it is what makes the "an edge
     points somewhere else" case in `MUST_DIFFER` invisible: with the target
     discarded, a document whose edge went nowhere looks the same as one with
-    no edge at all. Such a node is labelled `('external', stem)` so it can
-    never match a step the document really declares.
+    no edge at all. Such a node is labelled `('external', name)` with the whole
+    name it is referenced by — it has no `run:` to read, and the whole name is
+    the stricter label: two different absent producers can never be lumped
+    together — so it can never match a step the document really declares.
 
     A source that names no step at all — no `producer/port` split — is a
     workflow-level input, and it too becomes a node rather than being dropped.
@@ -392,7 +410,7 @@ def _dataflow(document: Yaml) -> nx.DiGraph:
     declared = _steps_of(document)
     for step in declared:
         graph.add_node(str(step['id']),
-                       label=('step', _stem(str(step['id'])), _step_body(step)))
+                       label=('step', _process(step), _step_body(step)))
     for step in declared:
         consumer = str(step['id'])
         for name, source in _bindings(step):
@@ -430,7 +448,7 @@ def _producer_of(graph: nx.DiGraph, source: str,
     producer, separator, port = source.partition('/')
     if separator and port and producer:
         if producer not in graph:
-            graph.add_node(producer, label=('external', _stem(producer)))
+            graph.add_node(producer, label=('external', producer))
         return producer, port
     if source:
         node = _INPUT_NODE + source

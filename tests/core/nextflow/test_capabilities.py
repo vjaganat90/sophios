@@ -25,6 +25,9 @@ from sophios.api.python.workflow import CompiledWorkflow, Step, Workflow
 from sophios.cli import default_compilation_settings
 from sophios.input_output_nf import render_nextflow
 from sophios.ir.artifacts import CompilationResult
+from sophios.ir.frontdoor import SourceBundle
+from sophios.ir.resolve import RegistrySnapshot
+from sophios.lang import Diagnostics, EdgeDef, EdgeRef, OutputBinding, ParseResult
 from sophios.nf_types import (
     NfFlag,
     NfPort,
@@ -45,7 +48,7 @@ from sophios.utils_nf import (
     compiled_source_to_nextflow,
 )
 from sophios.utils_graphs import get_graph_reps
-from sophios.wic_types import StepId as LegacyStepId, Yaml, YamlTree
+from sophios.wic_types import Yaml
 
 from .testkit import (
     REPO_ROOT,
@@ -1968,19 +1971,26 @@ def _nested_downstream_result() -> CompilationResult:
     consume = Step(_copy_tool(), step_name="consume")
     consume.inputs.source = "placeholder.txt"
     root = Workflow([write, child, consume], "root")
-    document = root.yaml
-    document["steps"][1]["parentargs"]["out"] = [
-        {"result": {"wic_anchor": "childout"}}
-    ]
-    document["steps"][2]["in"]["source"] = {"wic_alias": "childout"}
+    document = workflow_runtime.workflow_document(root, inline_subtrees=False)
+    steps = list(document.steps)
+    steps[1] = replace(steps[1], outputs=(OutputBinding("result", EdgeDef("childout")),))
+    steps[2] = replace(steps[2], inputs=(("source", EdgeRef("childout")),))
     compiler_options, graph_settings, tag_paths = default_compilation_settings()
     tools = workflow_runtime._merged_known_tools(root._flatten_steps())
-    return compiler.compile_document(
-        YamlTree(LegacyStepId("root", "global"), document),
+    bundle = SourceBundle(
+        ParseResult(replace(document, steps=tuple(steps)), Diagnostics()),
+        "root",
+        RegistrySnapshot.from_tools(tools, workflows={
+            ("global", child.process_name): ParseResult(
+                workflow_runtime.workflow_document(child, inline_subtrees=False), Diagnostics()
+            ),
+        }),
+    )
+    return compiler.compile_source(
+        bundle,
         compiler_options,
         graph_settings,
         tag_paths,
-        tools,
         relative_run_path=True,
         testing=True,
         graph_target=get_graph_reps("root"),
@@ -1991,21 +2001,22 @@ def _nested_artifacts(result: CompilationResult) -> list[Any]:
     return [artifact for artifact in result.artifact.children if artifact.graph is not None]
 
 
+def _workflow_call_index(result: CompilationResult) -> int:
+    return next(
+        index
+        for index, step_node in enumerate(result.graph.steps)
+        if step_node.run is not None and step_node.run.child is not None
+    )
+
+
 def _with_wrapper_semantic(
     result: CompilationResult,
     **changes: Any,
 ) -> CompilationResult:
-    index = next(
-        index
-        for index, step_node in enumerate(result.graph.steps)
-        if step_node.emission is not None and step_node.emission.run.child is not None
-    )
-    step_node = result.graph.steps[index]
-    assert step_node.emission is not None
-    changed_step = replace(step_node, emission=replace(step_node.emission, **changes))
-    steps = list(result.graph.steps)
-    steps[index] = changed_step
-    return replace(result, graph=replace(result.graph, steps=tuple(steps)))
+    """A copy of `result` whose emitted workflow-call step carries `changes`."""
+    changed = copy.deepcopy(result)
+    changed.artifact.cwl["steps"][_workflow_call_index(changed)].update(changes)
+    return changed
 
 
 @pytest.mark.fast
@@ -2051,7 +2062,7 @@ def test_resolved_nesting_deeper_than_one_level_projects_recursively() -> None:
 
 @pytest.mark.fast
 def test_rejects_scatter_on_a_resolved_subworkflow_call() -> None:
-    result = _with_wrapper_semantic(_nested_result(), scatter=("source",))
+    result = _with_wrapper_semantic(_nested_result(), scatter=["source"])
     with pytest.raises(ValueError, match="scatter on a nested workflow step"):
         compiled_source_to_nextflow(result)
 
@@ -2198,19 +2209,16 @@ def test_rejects_a_nested_workflow_input_default_before_projection() -> None:
 @pytest.mark.fast
 def test_rejects_unconsumed_workflow_call_input_semantics() -> None:
     result = _nested_result()
-    wrapper = next(
-        step_node
-        for step_node in result.graph.steps
-        if step_node.emission is not None and step_node.emission.run.child is not None
-    )
-    assert wrapper.emission is not None
-    inputs = tuple(
-        (name, {**definition, "valueFrom": "$(self)"})
-        if isinstance(definition, Mapping)
-        else (name, {"source": definition, "valueFrom": "$(self)"})
-        for name, definition in wrapper.emission.inputs
-    )
-    result = _with_wrapper_semantic(result, inputs=inputs)
+    wrapper = result.artifact.cwl["steps"][_workflow_call_index(result)]
+    inputs = {
+        name: (
+            {**definition, "valueFrom": "$(self)"}
+            if isinstance(definition, Mapping)
+            else {"source": definition, "valueFrom": "$(self)"}
+        )
+        for name, definition in wrapper["in"].items()
+    }
+    result = _with_wrapper_semantic(result, **{"in": inputs})
     with pytest.raises(ValueError, match="valueFrom is not consumed"):
         compiled_source_to_nextflow(result)
 

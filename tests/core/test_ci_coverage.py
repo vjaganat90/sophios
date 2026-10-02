@@ -40,6 +40,10 @@ REPORTING_ONLY: Final = frozenset({
 #: Reporting arguments that take a value, so the value is dropped with them.
 REPORTING_WITH_VALUE: Final = frozenset({'--workers', '--cwl_runner', '-n', '--parallel'})
 
+#: Reporting arguments spelled `--flag=value`. `--junitxml` would also write a
+#: report from inside the census's own collection.
+REPORTING_PREFIXES: Final = ('--cov', '--junitxml', '--hypothesis-seed')
+
 
 def _selection_argv(argv: list[str]) -> list[str]:
     """`argv` with the arguments that do not decide selection removed."""
@@ -50,7 +54,7 @@ def _selection_argv(argv: list[str]) -> list[str]:
             skip = False
         elif token in REPORTING_WITH_VALUE:
             skip = True
-        elif token not in REPORTING_ONLY and not token.startswith('--cov'):
+        elif token not in REPORTING_ONLY and not token.startswith(REPORTING_PREFIXES):
             kept.append(token)
     return kept
 
@@ -124,6 +128,23 @@ def test_no_lane_checks_our_own_repo_out_at_a_literal_ref() -> None:
                 if repo.endswith('/sophios') and ref and '${{' not in ref:
                     offenders.append(f'{workflow.name}: checks out sophios at {ref!r}')
     assert not offenders, '\n'.join(offenders)
+
+
+@pytest.mark.fast
+def test_the_weekly_property_lane_runs_the_whole_oracle_suite() -> None:
+    """The deep lane draws every oracle property, slow ones included.
+
+    `ORACLE_FILES` names the suite whose inputs are synthetic, which is what
+    lets the weekly lane run on a bare hosted runner. A file added there and
+    not to the lane would be deepened nowhere, and nothing else would notice.
+    """
+    from .test_hermeticity import ORACLE_FILES  # pylint: disable=import-outside-toplevel
+
+    weekly: set[str] = set()
+    for argv in _invocations(WORKFLOWS / 'property_weekly.yml'):
+        weekly |= _collect(argv)
+    missing = sorted(_collect(list(ORACLE_FILES)) - weekly)
+    assert not missing, 'the weekly property lane does not run:\n  ' + '\n  '.join(missing)
 
 
 def test_the_census_sees_the_repo() -> None:
@@ -248,11 +269,8 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 #: Every test that does not run on the Windows leg, and the evidence that
 #: excluding it takes nothing away: each one ran *nowhere* until a lane step
 #: named its file, so none has ever executed on Windows. Measured on the
-#: `Lint And Test` Windows job, where the step that names them selects 45 tests
-#: — 35 pass and these 10 fail on `import pwd`.
+#: `Lint And Test` Windows job, where they fail on `import pwd`.
 #:
-#: `test_canonical_path.py`'s two are reached only by `build_wheel.yml`, which
-#: is `runs-on: ubuntu-latest`, so they have no Windows run to lose either.
 #: `test_emit.py`'s validator pair exercise cwltool itself; the phase lane
 #: collects their platform-neutral siblings on Windows and these two run on
 #: the POSIX matrix legs where cwltool's `pwd` dependency is available.
@@ -260,12 +278,8 @@ def _tests_importing(module: str, path: Path) -> set[str]:
 #: The list is the claim. Growing it is a deliberate edit here, not a marker
 #: added in passing, because every entry is Windows coverage given up.
 WINDOWS_EXCLUDED: Final = frozenset({
-    'tests/core/test_canonical_path.py::test_compiled_output_validates_as_cwl',
-    'tests/core/test_canonical_path.py::test_cwltool_validate_rejects_an_invalid_document',
     'tests/core/test_emit.py::test_emit_validates_as_cwl_v1_2',
     'tests/core/test_emit.py::test_validator_rejects_the_independent_invalid_control',
-    'tests/core/test_hermeticity.py::test_every_stub_is_valid_cwl',
-    'tests/core/test_lang_version.py::test_annotation_is_declared_and_the_cwl_stays_valid',
     'tests/core/test_leak_boundary.py::test_residue_validates_as_cwl_v1_2',
     # One compile and one `--validate` of a four-line workflow, under a second.
     # It buys the authored `outputSource` path, which the residue property

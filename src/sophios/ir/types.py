@@ -1,34 +1,22 @@
 """The types a compiled workflow is made of.
 
-Each names something the compiler already manipulates and spells as a string or
-threads through a call stack, so the checker can verify what it means rather
-than only what it computes.
-
-Frozen and slotted, as `sophios.lang.nodes` is, and holding no mutable
-container that any invariant depends on: a check in `__post_init__` is worth
-having only if it cannot be invalidated afterwards. An `OpaqueCwl` payload may
-still be a `list` or a `dict` -- nothing reads one, which is the point of the
-type, so nothing can be invalidated through it.
+Each names something the compiler already manipulates, so the checker can
+verify what it means rather than only what it computes. Frozen and slotted,
+holding no mutable container that any invariant depends on: a check in
+`__post_init__` is worth having only if it cannot be invalidated afterwards.
 """
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Final, TypeAlias
+from typing import NewType, TypeAlias
 
 from ..lang.nodes import InputValue, OpaqueCwl
 from ..lang.spans import SourceSpan
 
-#: How namespaces are joined when a port identity is flattened for emission.
-#: Structured identities are carried through the phases and joined only here,
-#: so this is the one place the legacy spelling exists.
-NAMESPACE_SEPARATOR: Final = '___'
-
 
 class Direction(StrEnum):
-    """Which side of a step a port is on.
-
-    Part of a port's identity because CWL puts inputs and outputs in separate
-    namespaces: a tool may declare `file` on both, and an identity without this
-    makes the two compare equal and an edge between them look like a self-loop.
+    """Which side of a step a port is on; part of a port's identity because
+    CWL puts inputs and outputs in separate namespaces.
     """
 
     INPUT = 'input'
@@ -37,48 +25,27 @@ class Direction(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Namespace:
-    """Where a step sits in the nesting of subworkflows: a path, outermost
-    first. The compiler spells it joined and splits it back; holding the parts
-    gives the splitting one home."""
+    """Where a step sits in the nesting of subworkflows: the step occurrences
+    that enclose it, outermost first."""
 
-    parts: tuple[str, ...] = ()
+    parts: tuple['StepId', ...] = ()
 
-    def __post_init__(self) -> None:
-        """Reject an empty part. A part containing the separator is *allowed*:
-        a workflow may legitimately be named that way, and refusing it here
-        would narrow the language to suit the emitted spelling."""
-        for part in self.parts:
-            if not part:
-                raise ValueError('a namespace part cannot be empty')
-
-    def child(self, name: str) -> 'Namespace':
-        """This namespace with `name` appended.
+    def child(self, step: 'StepId') -> 'Namespace':
+        """This namespace with `step` appended.
 
         Args:
-            name (str): The step or subworkflow to descend into.
+            step (StepId): The subworkflow call to descend into.
 
         Returns:
             Namespace: The nested namespace.
         """
-        return Namespace(self.parts + (name,))
-
-    def flatten(self) -> str:
-        """The joined spelling the emitted document carries.
-
-        Returns:
-            str: The parts joined by the separator.
-        """
-        return NAMESPACE_SEPARATOR.join(self.parts)
+        return Namespace(self.parts + (step,))
 
 
 @dataclass(frozen=True, slots=True, order=True)
 class RegistryKey:
-    """A process name in one plugin namespace.
-
-    An identity, so it lives with the others. A step's resolved process is
-    recorded as this pair rather than as a joined string, because every reader
-    of a joined string has to take it apart again -- and a name split back out
-    of text is a guess where the pair is a fact.
+    """A process name in one plugin namespace, kept as a pair rather than a
+    joined string so no reader has to take it apart again.
     """
 
     namespace: str
@@ -87,12 +54,8 @@ class RegistryKey:
 
 @dataclass(frozen=True, slots=True)
 class StepId:
-    """One *occurrence* of a step, which is not the same as the tool it runs.
-
-    `docs/tutorials/append_twice.wic` invokes `append` twice, and sequence-form
-    `steps:` exists so that it can. `name` is the authored id and repeats with
-    the tool; `index` is the occurrence, and the pair is the identity -- which
-    is what the compiler already means by `{stem}__step__{i}__{key}`.
+    """One *occurrence* of a step, which is not the same as the tool it runs:
+    `name` is the authored id and may repeat; `index` plus `name` is the identity.
     """
 
     namespace: Namespace
@@ -107,13 +70,33 @@ class StepId:
             raise ValueError(f'a step occurrence is 1-based, not {self.index}')
 
 
+#: A name as its author wrote it: a tool's port, a workflow input, a step key.
+#: Distinct from `str` so that a rendered name cannot stand in for one -- the
+#: checker refuses a plain string where an identity is expected.
+AuthoredName = NewType('AuthoredName', str)
+
+
+@dataclass(frozen=True, slots=True)
+class DerivedName:
+    """A name the compiler makes by exposing `port` of `step` one level up;
+    `ir.names` alone decides how it is written.
+    """
+
+    step: StepId
+    port: 'PortName'
+
+
+#: What a port or workflow boundary is called: written, or derived from one.
+PortName: TypeAlias = AuthoredName | DerivedName
+
+
 @dataclass(frozen=True, slots=True)
 class PortId:
     """A port's identity: which step occurrence, which side, and which port."""
 
     step: StepId
     direction: Direction
-    port: str
+    port: PortName
 
     def __post_init__(self) -> None:
         """Reject a port with no name."""
@@ -123,34 +106,52 @@ class PortId:
 
 @dataclass(frozen=True, slots=True)
 class PortType:
-    """What a port carries, in the algebra the compiler reasons within.
-
-    `declared` keeps the CWL verbatim, because passthrough is open and whatever
-    was given must be emitted. The fields beside it are the part Sophios
-    interprets. A type it does not interpret has `declared` and nothing else --
-    the leak boundary as a type rather than a convention.
+    """What a port carries. `declared` keeps the CWL verbatim, for Emit;
+    `canonical` is the one parse of it every other reader uses: CWL's `T?` and
+    `T[]` shorthand expanded, through array items and every union member, so
+    `string?[]` is an array of nullable strings and not a nullable array, and
+    `[File?, string]` accepts null in either spelling of that member.
     """
 
     declared: OpaqueCwl
-    optional: bool = False
-    array_depth: int = 0
-    union: tuple['PortType', ...] = ()
+    canonical: OpaqueCwl = field(init=False)
 
     def __post_init__(self) -> None:
-        """Reject a depth that cannot describe a real type."""
-        if self.array_depth < 0:
-            raise ValueError('array_depth counts wrappers and cannot be negative')
+        """Parse `declared` once, here, so no port type exists unparsed."""
+        object.__setattr__(self, 'canonical', _canonical(deepcopy(self.declared)))
+
+    @property
+    def optional(self) -> bool:
+        """Whether the port accepts `null` itself, not merely in its items."""
+        return isinstance(self.canonical, list) and 'null' in self.canonical
+
+
+def _canonical(raw: OpaqueCwl) -> OpaqueCwl:
+    """Expand `T?` and `T[]` wherever they are written, including inside a member."""
+    if isinstance(raw, str) and raw.endswith('?'):
+        return ['null', _canonical(raw[:-1])]
+    if isinstance(raw, str) and raw.endswith('[]'):
+        return {'type': 'array', 'items': _canonical(raw[:-2])}
+    if isinstance(raw, dict) and raw.get('type') == 'array' and 'items' in raw:
+        return {**raw, 'items': _canonical(raw['items'])}
+    if isinstance(raw, list):
+        # A member's own shorthand, expanded: `null` once, first; no duplicates.
+        members: list[OpaqueCwl] = []
+        for item in raw:
+            expanded = _canonical(item)
+            for member in expanded if isinstance(expanded, list) else [expanded]:
+                if member not in members:
+                    members.append(member)
+        return ['null'] * ('null' in members) + [item for item in members if item != 'null']
+    return raw
 
 
 @dataclass(frozen=True, slots=True)
 class PortDeclaration:  # pylint: disable=too-many-instance-attributes
-    """The complete declaration of one process or workflow port.
-
-    ``PortType`` is the deliberately small algebra later phases may reason
-    about.  The other fields are emission facts: they preserve declarations
-    that affect CWL without inviting Link or Infer to interpret arbitrary CWL.
-    ``has_default`` distinguishes an authored ``default: null`` from no
-    default at all.
+    """The complete declaration of one process or workflow port. The fields
+    beside `type` preserve emission facts without inviting Link or Infer to
+    interpret arbitrary CWL; `has_default` distinguishes an authored
+    `default: null` from no default at all.
     """
 
     type: PortType
@@ -159,21 +160,22 @@ class PortDeclaration:  # pylint: disable=too-many-instance-attributes
     default: OpaqueCwl = None
     has_default: bool = False
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
-    field_order: tuple[str, ...] = ('type',)
     shorthand: bool = False
 
-    def __post_init__(self) -> None:
-        if len(self.field_order) != len(set(self.field_order)):
-            raise ValueError('a port declaration field order cannot repeat a field')
+
+#: A `PortDeclaration` reduced to what a workflow boundary may state. Only
+#: `declarations.boundary_declaration` produces one.
+BoundaryDeclaration = NewType('BoundaryDeclaration', PortDeclaration)
 
 
 @dataclass(frozen=True, slots=True)
 class WorkflowPort:
     """A port on the workflow boundary, including its CWL declaration."""
 
-    name: str
-    declaration: PortDeclaration
-    output_source: OpaqueCwl = None
+    name: PortName
+    declaration: BoundaryDeclaration
+    #: A resolved producer, or the authored text when Link could not resolve it.
+    output_source: 'StepOutputRef | OpaqueCwl' = None
     has_output_source: bool = False
     #: The port this one was derived from, when its name was built by joining a
     #: step id to a port name rather than written by hand. Recorded because the
@@ -189,7 +191,7 @@ class WorkflowPort:
 class JobBinding:
     """One concrete value in the job input document projected from a graph."""
 
-    name: str
+    name: PortName
     value: OpaqueCwl
 
     def __post_init__(self) -> None:
@@ -198,15 +200,23 @@ class JobBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class StepOutputRef:
+    """An output of a step in the same document: CWL's `step/port`."""
+
+    step: StepId
+    port: PortName
+
+
+@dataclass(frozen=True, slots=True)
 class Source:
-    """A step input bound to a name the emitted document defines.
+    """A step input bound to a workflow input or to a step's output.
 
     `shorthand` is CWL's spelling choice and nothing more, the same
     distinction `PortDeclaration.shorthand` records: `in: {x: src}` and
     `in: {x: {source: src}}` mean one thing and are written two ways.
     """
 
-    name: str
+    ref: PortName | StepOutputRef
     shorthand: bool = False
 
 
@@ -217,22 +227,17 @@ class Expression:
     text: str
 
 
-#: What a step's `in:` entry can be. Three shapes, and the set is closed: a
-#: value that is neither is not something CWL has a field for, so the phases
-#: cannot express one and Emit cannot be handed one. Authored values are
-#: `InputValue`, and the two unions not meeting is the whole point.
+#: What a step's `in:` entry can be: a closed set of the shapes CWL has a
+#: field for, distinct from the authored `InputValue` union.
 EmittedValue: TypeAlias = Source | Expression
 
 
 @dataclass(frozen=True, slots=True)
 class ProcessRun:
-    """What a step executes.
-
-    ``target`` is transported exactly as CWL: normally a relative path, but an
-    inline process object is legal too.  ``process_id`` is the resolved logical
-    identity; it is separate because a path is an embedding choice, not a tool
-    identity.  A child graph records a resolved subworkflow without hiding its
-    emitted CWL in an opaque value.
+    """What a step executes: `target` is transported exactly as CWL (usually a
+    relative path, but an inline process object is legal), and `process_id` is
+    the resolved logical identity, kept separate since a path is an embedding
+    choice, not a tool identity.
     """
 
     target: OpaqueCwl
@@ -242,32 +247,6 @@ class ProcessRun:
     def __post_init__(self) -> None:
         if not self.process_id.name:
             raise ValueError('a resolved process must have an identity')
-
-
-@dataclass(frozen=True, slots=True)
-class StepEmission:  # pylint: disable=too-many-instance-attributes
-    """The CWL surface of a step after semantic phases have finished.
-
-    Known fields are named.  ``passthrough`` is only the open CWL residue, and
-    ``field_order`` records canonical byte order without storing a completed
-    step dictionary.  Emit is the only phase allowed to traverse the payloads.
-    """
-
-    id: str
-    inputs: tuple[tuple[str, EmittedValue], ...]
-    run: ProcessRun
-    outputs: tuple[OpaqueCwl, ...]
-    scatter: OpaqueCwl = None
-    scatter_method: OpaqueCwl = None
-    when: OpaqueCwl = None
-    passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
-    field_order: tuple[str, ...] = ('id', 'in', 'run', 'out')
-
-    def __post_init__(self) -> None:
-        if not self.id:
-            raise ValueError('an emitted step must have an id')
-        if len(self.field_order) != len(set(self.field_order)):
-            raise ValueError('an emitted step field order cannot repeat a field')
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,17 +262,33 @@ class Port:
     origin: PortId | None = None
 
 
+class EdgeOrigin(StrEnum):
+    """How an edge stored on `WorkflowGraph` was placed there. `stepin`
+    reads this to decide `shorthand`: an inferred edge was never authored,
+    so it must emit as one; a composed edge stands for something the
+    document itself said, so it must not.
+    """
+
+    COMPOSED = 'composed'
+    INFERRED = 'inferred'
+
+
 @dataclass(frozen=True, slots=True)
 class Edge:
     """A value flowing from one port to another.
 
     Between *ports*, not steps: two edges into one step are different bindings,
     and a step pair would lose which input each satisfies.
+
+    `origin` is `None` for an edge that lives in `Binding.resolution`: a
+    binding is already provenance, an authored `in:` entry, so nothing reads
+    its origin.
     """
 
     source: PortId
     sink: PortId
     span: SourceSpan | None = None
+    origin: EdgeOrigin | None = None
 
     def __post_init__(self) -> None:
         """Reject an edge that does not run from an output to an input."""
@@ -307,12 +302,9 @@ class Edge:
 
 @dataclass(frozen=True, slots=True)
 class DeferredObligation:
-    """An input whose producer is not in this document.
-
-    A subworkflow may bind an input to something a parent supplies. The compiler
-    carries that as an intermediate input made on the way down and satisfied as
-    the recursion unwinds (docs/dev/algorithms.md); naming it lets `Link` say
-    whether every one was discharged.
+    """An input whose producer is not in this document, satisfied as the
+    compiler's recursion unwinds; naming it lets `Link` say whether every one
+    was discharged.
     """
 
     sink: PortId
@@ -336,13 +328,9 @@ Resolution: TypeAlias = Edge | DeferredObligation | None
 
 @dataclass(frozen=True, slots=True)
 class Binding:
-    """One authored input binding, and what it resolved to.
-
-    Every `in:` entry becomes one of these, whatever was written. Keeping only
-    the edges would make two documents differing solely in a literal lower to
-    the same graph, so `Emit` would have to read the AST again to tell them
-    apart -- and a graph that cannot reproduce its own document is not the
-    document's meaning.
+    """One authored input binding, and what it resolved to; every `in:` entry
+    becomes one of these, whatever was written, so the graph reproduces the
+    document rather than only its edges.
     """
 
     sink: PortId
@@ -357,10 +345,10 @@ class Binding:
 
 @dataclass(frozen=True, slots=True)
 class StepNode:  # pylint: disable=too-many-instance-attributes
-    """A step occurrence, with the ports it exposes and what its inputs bind to.
-
-    `interpreted` holds the CWL keys Sophios acts upon and `passthrough` the
-    rest -- the split the AST already makes, carried forward, not redrawn.
+    """A step occurrence, with the ports it exposes and what its inputs bind
+    to. `interpreted` holds the CWL keys Sophios acts upon (including
+    `scatter`, `scatterMethod` and `when`, read verbatim by `emit`) and
+    `passthrough` the rest.
     """
 
     id: StepId
@@ -370,7 +358,10 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
     interpreted: tuple[tuple[str, OpaqueCwl], ...] = ()
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
     span: SourceSpan | None = None
-    emission: StepEmission | None = None
+    #: What this step executes; `None` only before Lower or Infer attaches it.
+    run: ProcessRun | None = None
+    #: The ports `interpreted['scatter']` names, resolved where it is read.
+    scatter_ports: tuple[PortName, ...] = ()
     inference_rules: tuple[tuple[str, str], ...] = ()
     synthesized: bool = False
 
@@ -396,8 +387,11 @@ class StepNode:  # pylint: disable=too-many-instance-attributes
 #: The four mappings the compiler threads through its recursion, as pairs
 #: rather than dicts: a frozen graph holding a mutable mapping can have its
 #: invariants invalidated after the constructor has checked them.
-PortMapping: TypeAlias = tuple[tuple[str, PortId], ...]
-InputMapping: TypeAlias = tuple[tuple[str, tuple[PortId, ...]], ...]
+#: `explicit_edge_*` are keyed by authored edge labels; the other two by the
+#: boundary name a port is exposed under.
+EdgeMapping: TypeAlias = tuple[tuple[str, PortId], ...]
+PortMapping: TypeAlias = tuple[tuple[PortName, PortId], ...]
+InputMapping: TypeAlias = tuple[tuple[PortName, tuple[PortId, ...]], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,8 +404,8 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
 
     namespace: Namespace
     steps: tuple[StepNode, ...] = ()
-    explicit_edge_defs: PortMapping = ()
-    explicit_edge_calls: PortMapping = ()
+    explicit_edge_defs: EdgeMapping = ()
+    explicit_edge_calls: EdgeMapping = ()
     input_mapping: InputMapping = ()
     output_mapping: PortMapping = ()
     passthrough: tuple[tuple[str, OpaqueCwl], ...] = ()
@@ -426,20 +420,17 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
     namespaces: tuple[tuple[str, OpaqueCwl], ...] = ()
     schemas: tuple[OpaqueCwl, ...] = ()
     children: tuple['WorkflowGraph', ...] = ()
-    composition_edges: tuple[Edge, ...] = ()
-    inferred_edges: tuple[Edge, ...] = ()
+    #: Every edge Link or Infer placed here (not a binding's own resolution),
+    #: distinguished by `Edge.origin`.
+    linked_edges: tuple[Edge, ...] = ()
     discharged_obligations: tuple[PortId, ...] = ()
-    field_order: tuple[str, ...] = ('steps', 'cwlVersion', 'class', '$namespaces', '$schemas',
-                                    'inputs', 'sophios:lang_version', 'outputs')
+    #: `input_mapping` names emitted in shorthand: a step's own lifted input,
+    #: recorded where Complete or Infer creates it (a name cannot tell).
+    shorthand_relays: tuple[PortName, ...] = ()
 
     def __post_init__(self) -> None:
-        """Reject a graph naming a port no step declares, anywhere.
-
-        Checked over every reference the graph holds -- edges, obligations and
-        all four mappings -- rather than over the edges alone. An identity that
-        resolves to nothing is the same defect wherever it is stored, and it
-        reaches emission as a dangling `source:`, which CWL accepts and a runner
-        then fails on.
+        """Reject a graph naming a port no step declares, checked over every
+        reference the graph holds, not only its edges.
         """
         occurrences = [step.id for step in self.steps]
         if len(occurrences) != len(set(occurrences)):
@@ -449,30 +440,21 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
                 raise ValueError(
                     f'{step.id} sits in {step.id.namespace.parts}, not this graph\'s '
                     f'{self.namespace.parts}')
-        if len(self.field_order) != len(set(self.field_order)):
-            raise ValueError('a workflow field order cannot repeat a field')
 
         known = {port.id for step in self.steps for port in step.inputs + step.outputs}
         recursive_known = self.port_ids
         recursive_wheres = {'an edge source', 'an output mapping'}
         for where, port_id in self._references():
-            # An input mapping relays a boundary name down to its consuming
-            # port exactly as an output mapping relays one up from its
-            # producer (`_redirect_output_mappings`): `_direct_sink` walks
-            # that relay one hop at a time through each ancestor's own
-            # `input_mapping`, so an entry several levels above the sink
-            # legitimately names a port outside this graph's own steps, the
-            # same way an output mapping already may.
+            # An input mapping may legitimately relay a boundary name to a
+            # sink several levels below it, outside this graph's own steps,
+            # the same way an output mapping already may.
             recursive = where in recursive_wheres or where.startswith('input mapping ')
             allowed = recursive_known if recursive else known
             if port_id not in allowed:
                 raise ValueError(f'{where} names a port no step declares: {port_id}')
-        for edge in self.composition_edges:
+        for edge in self.linked_edges:
             if edge.source not in recursive_known or edge.sink not in recursive_known:
-                raise ValueError(f'a composition edge names a port outside this graph tree: {edge}')
-        for edge in self.inferred_edges:
-            if edge.source not in recursive_known or edge.sink not in recursive_known:
-                raise ValueError(f'an inferred edge names a port outside this graph tree: {edge}')
+                raise ValueError(f'a linked edge names a port outside this graph tree: {edge}')
         for sink in self.discharged_obligations:
             if sink not in recursive_known:
                 raise ValueError(f'a discharged obligation names no port in this graph tree: {sink}')
@@ -494,21 +476,18 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
             found.append((f'mapping {name!r}', port_id))
         for _name, port_id in self.output_mapping:
             found.append(('an output mapping', port_id))
-        for name, port_ids in self.input_mapping:
-            found.extend((f'input mapping {name!r}', port_id) for port_id in port_ids)
+        for boundary, port_ids in self.input_mapping:
+            found.extend((f'input mapping {boundary!r}', port_id) for port_id in port_ids)
         return tuple(found)
 
     @property
     def edges(self) -> tuple[Edge, ...]:
-        """The edges this graph owns: its own bindings, and what Link placed here.
-
-        Local, not tree-wide. A child's edge belongs to the child, whose
-        indices name nothing at this level -- so a consumer that wants the
-        whole tree asks for it by name, as it does for `all_steps`.
+        """The edges this graph owns: its own bindings, and what Link or
+        Infer placed here. Local, not tree-wide.
         """
         local = tuple(b.resolution for s in self.steps for b in s.bindings
                       if isinstance(b.resolution, Edge))
-        return local + self.composition_edges + self.inferred_edges
+        return local + self.linked_edges
 
     @property
     def obligations(self) -> tuple[DeferredObligation, ...]:
@@ -540,3 +519,10 @@ class WorkflowGraph:  # pylint: disable=too-many-instance-attributes
             StepNode | None: The first occurrence, if this graph has one.
         """
         return next((s for s in self.steps if s.id.name == name), None)
+
+
+#: A `WorkflowGraph` that states a whole CWL document: both versions set and
+#: every step carrying a `run`. Distinct from `WorkflowGraph` so `emit` can
+#: ask for one; a graph between phases satisfies neither. Only
+#: `emit.surface` produces one.
+EmissionDocument = NewType('EmissionDocument', WorkflowGraph)

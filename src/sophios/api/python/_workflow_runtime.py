@@ -19,16 +19,19 @@ from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 from cwl_utils.parser import load_document_by_uri, load_document_by_yaml
 
 from sophios import compiler, input_output, plugins, post_compile as pc, run_local as rl
-from sophios.ir.artifacts import CompilationArtifact, CompilationResult
-from sophios.input_output import dump_wic_yaml as _dump_yaml
+from sophios.ir.artifacts import CompilationResult
+from sophios.ir.frontdoor import SourceBundle
+from sophios.ir.resolve import RegistrySnapshot
+from sophios.lang import Diagnostics, Document, ParseResult, render
+from sophios.ir.names import render_step_id
 from sophios.input_output_nf import write_nextflow_artifacts
 from sophios.nf_types import ExecutableNextflowWorkflow
 from sophios.cli import default_compilation_settings, get_known_and_unknown_args
 from sophios.runtime_inputs import normalize_artifact_cwl, normalize_artifact_job_inputs
-from sophios.utils import convert_args_dict_to_args_list, step_name_str
+from sophios.utils import convert_args_dict_to_args_list
 from sophios.utils_nf import compiled_source_to_nextflow
 from sophios.utils_graphs import get_graph_reps
-from sophios.wic_types import StepId, Tool, Tools, YamlTree
+from sophios.wic_types import StepId, Tool, Tools
 
 from ._errors import InvalidCLTError, InvalidStepError
 from ._compiled import CompiledWorkflow
@@ -65,9 +68,8 @@ class _CWLParameterDefinition(Protocol):  # pylint: disable=too-few-public-metho
 
 
 def _parameter_name(parameter_id: Any) -> str:
-    """Normalize a CWL parameter id to its public parameter name."""
-    text = str(parameter_id)
-    return text.rsplit("#", maxsplit=1)[-1].rsplit("/", maxsplit=1)[-1]
+    """The public name of a CWL parameter id (its last `#` or `/` segment)."""
+    return str(parameter_id).rsplit("#", maxsplit=1)[-1].rsplit("/", maxsplit=1)[-1]
 
 
 def coerce_path(value: str | Path | None, *, field_name: str, allow_none: bool = False) -> Path | None:
@@ -114,8 +116,8 @@ def lookup_parameter(
         raise AttributeError(f"{owner_name!r} has no {kind} named {name!r}") from exc
 
 
-def _validate_scatter_assignment(items: list[Any], owner: Any | None = None) -> None:
-    """Validate `scatter` assignments on a step."""
+def _validate_scatter(items: list[Any], owner: Any | None) -> None:
+    """Raise unless `items` are distinct, bound, array-valued inputs of `owner`."""
     if not all(isinstance(item, InputParameter) for item in items):
         raise TypeError("all scatter inputs must be InputParameter type")
     if len({id(item) for item in items}) != len(items):
@@ -129,22 +131,6 @@ def _validate_scatter_assignment(items: list[Any], owner: Any | None = None) -> 
             raise ValueError("scatter inputs must be bound before scattering")
         if not item.is_scatterable():
             raise ValueError("scatter inputs must be bound to array-valued data")
-
-
-def _validate_scatter_method_assignment(scatter_method: str) -> None:
-    """Validate the `scatterMethod` special step attribute."""
-    allowed = {member.value for member in ScatterMethod}
-    if scatter_method not in allowed:
-        raise ValueError(
-            "Invalid value for scatterMethod. "
-            f"Valid values are: {', '.join(sorted(allowed))}"
-        )
-
-
-def _validate_when_assignment(condition: str) -> None:
-    """Validate the `when` JavaScript expression wrapper."""
-    if not condition.startswith("$(") or not condition.endswith(")"):
-        raise ValueError("Invalid input to when. The js string must start with '$(' and end with ')'")
 
 
 def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None) -> None:
@@ -164,14 +150,18 @@ def validate_step_assignment(name: str, value: Any, *, owner: Any | None = None)
     """
     match name, value:
         case "scatter", list() as items:
-            _validate_scatter_assignment(items, owner=owner)
+            _validate_scatter(items, owner)
         case "scatter", invalid if invalid:
             raise TypeError("scatter must be assigned a list of InputParameter values")
         case "scatterMethod", str() as scatter_method if scatter_method:
-            _validate_scatter_method_assignment(scatter_method)
-        case "when", str() as condition if condition:
-            _validate_when_assignment(condition)
-        case "when", invalid if invalid:
+            allowed = {member.value for member in ScatterMethod}
+            if scatter_method not in allowed:
+                raise ValueError(
+                    "Invalid value for scatterMethod. "
+                    f"Valid values are: {', '.join(sorted(allowed))}"
+                )
+        case "when", condition if condition and not (
+                isinstance(condition, str) and condition.startswith("$(") and condition.endswith(")")):
             raise ValueError("Invalid input to when. The js string must start with '$(' and end with ')'")
 
 
@@ -270,8 +260,8 @@ def workflow_document(
     inline_subtrees: bool,
     directory: Path | None = None,
     document_stem: str | None = None,
-) -> dict[str, Any]:
-    """Render a workflow into its in-memory WIC YAML representation.
+) -> Document:
+    """Build a workflow's language document.
 
     A workflow output's `outputSource` is always written in the compiler's
     concrete step-id spelling, because the compiler boundary consumes an
@@ -284,11 +274,12 @@ def workflow_document(
         directory (Path | None): Output directory for sibling `.wic` files.
 
     Returns:
-        dict[str, Any]: Serialized workflow document.
+        Document: The workflow's document; nested workflows appear as steps
+        naming them, their bodies under `subtree` when inlined.
     """
     from .workflow import Workflow  # pylint: disable=import-outside-toplevel
 
-    workflow_inputs: dict[str, dict[str, Any]] = {}
+    workflow_inputs: dict[str, Any] = {}
     for parameter in workflow._inputs:
         cwl_type = parameter.cwl_type()
         if cwl_type is None:
@@ -304,30 +295,26 @@ def workflow_document(
     # Keyed by object identity, not by process_name: a step renamed after an
     # output was bound to it still is the step the output names.
     compiled_step_ids = {
-        id(step): step_name_str(
+        id(step): render_step_id(
             stem,
             index,
             f"{step.process_name}.wic" if isinstance(step, Workflow) else step.process_name,
         )
-        for index, step in enumerate(workflow.steps)
+        for index, step in enumerate(workflow.steps, start=1)
     }
 
-    workflow_outputs: dict[str, dict[str, Any]] = {}
+    workflow_outputs: dict[str, Any] = {}
     for output_parameter in workflow._outputs:
         workflow_outputs[output_parameter.name] = output_parameter.to_workflow_output(
             step_ids=compiled_step_ids
         )
 
-    steps_yaml = [
-        step._as_workflow_step(inline_subtrees=inline_subtrees, directory=directory)
-        for step in workflow.steps
-    ]
-    document: dict[str, Any] = {"steps": steps_yaml}
-    if workflow_inputs:
-        document["inputs"] = workflow_inputs
-    if workflow_outputs:
-        document["outputs"] = workflow_outputs
-    return document
+    return Document(
+        steps=tuple(step._as_workflow_step(inline_subtrees=inline_subtrees, directory=directory)
+                    for step in workflow.steps),
+        passthrough=tuple((key, value) for key, value in
+                          (("inputs", workflow_inputs), ("outputs", workflow_outputs)) if value),
+    )
 
 
 def _wic_output_path(workflow: "Workflow", path: str | Path | None) -> Path:
@@ -369,7 +356,7 @@ def workflow_wic_yaml(workflow: "Workflow", *, inline_subworkflows: bool = True)
             "to_wic_yaml(inline_subworkflows=False) cannot emit sibling files; "
             "use write_wic(..., inline_subworkflows=False) instead"
         )
-    return _dump_yaml(workflow_document(workflow, inline_subtrees=inline_subworkflows))
+    return render(workflow_document(workflow, inline_subtrees=inline_subworkflows))
 
 
 def write_workflow_wic(
@@ -400,31 +387,31 @@ def write_workflow_wic(
         directory=output_path.parent if not inline_subworkflows else None,
         document_stem=output_path.stem,
     )
-    output_path.write_text(
-        _dump_yaml(document),
-        encoding="utf-8",
-    )
+    output_path.write_text(render(document), encoding="utf-8")
     return output_path
 
 
-def _extract_tools_paths_nonportable(steps: list["Step"]) -> Tools:
-    """Extract concrete tool definitions from instantiated steps."""
-    return {StepId(step.process_name, "global"): Tool(str(step.clt_path), step.yaml) for step in steps}
-
-
-def _step_registries(steps: list["Step"]) -> Tools:
-    merged_tools: Tools = {}
+def _merged_known_tools(steps: list["Step"], tool_registry: Tools | None = None) -> Tools:
+    """Merge known tools: step tools, then step registries, then the explicit registry."""
+    merged_tools: Tools = {StepId(step.process_name, "global"): Tool(str(step.clt_path), step.yaml) for step in steps}
     for step in steps:
         merged_tools.update(step._tool_registry)
-    return merged_tools
-
-
-def _merged_known_tools(steps: list["Step"], tool_registry: Tools | None = None) -> Tools:
-    merged_tools = dict(_extract_tools_paths_nonportable(steps))
-    merged_tools.update(_step_registries(steps))
     if tool_registry is not None:
         merged_tools.update(tool_registry)
     return merged_tools
+
+
+def _nested_documents(workflow: "Workflow") -> dict[tuple[str, str], ParseResult]:
+    """Every nested workflow's document, keyed as Resolve looks it up."""
+    from .workflow import Workflow  # pylint: disable=import-outside-toplevel
+
+    documents: dict[tuple[str, str], ParseResult] = {}
+    for step in workflow.steps:
+        if isinstance(step, Workflow):
+            documents |= _nested_documents(step)
+            documents[("global", step.process_name)] = ParseResult(
+                workflow_document(step, inline_subtrees=False), Diagnostics())
+    return documents
 
 
 def compile_workflow_result(
@@ -450,29 +437,22 @@ def compile_workflow_result(
     workflow._validate()
 
     graph = get_graph_reps(workflow.process_name)
-    yaml_tree = YamlTree(
-        StepId(workflow.process_name, "global"),
-        workflow_document(workflow, inline_subtrees=True),
-    )
     merged_tools = _merged_known_tools(workflow._flatten_steps(), tool_registry)
 
     compiler_options, graph_settings, yaml_tag_paths = default_compilation_settings()
     if lang_version is not None:
         compiler_options = {**compiler_options, 'lang_version': lang_version}
-    result = compiler.compile_document(
-        yaml_tree, compiler_options, graph_settings, yaml_tag_paths, merged_tools,
+    bundle = SourceBundle(
+        ParseResult(workflow_document(workflow, inline_subtrees=False), Diagnostics()),
+        Path(workflow.process_name).stem,
+        RegistrySnapshot.from_tools(merged_tools, workflows=_nested_documents(workflow)))
+    result = compiler.compile_source(
+        bundle, compiler_options, graph_settings, yaml_tag_paths,
         relative_run_path=True, testing=False, graph_target=graph)
     if write_to_disk:
         input_output.write_artifacts_to_disk(result.artifact, Path("autogenerated/"), True)
 
     return result
-
-
-def runtime_artifact(workflow: "Workflow", *,
-                     tool_registry: Tools | None = None) -> CompilationArtifact:
-    """Compile and embed the graph-derived artifacts for local execution."""
-    result = compile_workflow_result(workflow, tool_registry=tool_registry)
-    return pc.inline_artifact_runs(result.artifact)
 
 
 def compiled_workflow_from_result(
@@ -556,23 +536,13 @@ def write_nextflow_workflow(
     )
 
 
-def effective_run_args(run_args_dict: dict[str, str] | None = None) -> dict[str, str]:
-    """Merge user runtime arguments with the default local-run settings.
-
-    Args:
-        run_args_dict (dict[str, str] | None): User-supplied runtime overrides.
-
-    Returns:
-        dict[str, str]: Effective runtime argument mapping.
-    """
-    effective = dict(DEFAULT_RUN_ARGS)
-    if run_args_dict:
-        effective.update(run_args_dict)
-    return effective
+def _run_args(overrides: dict[str, str] | None) -> dict[str, str]:
+    """The default local-run settings with `overrides` applied."""
+    return {**DEFAULT_RUN_ARGS, **(overrides or {})}
 
 
-def _run_arg_enabled(value: Any) -> bool:
-    """Return whether a yes/no style runtime option is enabled."""
+def _enabled(value: Any) -> bool:
+    """Whether a yes/no style runtime option is on."""
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -599,8 +569,9 @@ def run_workflow(
     logger.info("Running %s", workflow.process_name)
     plugins.logging_filters()
 
-    resolved_run_args = effective_run_args(run_args_dict)
-    artifact = runtime_artifact(workflow, tool_registry=tool_registry)
+    resolved_run_args = _run_args(run_args_dict)
+    result = compile_workflow_result(workflow, tool_registry=tool_registry)
+    artifact = pc.inline_artifact_runs(result.artifact)
     pc.verify_container_engine_config(resolved_run_args["container_engine"], False)
     input_output.write_artifacts_to_disk(
         artifact,
@@ -613,7 +584,7 @@ def run_workflow(
         resolved_run_args["pull_dir"],
         Path(basepath) / f"{workflow.process_name}.cwl",
     )
-    if _run_arg_enabled(resolved_run_args.get("docker_remove_entrypoints")):
+    if _enabled(resolved_run_args.get("docker_remove_entrypoints")):
         artifact = pc.remove_artifact_entrypoints(
             resolved_run_args["container_engine"], artifact)
     user_args = convert_args_dict_to_args_list(
@@ -629,4 +600,5 @@ def run_workflow(
         basepath=basepath,
         passthrough_args=unknown_args,
         user_env_vars=dict(user_env_vars or {}),
+        output_directories=rl.output_directories(result.graph),
     )

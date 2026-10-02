@@ -3,78 +3,92 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any, Final
 
-from .types import PortDeclaration, PortType
+from .types import BoundaryDeclaration, Port, PortDeclaration, PortName, PortType, StepNode
 
-#: What a workflow boundary port may state. An allowlist, not a list of
-#: things to drop: CWL gives a tool's input and a workflow's input different
-#: records, and the tool's is the larger one, so naming what survives is the
-#: only version that stays correct as declarations grow. `inputBinding` is the
-#: one that bites -- a workflow input's is an `InputBinding`, a tool's is a
-#: `CommandLineBinding`, so a promoted `position` fails validation.
+#: What a workflow boundary port may state. An allowlist, not a denylist,
+#: because a tool's input record is a strict superset of a workflow input's
+#: (e.g. `inputBinding` is a `CommandLineBinding` on a tool, an `InputBinding`
+#: on a workflow input, so a promoted `position` fails validation).
 _BOUNDARY_FIELDS: Final = frozenset({'type', 'format', 'label', 'doc'})
-
-
-def port_type(raw: Any) -> PortType:
-    """Build the conservative type algebra while preserving ``raw`` exactly."""
-    optional = False
-    depth = 0
-    members: tuple[PortType, ...] = ()
-    current = raw
-    if isinstance(current, str):
-        optional = current.endswith('?')
-        if optional:
-            current = current[:-1]
-        while current.endswith('[]'):
-            depth += 1
-            current = current[:-2]
-    elif isinstance(current, list):
-        optional = 'null' in current
-        members = tuple(port_type(item) for item in current if item != 'null')
-    elif isinstance(current, dict) and current.get('type') == 'array' and 'items' in current:
-        item = port_type(current['items'])
-        optional = item.optional
-        depth = item.array_depth + 1
-        members = item.union
-    return PortType(deepcopy(raw), optional=optional, array_depth=depth, union=members)
 
 
 def port_declaration(raw: Any, *, output: bool = False) -> PortDeclaration:
     """Preserve one CWL port declaration and expose its recognized fields."""
     if not isinstance(raw, dict):
-        return PortDeclaration(port_type(raw), shorthand=True)
+        return PortDeclaration(PortType(deepcopy(raw)), shorthand=True)
     reserved = {'type', 'format', 'default'}
     if output:
         reserved.add('outputSource')
     return PortDeclaration(
-        type=port_type(raw.get('type')),
+        type=PortType(deepcopy(raw.get('type'))),
         format=deepcopy(raw.get('format')),
         has_format='format' in raw,
         default=deepcopy(raw.get('default')),
         has_default='default' in raw,
         passthrough=tuple((key, deepcopy(value)) for key, value in raw.items()
                           if key not in reserved),
-        field_order=tuple(raw),
     )
 
 
-def boundary_declaration(declaration: PortDeclaration) -> PortDeclaration:
-    """`declaration` as a workflow boundary may state it.
+def required(declaration: PortDeclaration | None) -> bool:
+    """Whether a port must be given a value: no non-null default, not optional."""
+    return declaration is None or not (
+        (declaration.has_default and declaration.default is not None)
+        or declaration.type.optional)
 
-    Every phase that promotes a step's port to a workflow input goes through
-    here. Each used to carry its own version -- an allowlist in Complete, a
-    two-name denylist in Infer, nothing at all in Link -- so whether a
-    promoted port emitted valid CWL depended on which phase promoted it.
+
+def input_rank(step: StepNode, port: PortName) -> int:
+    """The array layers a value feeding `port` of `step` carries: one per time
+    `scatter:` names the port."""
+    return step.scatter_ports.count(port)
+
+
+def output_rank(step: StepNode) -> int:
+    """The array layers `step`'s scatter adds to each of its outputs: none
+    without scatter, one per scattered port for `nested_crossproduct`, else one."""
+    if not step.scatter_ports:
+        return 0
+    nested = dict(step.interpreted).get('scatterMethod') == 'nested_crossproduct'
+    return len(step.scatter_ports) if nested else 1
+
+
+def layered(port_type: PortType, rank: int) -> PortType:
+    """`port_type`'s canonical type inside `rank` array layers."""
+    raw = port_type.canonical
+    for _ in range(rank):
+        raw = {'type': 'array', 'items': raw}
+    return PortType(raw)
+
+
+def feeding_declaration(step: StepNode, port: Port) -> BoundaryDeclaration:
+    """The workflow input bound straight into input `port` of `step`."""
+    return boundary_declaration(port, input_rank(step, port.id.port))
+
+
+def produced_declaration(step: StepNode, port: Port) -> BoundaryDeclaration:
+    """The workflow output promoted from output `port` of `step`."""
+    return boundary_declaration(port, output_rank(step))
+
+
+def boundary_declaration(port: Port, rank: int) -> BoundaryDeclaration:
+    """`port` as a workflow boundary may state it, `rank` array layers deep.
+
+    Every boundary a phase derives from a step's port is built here, so a
+    promoted port emits the same valid CWL whichever phase promoted it.
+    `feeding_declaration` and `produced_declaration` supply the rank of a
+    port on the step itself; Link composes one across nested scatters.
 
     Args:
-        declaration (PortDeclaration): A port declaration, usually a step's.
+        port (Port): A step's port.
+        rank (int): The array layers the boundary adds to the port's type.
 
     Returns:
-        PortDeclaration: The same declaration reduced to what a workflow
-        boundary may say.
+        BoundaryDeclaration: The port's declaration reduced to what a
+        workflow boundary may say, its type canonical and layered.
     """
+    declaration = port.declaration or port_declaration(port.type.declared)
     passthrough = tuple((name, deepcopy(value)) for name, value in declaration.passthrough
                         if name in _BOUNDARY_FIELDS)
-    order = tuple(name for name in declaration.field_order if name in _BOUNDARY_FIELDS)
-    if 'type' not in order:
-        order = ('type', *order)
-    return replace(declaration, passthrough=passthrough, field_order=order, shorthand=False)
+    return BoundaryDeclaration(replace(declaration, type=layered(declaration.type, rank),
+                                       passthrough=passthrough, shorthand=False,
+                                       default=None, has_default=False))

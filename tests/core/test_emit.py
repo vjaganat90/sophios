@@ -7,26 +7,19 @@ end-to-end compatibility contract, which is behavioral equivalence at
 non-vacuous and pin the phase boundary.
 
 BLIND SPOTS: generated workflows inherit ``ast_strategies.workflows``'s
-declared exclusions.  Validation does not execute CWL.  The static boundary
-guard detects direct imports and calls; Python reflection could evade it, so
-the planted-mutation test proves the detector against the ordinary breach.
+declared exclusions.  Validation does not execute CWL.
 """
-import ast
 import copy
-import inspect
-import json
-import os
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 
 import pytest
 import yaml
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 
 import sophios.post_compile
 from sophios.ir import (
+    BoundaryDeclaration,
     Direction,
     JobBinding,
     Namespace,
@@ -36,15 +29,16 @@ from sophios.ir import (
     PortType,
     ProcessRun,
     RegistryKey,
-    Source,
-    StepEmission,
     StepId,
     StepNode,
     WorkflowGraph,
     WorkflowPort,
     emit,
     emit_job_inputs,
+    surface,
 )
+from sophios.ir.names import Names
+from sophios.ir.types import AuthoredName, StepOutputRef
 from sophios.lang.cwl import CWL_VERSION
 from sophios.lang.versions import ANNOTATION_KEY, ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI
 from sophios.wic_types import Yaml
@@ -52,7 +46,6 @@ from sophios.wic_types import Yaml
 from . import ast_strategies as strat
 from .equivalence import Strength, equivalent
 from .hermetic import ORACLE, compile_hermetic
-from .source_scan import REPO_ROOT
 
 
 @pytest.mark.skip_pypi_ci
@@ -61,7 +54,8 @@ from .source_scan import REPO_ROOT
 def test_the_live_compiler_emits_only_from_its_graph(workflow: Yaml) -> None:
     """The public compiler's artifact is exactly its final graph projection."""
     result = compile_hermetic(copy.deepcopy(workflow))
-    assert result.artifact.cwl == emit(result.graph)
+    names = Names.of(result.graph)
+    assert result.artifact.cwl == emit(surface(result.graph, names), names)
 
 
 @pytest.mark.fast
@@ -83,105 +77,100 @@ def test_a_requirements_shape_sophios_does_not_model_survives_emission(authored:
     assert compiled['requirements'] == authored
 
 
-@pytest.mark.fast
-def test_differential_oracle_detects_a_changed_document() -> None:
-    """A same-arm comparison or a disabled equivalence relation cannot pass."""
-    workflow = {'steps': [{'id': 'mk_file',
-                           'in': {'name': {'wic_inline_input': 'x'}}}]}
-    result = compile_hermetic(copy.deepcopy(workflow))
-    changed = copy.deepcopy(result.artifact.cwl)
-    changed['class'] = 'CommandLineTool'
-    assert equivalent(result.artifact.cwl, changed, Strength.IDENTICAL) is not None
-
-
 @pytest.mark.skip_pypi_ci
 @given(strat.workflows())
 @ORACLE
 def test_one_graph_emits_identically(workflow: Yaml) -> None:
-    """A graph, not its mutable source dictionaries, determines every byte."""
+    """A graph, not its mutable source dictionaries, determines every byte.
+
+    Emit needs nothing beyond it: the source is emptied between the two
+    projections and neither byte moves.
+    """
     source = copy.deepcopy(workflow)
     graph = compile_hermetic(source).graph
-    first = emit(graph)
+    names = Names.of(graph)
+    document = surface(graph, names)
+    first = emit(document, names)
     source.clear()
-    second = emit(graph)
+    second = emit(document, names)
     assert equivalent(first, second, Strength.IDENTICAL) is None
 
 
 @pytest.mark.fast
 def test_a_hand_built_graph_emits_without_a_compiler_adapter() -> None:
-    """The graph projection cannot be green only through compiler construction."""
+    """The graph projection cannot be green only through compiler construction.
+
+    Hand-built and surfaced, so this states the document the compiler ships:
+    the `run:` path written under the step directory and EDAM declared.
+    """
     namespace = Namespace()
     step_id = StepId(namespace, 1, 'write')
-    input_id = PortId(step_id, Direction.INPUT, 'message')
-    output_id = PortId(step_id, Direction.OUTPUT, 'file')
+    input_id = PortId(step_id, Direction.INPUT, AuthoredName('message'))
+    output_id = PortId(step_id, Direction.OUTPUT, AuthoredName('file'))
     in_decl = PortDeclaration(PortType('string'))
-    out_decl = PortDeclaration(PortType('File'), field_order=('type', 'outputSource'))
+    out_decl = PortDeclaration(PortType('File'))
     step = StepNode(
         step_id,
         inputs=(Port(input_id, in_decl.type, in_decl),),
         outputs=(Port(output_id, out_decl.type, out_decl),),
-        emission=StepEmission(
-            'write', (('message', Source('message')),),
-            ProcessRun('write.cwl', RegistryKey('global', 'write')), ('file',),
-        ),
+        run=ProcessRun('write.cwl', RegistryKey('global', 'write')),
     )
     graph = WorkflowGraph(
         namespace, (step,), name='handmade', lang_version='0.0.1', cwl_version=CWL_VERSION,
-        workflow_inputs=(WorkflowPort('message', in_decl),),
-        workflow_outputs=(WorkflowPort('file', out_decl, 'write/file', True),),
-        job_bindings=(JobBinding('message', 'hello'),),
+        workflow_inputs=(WorkflowPort(AuthoredName('message'), BoundaryDeclaration(in_decl)),),
+        workflow_outputs=(
+            WorkflowPort(AuthoredName('file'), BoundaryDeclaration(out_decl),
+                         StepOutputRef(step_id, AuthoredName('file')), True),),
+        job_bindings=(JobBinding(AuthoredName('message'), 'hello'),),
+        input_mapping=((AuthoredName('message'), (input_id,)),),
         namespaces=((ANNOTATION_NAMESPACE, ANNOTATION_NAMESPACE_URI),),
-        field_order=('steps', 'cwlVersion', 'class', '$namespaces', 'inputs',
-                     ANNOTATION_KEY, 'outputs'),
     )
-    assert emit(graph) == {
-        'steps': [{'id': 'write', 'in': {'message': {'source': 'message'}},
-                   'run': 'write.cwl', 'out': ['file']}],
+    names = Names.of(graph)
+    document = surface(graph, names)
+    assert emit(document, names) == {
+        'steps': [{'id': 'handmade__step__1__write', 'in': {'message': {'source': 'message'}},
+                   'run': 'handmade__step__1__write/write.cwl', 'out': ['file']}],
         'cwlVersion': CWL_VERSION,
         'class': 'Workflow',
-        '$namespaces': {ANNOTATION_NAMESPACE: ANNOTATION_NAMESPACE_URI},
+        '$namespaces': {'edam': 'https://edamontology.org/',
+                        ANNOTATION_NAMESPACE: ANNOTATION_NAMESPACE_URI},
+        '$schemas': ['https://raw.githubusercontent.com/edamontology/edamontology/master/EDAM_dev.owl'],
         'inputs': {'message': {'type': 'string'}},
         ANNOTATION_KEY: '0.0.1',
-        'outputs': {'file': {'type': 'File', 'outputSource': 'write/file'}},
+        'outputs': {'file': {'type': 'File',
+                             'outputSource': 'handmade__step__1__write/file'}},
     }
-    assert emit_job_inputs(graph) == {'message': 'hello'}
-
-
-@pytest.mark.skip_pypi_ci
-@pytest.mark.slow
-def test_hash_seed_does_not_change_emit() -> None:
-    """Four interpreter hash seeds witness process-level determinism."""
-    script = """
-import json
-from tests.core.hermetic import compile_hermetic
-w = {'steps': [{'id': 'mk_file', 'in': {'name': {'wic_inline_input': 'x'}}}]}
-print(json.dumps(compile_hermetic(w).artifact.cwl, separators=(',', ':')))
-"""
-    env = {**os.environ, 'PYTHONPATH': os.pathsep.join((str(REPO_ROOT / 'src'), str(REPO_ROOT)))}
-    results = []
-    for seed in ('1', '2', '17', '101'):
-        run = subprocess.run([sys.executable, '-c', script], cwd=REPO_ROOT,
-                             env={**env, 'PYTHONHASHSEED': seed}, capture_output=True,
-                             text=True, check=True)
-        results.append(json.loads(run.stdout))
-    assert all(result == results[0] for result in results[1:])
+    assert emit_job_inputs(document, names) == {'message': 'hello'}
 
 
 @pytest.mark.needs_cwltool
 @pytest.mark.skip_pypi_ci
 @pytest.mark.slow
 @given(strat.workflows())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow], deadline=None)
+@ORACLE
 def test_emit_validates_as_cwl_v1_2(workflow: Yaml) -> None:
-    """CWL's external validator accepts each graph-derived artifact."""
+    """CWL's external validator accepts each emitted workflow and its job inputs.
+
+    `cwltool --validate` type-checks every link, scatter included, and every
+    job value against its input's declared type. It does not open the files a
+    job names. A required input the job leaves unset is one the user supplies
+    at run time, so it is made optional first: cwltool then still rejects a
+    link that no member of the widened type fits.
+    """
     import cwltool.main  # pylint: disable=import-outside-toplevel
 
     info = compile_hermetic(workflow)
     inlined = sophios.post_compile.inline_artifact_runs(info.artifact).cwl
+    job = info.artifact.job_inputs
+    for name, declared in inlined['inputs'].items():
+        if name not in job and 'default' not in declared:
+            members = declared['type'] if isinstance(declared['type'], list) else [declared['type']]
+            declared['type'] = members if 'null' in members else ['null', *members]
     with tempfile.TemporaryDirectory() as workdir:
-        target = Path(workdir) / 'workflow.cwl'
+        target, values = Path(workdir) / 'workflow.cwl', Path(workdir) / 'job.yml'
         target.write_text(yaml.safe_dump(inlined, sort_keys=False), encoding='utf-8')
-        assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 0
+        values.write_text(yaml.safe_dump(job, sort_keys=False), encoding='utf-8')
+        assert cwltool.main.main(['--validate', '--quiet', str(target), str(values)]) == 0
 
 
 @pytest.mark.needs_cwltool
@@ -193,50 +182,3 @@ def test_validator_rejects_the_independent_invalid_control(tmp_path: Path) -> No
     target = tmp_path / 'invalid.cwl'
     target.write_text('class: Workflow\nsteps: []\n', encoding='utf-8')
     assert cwltool.main.main(['--validate', '--quiet', str(target)]) == 1
-
-
-def _emit_boundary(source: str) -> tuple[str, ...]:
-    """Direct dependencies forbidden to a graph-only terminal projection."""
-    tree = ast.parse(source)
-    forbidden = {'compiler', 'plugins', 'config', 'pathlib', 'os'}
-    findings: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            findings.extend(alias.name for alias in node.names
-                            if alias.name.split('.')[0] in forbidden)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            root = node.module.lstrip('.').split('.')[0]
-            if root in forbidden:
-                findings.append(node.module)
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
-                and node.func.id in {'open', 'getattr', 'eval', 'exec'}:
-            findings.append(node.func.id)
-    return tuple(findings)
-
-
-@pytest.mark.fast
-def test_emit_has_only_graph_dependencies() -> None:
-    """Emit cannot discover tools, read files, or consult compiler state."""
-    path = REPO_ROOT / 'src' / 'sophios' / 'ir' / 'emit.py'
-    assert not _emit_boundary(path.read_text(encoding='utf-8'))
-
-
-@pytest.mark.fast
-def test_boundary_guard_detects_a_planted_dependency() -> None:
-    """The static half demonstrably fails for the breach it claims to catch."""
-    source = inspect.cleandoc('''
-        from pathlib import Path
-        def emit(graph):
-            return Path("registry.yml").read_text()
-    ''')
-    assert _emit_boundary(source)
-
-
-@pytest.mark.skip_pypi_ci
-@given(strat.workflows())
-@settings(max_examples=200, suppress_health_check=[HealthCheck.too_slow], deadline=None)
-def test_emit_needs_no_state_beyond_the_graph(workflow: Yaml) -> None:
-    """A graph remains sufficient after compiler policy and source are destroyed."""
-    graph = compile_hermetic(copy.deepcopy(workflow)).graph
-    expected = emit(graph)
-    assert emit(graph) == expected

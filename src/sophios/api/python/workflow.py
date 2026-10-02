@@ -4,11 +4,13 @@
 import logging
 import warnings
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, ClassVar, Literal, overload
+from typing import Any, ClassVar, Literal, cast, overload
 
 from cwl_utils.parser import CommandLineTool as CWLCommandLineTool
 
+from sophios.lang import InputValue, OpaqueCwl, nodes, to_json
 from sophios.lang.compatibility import TypeRelation, reference_relation
 from sophios.lang.diagnostics import SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
@@ -117,17 +119,6 @@ def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
                 and proven_disjoint({'type': 'array', 'items': parameter_type}))
 
 
-def _parameter_namespace(
-    store: ParameterStore[Any],
-    getter: Any,
-    setter: Any,
-    *,
-    read_only_error: str,
-) -> ParameterNamespace[Any, Any]:
-    """Create the list-like attribute proxy used for ``.inputs`` and ``.outputs``."""
-    return ParameterNamespace(store, getter, setter, read_only_error=read_only_error)
-
-
 def _resolve_parameter_type(
     parameter: InputParameter | OutputParameter,
     candidate_type: Any,
@@ -224,8 +215,9 @@ class _ProcessBase:  # pylint: disable=too-few-public-methods
     def _lookup_input(self, name: str) -> InputParameter:
         return _lookup_parameter(self._inputs, name, owner_name=self.process_name, kind="input")
 
-    def _bound_input_yaml(self) -> dict[str, Any]:
-        return {port.name: port.to_yaml_value() for port in self._inputs if port.is_bound()}
+    def _bound_inputs(self) -> tuple[tuple[str, InputValue], ...]:
+        return tuple((port.name, port._binding.to_input_value())
+                     for port in self._inputs if port._binding is not None)
 
 
 class Step(_ProcessBase):
@@ -441,36 +433,28 @@ class Step(_ProcessBase):
         """Populate a step from an already parsed CLT and optional config."""
         resolved_name = process_name or clt_path.stem
 
-        object.__setattr__(self, "clt", clt)
-        object.__setattr__(self, "clt_path", clt_path)
-        object.__setattr__(self, "process_name", resolved_name)
-        object.__setattr__(self, "cwl_version", clt.cwlVersion)
-        object.__setattr__(self, "yaml", yaml_file)
-        object.__setattr__(self, "cfg_yaml", dict(cfg_yaml))
-        object.__setattr__(self, "_tool_registry", tool_registry)
-        object.__setattr__(self, "_inputs", ParameterStore())
-        object.__setattr__(self, "_outputs", ParameterStore())
+        self.clt = clt
+        self.clt_path = clt_path
+        self.process_name = resolved_name
+        self.cwl_version = cast(str, clt.cwlVersion)
+        self.yaml = yaml_file
+        self.cfg_yaml = dict(cfg_yaml)
+        self._tool_registry = tool_registry
+        self._inputs = ParameterStore()
+        self._outputs = ParameterStore()
         # This proxy is the main bit of API "magic": it supports both
         # list-style access (`step.inputs[0]`) and named attribute access
         # (`step.inputs.message`) without duplicating wrapper classes.
-        object.__setattr__(
-            self,
-            "inputs",
-            _parameter_namespace(self._inputs, self._get_input, self.bind_input, read_only_error=""),
+        self.inputs = ParameterNamespace(self._inputs, self._get_input, self.bind_input, read_only_error="")
+        self.outputs = ParameterNamespace(
+            self._outputs,
+            self.get_output,
+            None,
+            read_only_error="Step outputs are read-only; cannot set {name!r}",
         )
-        object.__setattr__(
-            self,
-            "outputs",
-            _parameter_namespace(
-                self._outputs,
-                self.get_output,
-                None,
-                read_only_error="Step outputs are read-only; cannot set {name!r}",
-            ),
-        )
-        object.__setattr__(self, "scatter", [])
-        object.__setattr__(self, "scatterMethod", "")
-        object.__setattr__(self, "when", "")
+        self.scatter = []
+        self.scatterMethod = ""
+        self.when = ""
 
         _populate_parameters(clt.inputs, self._inputs, InputParameter, parent=self)
         _populate_parameters(clt.outputs, self._outputs, OutputParameter, parent=self)
@@ -580,27 +564,22 @@ class Step(_ProcessBase):
         """Return an empty subworkflow list because steps do not nest workflows."""
         return []
 
-    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> dict[str, Any]:
+    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> nodes.Step:
+        """Return this step as the language's step node."""
         del inline_subtrees, directory
-        return self._yml
-
-    @property
-    def _yml(self) -> dict[str, Any]:
-        """Return the internal WIC step representation for this step."""
-        step_yaml: dict[str, Any] = {
-            "id": self.process_name,
-            "in": self._bound_input_yaml(),
-            "out": [{port.name: port.value} for port in self._outputs if port.value is not None],
-        }
-
+        interpreted: list[tuple[str, OpaqueCwl]] = []
         if self.scatter:
-            step_yaml["scatter"] = [input_port.name for input_port in self.scatter]
-            step_yaml["scatterMethod"] = self.scatterMethod or ScatterMethod.dotproduct.value
-
+            interpreted += [("scatter", [input_port.name for input_port in self.scatter]),
+                            ("scatterMethod", self.scatterMethod or ScatterMethod.dotproduct.value)]
         if self.when:
-            step_yaml["when"] = self.when
-
-        return step_yaml
+            interpreted.append(("when", self.when))
+        return nodes.Step(
+            id=self.process_name,
+            inputs=self._bound_inputs(),
+            outputs=tuple(nodes.OutputBinding(port.name, nodes.EdgeDef(port._anchor_name))
+                          for port in self._outputs if port._anchor_name is not None),
+            interpreted=tuple(interpreted),
+        )
 
 
 class Workflow(_ProcessBase):
@@ -634,31 +613,23 @@ class Workflow(_ProcessBase):
         Returns:
             None: The workflow is initialized in place.
         """
-        object.__setattr__(self, "steps", list(steps))
-        object.__setattr__(self, "process_name", _normalize_workflow_name(workflow_name))
-        object.__setattr__(self, "_inputs", ParameterStore())
-        object.__setattr__(self, "_outputs", ParameterStore())
-        object.__setattr__(
-            self,
-            "inputs",
-            _parameter_namespace(
-                self._inputs,
-                self._input_reference,
-                self._bind_input_from_namespace,
-                read_only_error="",
-            ),
+        self.steps = list(steps)
+        self.process_name = _normalize_workflow_name(workflow_name)
+        self._inputs = ParameterStore()
+        self._outputs = ParameterStore()
+        self.inputs = ParameterNamespace(
+            self._inputs,
+            self._input_reference,
+            self._bind_input_from_namespace,
+            read_only_error="",
         )
-        object.__setattr__(
-            self,
-            "outputs",
-            _parameter_namespace(
-                self._outputs,
-                self.add_output,
-                self._bind_output_from_namespace,
-                read_only_error="",
-            ),
+        self.outputs = ParameterNamespace(
+            self._outputs,
+            self.add_output,
+            self._bind_output_from_namespace,
+            read_only_error="",
         )
-        object.__setattr__(self, "yml_path", None)
+        self.yml_path = None
 
     def __repr__(self) -> str:
         return f"Workflow(process_name={self.process_name!r}, steps={len(self.steps)})"
@@ -840,10 +811,13 @@ class Workflow(_ProcessBase):
     def yaml(self) -> dict[str, Any]:
         """Return the in-memory WIC YAML representation of this workflow.
 
+        This is the `sophios.lang.to_json` projection of the workflow's
+        document: the desugared spelling of what `to_wic_yaml` writes.
+
         Returns:
             dict[str, Any]: A WIC-compatible YAML tree represented as a Python dict.
         """
-        return _workflow_document(self, inline_subtrees=True)
+        return to_json(_workflow_document(self, inline_subtrees=True))
 
     def to_wic_yaml(self, *, inline_subworkflows: bool = True) -> str:
         """Return this workflow as ``.wic`` YAML text.
@@ -981,15 +955,13 @@ class Workflow(_ProcessBase):
             tool_registry=tool_registry,
         )
 
-    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> dict[str, Any]:
-        # Nested workflows are serialized in one of two ways:
-        # 1. inline during in-memory compilation (`subtree`)
-        # 2. as sibling `.wic` files when writing an AST to disk
-        bound_inputs = self._bound_input_yaml()
-        parentargs = {"in": bound_inputs} if bound_inputs else {}
+    def _as_workflow_step(self, *, inline_subtrees: bool, directory: Path | None = None) -> nodes.Step:
+        # A nested workflow's step names it; its body is shown inline under
+        # `subtree` in the inline views, written as a sibling `.wic` file into
+        # `directory`, or -- for compilation -- supplied by the registry.
+        step = nodes.Step(id=f"{self.process_name}.wic", inputs=self._bound_inputs())
         if inline_subtrees:
-            return {"id": f"{self.process_name}.wic", "subtree": self.yaml, "parentargs": parentargs}
-        if directory is None:
-            raise ValueError("directory is required when serializing subworkflows to disk")
-        self.write_wic(directory, inline_subworkflows=False)
-        return {"id": f"{self.process_name}.wic", **parentargs}
+            return replace(step, passthrough=(("subtree", self.yaml),))
+        if directory is not None:
+            self.write_wic(directory, inline_subworkflows=False)
+        return step
