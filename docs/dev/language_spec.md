@@ -47,8 +47,9 @@ field of the five workflow-level CWL v1.2 classes is declared in one place:
 
 - **native**: Sophios reads it and acts on it, or writes it;
 - **passthrough**: copied out unchanged;
-- **rejected**: reported with a positioned diagnostic, never silently dropped or
-  coerced.
+- **rejected**: reported with a diagnostic, never silently dropped or coerced. It
+  is positioned at the value; a step's `run` is positioned at the step, and a
+  workflow output at the document.
 
 `support.py` is the source; `tests/core/test_support_matrix.py` is the check. It
 reads the fields of each class from `cwl_utils.parser.cwl_v1_2`, so a field the
@@ -287,9 +288,10 @@ that lives as the round-trip property in `tests/core/test_lang_render.py`.
 
 **The Python API** (`Workflow`, `Step`) is the second surface of the same language.
 It builds a `sophios.lang.Document` directly, compiles it through the same door as a
-`.wic` file, and writes it with `sophios.lang.render`: `Workflow.write_wic()` and
-`.to_wic_yaml()` emit the tagged spelling with sequence-form steps and explicit
-`id:`, and `Workflow.yaml` is the same document's `to_json` projection.
+`.wic` file, and writes it with `sophios.lang.render`: `Workflow.write_wic()` emits
+the tagged spelling with sequence-form steps and explicit `id:`.
+`Workflow.from_wic()` reads a document back into objects; a construct the Python API
+cannot hold is `api006`.
 
 A workflow that contains a nested `Workflow` is written as a bundle: each nested
 workflow is its own `.wic` file and the parent calls it by name, like any other
@@ -457,3 +459,4 @@ means to a user.
 | `api003` | `INVALID_LINK` | `COMPILED` |
 | `api004` | `INVALID_TOOL` | `COMPILED` |
 | `api005` | `WORKFLOW_RUN_FAILED` | `COMPILED` |
+| `api006` | `NO_PYTHON_SPELLING` | `COMPILED` |
