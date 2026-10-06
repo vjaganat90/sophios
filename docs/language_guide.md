@@ -479,10 +479,9 @@ outputs:
     outputSource: (2, append)/file
 ```
 
-Both of these are `wic039`: a step at that index with a different name, and a
-position in a workflow where inference placed an edge. A position is a fact about
-the document as written, and inference may change the document, so bind every input
-with `!*` or `!ii` to use one.
+A step at that index with a different name is `wic039`, and a port that step does not
+have is `wic028`, with the step's outputs listed. A position holds in a workflow with
+inferred edges too: inference never moves or renumbers a step.
 
 An output with no `type:` takes the type of the output its `outputSource:` names, as
 an array when that step scatters. An output with no `type:` and no producer to take
@@ -768,7 +767,7 @@ call that is wrong although the document is fine.
 | `wic035` | A `cwlVersion` other than `v1.0`, `v1.1` or `v1.2`. |
 | `wic036` | A workflow output with no `type:` and no producer to take it from (section 5.2). |
 | `wic038` | CWL's step input written where Sophios does not read it: an untagged mapping of step-input fields, a malformed `!cwl {...}` record, or a list `outputSource`, `linkMerge` or `pickValue` on a workflow output (sections 3.5, 5.2). |
-| `wic039` | A positional `(index, name)` `outputSource` that names the wrong step, or sits in a workflow with an inferred edge (section 5.2). |
+| `wic039` | A positional `(index, name)` `outputSource` that names the wrong step (section 5.2). |
 | `wic042` | Note: one step offered several matching outputs and inference took the last (section 8). |
 | `wic043` | Note: an earlier step also matched and inference took the most recent. |
 
