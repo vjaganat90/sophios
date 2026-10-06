@@ -39,7 +39,6 @@ class SophiosErrorCode(StrEnum):
     LANG_VERSION_CONFLICT = 'wic018'
     MISPLACED_EDGE_DEF = 'wic019'
     LITERAL_TYPE_MISMATCH = 'wic020'
-    # wic021 is retired, not free (duplicated wic006).
     FIXED_POINT_NOT_REACHED = 'wic022'
     INCOMPATIBLE_INPUT_REFERENCE = 'wic023'
     RESERVED_KEY = 'wic024'

@@ -404,9 +404,9 @@ Codes are contract: a caller matches on `SophiosErrorCode`, suppresses a code, o
 reads it out of a log, while message wording is free to improve. The enum is
 `sophios.lang.error_codes.SophiosErrorCode`, in two ranges: `wic0NN` for the
 language (a document said something the language does not accept) and `api0NN` for
-the Python API (the document is fine, the call was not). A code is never renumbered
-or reused: `wic021` is retired, and `wic029`, `wic037`, `wic040` and `wic041` are
-unassigned. `wic042` and `wic043` are notes, which report without failing the
+the Python API (the document is fine, the call was not). A code is never renumbered,
+and a code that shipped in a release is never reused; a number that never shipped is
+free. `wic021`, `wic029`, `wic037`, `wic040` and `wic041` are unassigned. `wic042` and `wic043` are notes, which report without failing the
 compile, and errors under `--inference_strict`.
 
 Every member is provoked in `tests/core/provocations.py`, in one of two tiers:

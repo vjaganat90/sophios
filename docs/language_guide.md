@@ -772,4 +772,4 @@ call that is wrong although the document is fine.
 | `wic042` | Note: one step offered several matching outputs and inference took the last (section 8). |
 | `wic043` | Note: an earlier step also matched and inference took the most recent. |
 
-`wic021` is retired. `wic029`, `wic037`, `wic040` and `wic041` are not assigned.
+`wic021`, `wic029`, `wic037`, `wic040` and `wic041` are not assigned.
