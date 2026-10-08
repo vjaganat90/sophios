@@ -2746,3 +2746,17 @@ def test_a_file_reference_embedded_in_text_is_rejected(argument: str, admitted: 
         "steps[0].run.arguments[0]: $(inputs.f) embedded in other text renders a File object as JSON in CWL; "
         "use $(inputs.f.path) or $(inputs.f.basename), or the reference alone"
     ]
+
+
+@pytest.mark.fast
+def test_a_step_consuming_an_optional_output_is_a_finding() -> None:
+    maybe = tool("MAYBE", outputs={"o": {"type": "File?", "outputBinding": {"glob": "maybe.txt"}}})
+    consume = tool("CONSUME", inputs={"source": {"type": "File?", "inputBinding": {"position": 1}}})
+    rose = synthetic_source(
+        workflow_doc([step("MAYBE", out=["o"]), step("CONSUME", **{"in": {"source": "MAYBE/o"}})]),
+        [maybe, consume],
+    )
+    assert _findings(rose) == [
+        "workflow: connection MAYBE.o -> CONSUME.source consumes an optional output, which may be null; "
+        "only a workflow output can take it"
+    ]

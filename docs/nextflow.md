@@ -360,6 +360,12 @@ task when nothing matches. A `File` or `Directory` output whose glob is a
 pattern renders `arity: '1'` as well, so several matches fail the task as
 they fail in cwltool.
 
+An optional `File?` or `Directory?` output renders `optional: true`; when
+nothing matches, a workflow output reports `null`, carried by the `[]`
+sentinel. Such an output reaches workflow outputs only: a later step
+consuming it, or an optional output of a scattered step, is rejected, since a
+`path` port has no lowering of `null` and a gather would drop the position.
+
 The paired `glob` must be one literal with no `*`, `?`, or `[` and no
 `$(inputs...)` reference. `self[0]` is the first of the matched list, which is
 a projection only when there is exactly one match by construction; a wildcard

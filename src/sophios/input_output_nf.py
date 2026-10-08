@@ -252,6 +252,7 @@ def _process_output(port: NfPort, *, tuple_element: bool = False) -> str:
         for segment in port.glob.segments
     )
     arity = ", arity: '1'" if port.capture == "single" or pattern else ""
+    arity += ", optional: true" if port.optional else ""
     glob = port.glob if literal else NfTemplate(tuple(
         NfLiteral(segment.value.translate(_BRACE_ESCAPES)) if isinstance(segment, NfLiteral) else segment
         for segment in port.glob.segments
@@ -714,6 +715,9 @@ def _render_named_workflow(workflow: ExecutableNextflowWorkflow) -> str:
                     f".combine({_shape_channel(connection.from_process)})"
                     f".flatMap {{ flat, shape -> {NF_NEST_HELPER}(flat, shape) }}"
                 )
+            elif any(port.optional for port in processes[connection.from_process].outputs if port.name == connection.from_port):
+                # An optional output that matched nothing emits nothing: report CWL null.
+                expression = f"{expression}.ifEmpty([])"
             elif connection.from_process in multi_input_process_names:
                 # Sort by the hidden invocation index before stripping it, so
                 # the gathered workflow output never depends on task
