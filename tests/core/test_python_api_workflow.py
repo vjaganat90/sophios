@@ -803,7 +803,8 @@ def test_removed_wic_accessors_point_at_write_wic(removed: str) -> None:
 @pytest.mark.fast
 def test_write_wic_is_the_one_wic_writer() -> None:
     """A Workflow writes `.wic` one way and reads it one way; nothing else returns `.wic` text or a `.wic` document."""
-    assert {name for name in dir(Workflow) if not name.startswith("_")} == {"compile", "from_wic", "run", "write_wic"}
+    assert {name for name in dir(Workflow) if not name.startswith("_")} == {
+        "compile", "from_wic", "run", "to_nextflow", "write_wic"}
 
 
 @pytest.mark.fast
