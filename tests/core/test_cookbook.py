@@ -48,7 +48,7 @@ def _as_compile_returns(cwl: Json, wic_path: Path) -> Json:
 
     A workflow that names outputs returns only those from `compile()`; the CLI
     also exposes every step output under its generated name. That is the one
-    place the two doors differ, and `docs/cookbook.md` says so.
+    place the two doors differ, and `docs/connecting-steps.md` says so.
     """
     named = read_wic(wic_path.read_text(encoding='utf-8'), wic_path.name).get('outputs')
     if not named:
@@ -84,8 +84,8 @@ def test_the_inference_pair_prints_its_note() -> None:
 
 @pytest.mark.fast
 def test_the_note_the_docs_quote_is_the_one_the_compiler_prints() -> None:
-    """`docs/cookbook.md` quotes the inference note; the quote must be the compiler's text."""
+    """`docs/edge-inference.md` quotes the inference note; the quote must be the compiler's text."""
     module = import_python_file('cookbook_inference', COOKBOOK / 'inference.py')
     (note,) = map(str, module.workflow().compile().diagnostics)
     message = note.split(' note ', 1)[1]
-    assert f'note {message}' in (REPO_ROOT / 'docs' / 'cookbook.md').read_text(encoding='utf-8')
+    assert f'note {message}' in (REPO_ROOT / 'docs' / 'edge-inference.md').read_text(encoding='utf-8')
