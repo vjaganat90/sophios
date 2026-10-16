@@ -311,7 +311,7 @@ steps:
 outputs:
   result:
     type: File
-    outputSource: child__step__1__mk_file/file
+    outputSource: mk_file/file
 '''
     root = '''
 steps:

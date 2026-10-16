@@ -67,7 +67,7 @@ def test_both_surfaces_compile_to_the_same_cwl(stem: str) -> None:
     workflows = {'global': {path.stem: path for path in COOKBOOK.glob('*.wic')}}
     bundle = bundle_from_disk(wic_path, workflows, load_test_registry().tools)
     result = sophios.compiler.compile_source(bundle, default_compilation_settings(),
-                                             relative_run_path=True, testing=True)
+                                             testing=True)
     artifact = inline_artifact_runs(result.artifact)
 
     assert _as_compile_returns(normalize_artifact_cwl(artifact), wic_path) == python_side.cwl_workflow

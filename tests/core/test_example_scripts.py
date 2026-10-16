@@ -194,7 +194,7 @@ def test_the_sam3_handoff_snippet_compiles_with_stdout_and_stderr_outputs() -> N
     step.inputs.message = 'hello'
     compiled = Workflow([step], 'wf').compile().cwl_workflow
     step_id = compiled['steps'][0]['id']
-    assert compiled['outputs'][f'{step_id}___out']['type'] == 'File'
-    assert compiled['outputs'][f'{step_id}___err']['type'] == 'File'
+    assert compiled['outputs'][f'{step_id}__out']['type'] == 'File'
+    assert compiled['outputs'][f'{step_id}__err']['type'] == 'File'
     declared = {output['id']: output['type'] for output in compiled['steps'][0]['run']['outputs']}
     assert declared == {'out': 'stdout', 'err': 'stderr'}, 'the tool keeps its own shorthand'
