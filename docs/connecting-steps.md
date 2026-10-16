@@ -77,10 +77,7 @@ its id. When a step id repeats, name the occurrence by its 1-based position,
 `(2, append)/file`; a position that holds a different step is `wic039`, and a
 port the step does not have is `wic028`, with the step's outputs listed. A
 bare id that several steps have resolves to the first of them, and the compile
-says so on stderr with the positional spelling to write. The compiled CWL
-renames steps, and a generated name such as `named_output__step__1__echo`
-still resolves in `outputSource`, but it changes when steps move, so the
-compile prints a line asking for `echo/stdout` instead. The output reaches the
+says so on stderr with the positional spelling to write. The output reaches the
 compiled workflow under your name
 ([Compiling to CWL](compiling-to-cwl.md#edges-and-outputs)).
 
@@ -99,8 +96,8 @@ output that is declared and never bound is `api002`.
 
 This is the one place the two forms give different CWL. The command line
 exposes every step output as a workflow output, named
-`<step>___<port>`, whether or not you named any; `named_output.wic` compiles
-to `greeting` and `named_output__step__1__echo___stdout`. When a Python
+`<step>__<port>`, whether or not you named any; `named_output.wic` compiles
+to `greeting` and `echo__stdout`. When a Python
 workflow names outputs, `compile()` returns only those, and `Workflow.run()`
 runs that. A Python workflow that names none is compiled exactly as the
 command line compiles its `.wic` twin, every step output exposed.

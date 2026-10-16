@@ -47,7 +47,7 @@ One edge is drawn per pair of steps, however many ports connect them.
 | Flag | Effect |
 |---|---|
 | `--graph_label_edges` | one edge per port, labelled with the name of the output it carries |
-| `--graph_label_stepname` | label each box with its generated step name (`greeting__step__1__touch`) instead of its id or its `wic: graphviz: label` |
+| `--graph_label_stepname` | label each box with its step's name in the compiled CWL (`touch`, `echo_2`) instead of its `wic: graphviz: label` |
 | `--graph_inline_depth N` | draw the steps of subworkflows nested up to depth `N`; a deeper call is one box |
 | `--graph_dark_theme` | black text and inferred edges, for a light background |
 

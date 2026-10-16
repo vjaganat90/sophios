@@ -75,9 +75,8 @@ compiler adds the rest:
 - every step output is exposed as a workflow output, so that nothing a step
   produced is lost; a Python workflow that names outputs keeps only those.
 
-The names the compiler adds are derived from the step and port
-(`<step>___<port>`), and the names map it writes relates each to what you
-wrote.
+The names the compiler adds are derived from the step and port:
+`<step>__<port>`.
 
 ## Nesting
 

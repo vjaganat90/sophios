@@ -39,7 +39,7 @@ The request is:
 {
   "id": "greeting_2026_10_15",
   "cwlWorkflow": {"...the compiled CWL, every run: embedded..."},
-  "cwlJobInputs": {"greeting__step__1__touch___filename": "greeting.txt"},
+  "cwlJobInputs": {"touch__filename": "greeting.txt"},
   "jobs": {},
   "computeConfig": {"...when given..."}
 }

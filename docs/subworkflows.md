@@ -70,7 +70,7 @@ outputs, as `make_greeting()` shows.
 
 Beyond the named outputs, every output of every inner step is exposed by the
 child and again by the parent, under generated names
-(`nested__step__1__make_greeting.wic___make_greeting__step__1__touch___file`),
+(`make_greeting__touch__file`),
 so that nothing a step produced is lost. In Python, a parent that names its
 own outputs returns only those from `compile()`; see
 [Connecting steps](connecting-steps.md).

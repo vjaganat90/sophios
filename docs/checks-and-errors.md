@@ -83,15 +83,14 @@ its declaration.
 **Pre-flight.** Only for a local run, since it asks about this machine. It
 reports everything it finds at once, so one run of `--check` lists every
 missing file and the stopped engine together. `wic016` lines name the input
-as you wrote it (`cat/file`) and say where Sophios looked, which depends on
+as the compiled workflow does (`cat__file`) and say where Sophios looked, which depends on
 where the path was written; [Inputs and values](inputs-and-values.md) has the
 rule. After the checks, the image pulls: `wic037` for one that failed, with
 the engine's last line quoted.
 
-**Run.** A tool that fails is the runner's to report. Sophios adds two things:
-the runner's messages name each step both ways, `step 2 'append'
-(greeting__step__2__append)`, through the names map the compile wrote; and
-after the run, one `Failure!` line per failed step with its exit status and,
+**Run.** A tool that fails is the runner's to report, and its messages name
+each step by its id, `[step append]`. Sophios adds, after the run, one
+`Failure!` line per failed step with its exit status and,
 for 126, 127 and 137, what that status means. The step's own output is above,
 under its name. In Python the run raises `WorkflowRunError` with the exit
 code. The runner also validates the compiled CWL when it loads it, which is

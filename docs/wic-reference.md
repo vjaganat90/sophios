@@ -377,9 +377,7 @@ names, as an array when that step scatters. One with no `type:` and no
 producer to take it from is `wic036`. A list `outputSource:`, and `linkMerge`
 or `pickValue` on a workflow output, are `wic038`.
 
-A generated step name (`o__step__1__touch`) resolves in `outputSource:` but
-changes when steps move, so the compile prints a line on stderr naming the
-spelling to write instead. A bare id that more than one step has resolves to
+A bare id that more than one step has resolves to
 the first of them, and the compile says so with the position that spells it.
 
 An input or output you declare that is spelled like a name the compiler

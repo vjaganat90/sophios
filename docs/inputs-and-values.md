@@ -39,7 +39,7 @@ A literal is a value you know when you write the workflow:
 `!ii` takes any YAML value, a mapping or a list as well as a scalar, and a
 Python binding takes any value that YAML can hold. The value is not written
 into the compiled workflow. It becomes a workflow input named for the step
-and port, here `inline_literal__step__1__touch___filename`, with its value in
+and port, here `touch__filename`, with its value in
 the job file ([Compiling to CWL](compiling-to-cwl.md#inputs-and-the-job-file)).
 
 A literal must already have the type of the input it binds; Sophios converts
@@ -112,7 +112,7 @@ workflow().run(run_args_dict={'inputs_file': 'job.yml'})
 
 Its entries are merged into the job file Sophios writes, by name. The name of
 a declared workflow input is the name you gave it; the name of a step literal,
-should you want to override one, is the generated `<step>___<port>` name from
+should you want to override one, is the generated `<step>__<port>` name from
 the job file. An inputs file value wins over a literal of the same name. A
 file that is not YAML is `wic001`; one whose top level is not a mapping is
 `wic002`.
@@ -158,7 +158,7 @@ declared (or the reverse), or is not readable is a `wic016` line naming the
 input and where Sophios looked:
 
 ```text
-error [wic016] input 'cat/file' (from the workflow, whose relative paths are read from /.../sophios-examples) names 'data.txt', which does not exist at /.../sophios-examples/data.txt: correct the path, or create the file.
+error [wic016] input 'cat__file' (from the workflow, whose relative paths are read from /.../sophios-examples) names 'data.txt', which does not exist at /.../sophios-examples/data.txt: correct the path, or create the file.
 ```
 
 The check covers `File` and `Directory` values at any depth: in lists, in
@@ -189,9 +189,11 @@ checking it:
 ```
 
 What the string names must exist in the compiled CWL under that name. A
-workflow input does. A step name does not: steps are renamed in the compiled
-CWL (`raw_cwl__step__1__echo`), so `!cwl echo/stdout` points at nothing. To
-use a step's output, [define an edge](connecting-steps.md). Python has no
+workflow input does. A step output is not one to rely on: Sophios does not
+read the string, so `!cwl echo/stdout` is no edge it knows of, and a step is
+numbered in the compiled CWL once a second step has its id (`echo_1`), which
+leaves the string pointing at nothing. To use a step's output,
+[define an edge](connecting-steps.md). Python has no
 unchecked spelling: a reference is always a port object, so the Python twin
 of `!cwl greeting` is the workflow input `flow.inputs.greeting`, and both
 write the same line, `message: greeting`.

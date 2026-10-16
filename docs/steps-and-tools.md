@@ -77,7 +77,7 @@ The Python step says `Path(__file__).with_name('word_count.cwl')`, "the file
 beside this script", because a Python path is resolved by Python, from the
 working directory, and not from the script's location. The step takes its
 name from the file stem in both forms, so `count` and `word_count` run the
-same tool and the compiled step is `word_count__step__3__word_count` in both.
+same tool and the compiled step is `word_count` in both.
 
 ## A tool built in Python
 
@@ -152,8 +152,8 @@ tool's stem or path. The sequence form is also the one to use when a repeated
 tool keeps its own name, as the two `append` steps of `multistep1.wic` do; a
 step name may repeat in the sequence form, and the compiled CWL tells them
 apart by position. In Python, `step_name=` names the step, and a repeated name
-in one workflow is `api002`. The step names reach the compiled CWL:
-`renamed_step__step__1__hello` and `renamed_step__step__2__goodbye`.
+in one workflow is `api002`. The step names reach the compiled CWL as they
+are: `hello` and `goodbye`.
 
 ## What a `.cwl` file may hold
 

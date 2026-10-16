@@ -53,16 +53,17 @@ During compilation a name is a value, never a string: a step occurrence is a
 spells them, through `sophios/ir/names.py`:
 
 ```text
-{workflow}__step__{i}__{name}        a step, i its 1-based position
-{step}___{port}                      a port exposed at a boundary
-{outer}___{inner}                    nesting, joined with three underscores
+{name}                 a step, its id less a `.wic`
+{name}_{i}             a step whose id another step, input or output of its
+                       document has (case ignored), i its 1-based position
+{step}__{port}         a port exposed at a boundary; `_2`, `_3`, ... if taken
+{outer}__{inner}       nesting (a flattened step, a drawing's node)
 ```
 
-The spelling is one-way: nothing takes a name apart, and a consumer that
-needs to know what a name came from is given the identity. The names map
-(`<workflow>.names.json`) is the spelled form of that identity for readers
-outside the compiler, and `AuthoredNamesFilter` in `plugins.py` uses it to
-rewrite cwltool's messages during a run.
+Each document's names are claimed in that order, the inputs and outputs the
+author wrote first, so the compiled CWL never holds one id twice. The spelling
+is one-way: nothing takes a name apart, and a consumer that needs to know what
+a name came from is given the identity.
 
 Subworkflows use relative namespacing: the parts a parent adds are dropped
 inside the child, so a child's documents are the same wherever it is called
