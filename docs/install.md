@@ -17,9 +17,10 @@ directory that holds the example tools.
 - **Graphviz**, only if you want drawings of your workflows (`--graphviz`).
   Without the `dot` program Sophios says so and compiles without the drawing.
 
-Compiling works on every platform. Running needs cwltool or Toil, which do not
-run on Windows outside WSL: a run asked for on Windows stops with a `wic029`
-line that says to use WSL.
+Compiling works on every platform. Running and validating need cwltool or
+Toil, which do not run on Windows outside WSL: a run asked for on Windows stops
+with a `wic029` line that says to use WSL, and `validate=True` or
+`--validate_plugins` fails there.
 
 ## Install the package
 

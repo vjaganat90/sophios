@@ -90,8 +90,7 @@ per declaration:
   since the last run and that step did not fail. Changes during a run make one
   follow-up run. `max_times` caps the total.
 - Each file the analysis reads is the newest file of that name written by a
-  step of this run; else one an earlier run left in the cache, which a cache
-  hit this run reused; else the file of that path beside the root workflow.
+  step of this run; else the newest one an earlier run left in the cache; else the file of that path beside the root workflow.
   When it is in none of them, that run is skipped with one line naming the
   file. A name written by several jobs is reported, and the newest is used.
 - The analysis's images are pulled with the workflow's, and it runs with the

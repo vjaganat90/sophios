@@ -60,10 +60,9 @@ the `global` list:
 
 How a search works:
 
-- Every directory is searched recursively, for `*.cwl` or `*.wic`. Do not
-  point a `.wic` search path at a directory holding unrelated YAML; every
-  file found is read as a workflow, except one whose path contains
-  `_inputs`, which is skipped as a job file.
+- Every directory is searched recursively, for `*.cwl` or `*.wic`, and the
+  files are indexed by stem; a `.wic` is read only when a workflow calls it.
+  A file whose path contains `_inputs` is skipped as a job file.
 - A stem is a name: `touch` is `touch.cwl` wherever it sits. A stem found
   twice in one namespace prints a warning naming both files and the one used,
   and the later definition wins: search paths in the order the configuration
@@ -100,8 +99,9 @@ tool collections that keep GPU variants apart.
 line; [Edge inference](edge-inference.md) explains both. The first is a list of
 `[before, after]` replacements that `--inference_use_naming_conventions` applies
 to an input's name before pairing it with an output's. The second maps a
-format to `break`, which stops the backwards scan at the step whose output
-carries it, or `continue`, the default. The values Sophios writes are the
+format to `break` or `continue`, the default; the rule applies to the
+converter steps that `--insert_steps_automatically` adds, and stops the
+backwards scan at them. A step you wrote carries its own `inference:` rules. The values Sophios writes are the
 GROMACS conventions its molecular-modelling tools use; replace them for your
 own tools.
 

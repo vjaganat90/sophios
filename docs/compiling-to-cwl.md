@@ -135,9 +135,9 @@ inline_literal__step__1__touch___filename: empty.txt
 
 ### Edges and outputs
 
-An edge is a `source`, `<step>/<port>`, inferred or not. The
-[explicit_edge pair](connecting-steps.md) and the
-[inference pair](edge-inference.md) compile to the same shape:
+An edge is `<step>/<port>`, written bare when inferred and under `source:`
+when explicit; both are the same CWL. The
+[explicit_edge pair](connecting-steps.md) compiles to:
 
 ```yaml
 - id: explicit_edge__step__2__append

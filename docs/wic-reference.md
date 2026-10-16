@@ -462,7 +462,8 @@ The block is closed: each key has a fixed meaning and a fixed shape of value.
 |---|---|
 | `steps` | a mapping keyed by `(index, name)` or by a step id that occurs once |
 | `graphviz` | a mapping of `label` (a non-empty string), `style` (Graphviz styles, comma separated) and `ranksame` (a list of `(index, name)` keys), each optional |
-| `implementation`, `default_implementation`, `lang_version`, `namespace` | a non-empty string |
+| `implementation`, `default_implementation`, `version`, `lang_version`, `namespace` | a non-empty string |
+| `driver` | `slurm` or `argo` |
 | `implementations` | a mapping of names to workflow bodies |
 | `inlineable` | `true` or `false` |
 

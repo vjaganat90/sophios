@@ -34,7 +34,8 @@ of the port's type?
   compared as an array of its declared type.
 - **Inference** is stricter than rejection, because it chooses rather than
   checks: an output is a candidate only when its type equals the input's, or
-  one is a union containing the other, and its format fits. `Any` matches only
+  one is a union containing the other or the two unions share a member, and its
+  format fits. `Any` matches only
   `Any`. [Edge inference](edge-inference.md) has the full rule.
 
 A workflow input takes the type of the first port it feeds, in Python, or the

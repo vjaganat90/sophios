@@ -127,8 +127,9 @@ value as a parameter of the function that builds the child.
 
 ## What can go wrong
 
-- A subworkflow with no steps, or one not found on `search_paths_wic` or at
-  its `run:` path, is `wic013`, at the calling step.
+- A subworkflow not found on `search_paths_wic` or at its `run:` path is
+  `wic013`, at the calling step. A root workflow with no steps is an error
+  too, with no position.
 - Subworkflows that call each other in a cycle are `wic013`.
 - A child whose `inputs:` or `outputs:` are written as a list holding an
   `$import` or `$include` is `wic013`: no caller can be checked against ports

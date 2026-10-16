@@ -54,12 +54,16 @@ standalone modes take no `--yaml`:
 | `--quiet` | off | give every tool that names no `stdout`/`stderr` a `<stem>.out`/`<stem>.err` to capture them in; with `--run_local` or `--generate_run_script`, also pass `--quiet` to cwltool (never to Toil) |
 | `--cwl_inline_subworkflows` | off | write one flat workflow: each subworkflow call with nothing but `in` and `out`, whose child is not `wic: inlineable: false`, is replaced by the child's steps; the tools stay separate files, and each call that stays nested is named on stderr |
 | `--cwl_inline_runtag` | off | write one self-contained file: every step's `run:` carries its process, tools and subworkflows alike |
-| `--partial_failure_enable` | off | rewrite the compiled CWL so that a job exiting with a success code counts as success with `null` outputs and every step runs only when its inputs are not `null` ([Partial failures](partial-failures.md)) |
+| `--partial_failure_enable` | off | rewrite the compiled CWL so that a job exiting with a success code counts as success with `null` outputs and every step with required inputs runs only when they are not `null` ([Partial failures](partial-failures.md)) |
 | `--partial_failure_success_codes CODE ...` | `0 1` | the exit codes that count as success under `--partial_failure_enable`; `0` is always one |
 | `--partial_failure_success_codes_range LOW HIGH` | `0 1` | a range of such codes, `LOW` included and `HIGH` excluded |
 
-The three rewriting flags (`--cwl_inline_subworkflows`, `--cwl_inline_runtag`,
-`--partial_failure_enable`) are an error with a plain CWL workflow under
+`--docker_remove_entrypoints` rebuilds local images without their `ENTRYPOINT`,
+to show which tools depend on one: a tool without its own `baseCommand` or
+`arguments` fails under it.
+
+The four rewriting flags (`--cwl_inline_subworkflows`, `--cwl_inline_runtag`,
+`--partial_failure_enable`, `--docker_remove_entrypoints`) are an error with a plain CWL workflow under
 `--allow_raw_cwl`, since Sophios compiles nothing to rewrite.
 
 ## Running
@@ -103,12 +107,17 @@ The three rewriting flags (`--cwl_inline_subworkflows`, `--cwl_inline_runtag`,
 
 ## The same options from Python
 
-`Workflow.run(run_args_dict={...})` takes the running and compiling options
+`Workflow.run(run_args_dict={...})` takes the running options
 by flag name without the dashes, as strings, with `yes`/`no` for a switch:
 `{'cwl_runner': 'toil-cwl-runner', 'outdir': 'results', 'quiet': 'no'}`.
 `inputs_file`, `cachedir`, `outdir`, `container_engine`, `pull_dir`,
-`cwl_runner`, `generate_run_script` and `quiet` are read by Sophios; any
-other key is passed to the runner as `--key value`. `Workflow.compile()`
+`cwl_runner`, `generate_run_script`, `docker_remove_entrypoints` and `quiet`
+are read by Sophios. Any other key becomes `--key value` on a command line
+that Sophios parses first, so a Sophios flag name is consumed there and ignored.
+For a switch such as `ignore_docker_install`, the value is left over and
+reaches the runner as a stray argument. For a flag that takes a value, such as
+`custom_net`, `diagnostics` or `graph_inline_depth`, the flag and its value
+are both dropped without a message. `Workflow.compile()`
 takes `lang_version=` and `tool_registry=` and nothing else: inference runs
 with the defaults, and the drawing, rewriting and partial-failure options are
 command-line only.

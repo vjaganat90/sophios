@@ -43,8 +43,7 @@ surfaces'. The markers, declared in `pyproject.toml`:
 - `serial`: tests that cannot run under `pytest --workers`;
 - `needs_cwltool`: calls cwltool in-process; skipped off POSIX;
 - `skip_pypi_ci`: left out of the packaging lane;
-- `contrib`: a contrib surface rather than the core compiler;
-- `sanity`: a static scan over the repository, run weekly.
+- `contrib`: a contrib surface rather than the core compiler.
 
 Three kinds of test carry the promises the documentation makes:
 

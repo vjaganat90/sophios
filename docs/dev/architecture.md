@@ -26,8 +26,8 @@ real-time declarations.
    discovers nothing and parses nothing.
 3. **Lower** builds an immutable `WorkflowGraph`: steps with complete port
    declarations, authored bindings, the workflow boundary, child graphs for
-   subworkflows, and the real-time declarations, which it takes out of the
-   graph.
+   subworkflows, and the real-time declarations. The compiler takes those out of
+   the graph after the front end.
 4. **Link** composes child graphs, places authored references at their
    lowest common ancestor, and discharges deferred obligations.
 5. **Infer** adds the missing edges, and converter steps when asked. Its
@@ -39,7 +39,7 @@ real-time declarations.
 7. **Emit** projects the final graph to CWL v1.2 documents and job inputs. It
    does not reopen source, consult registries, or revisit a decision.
 
-An idempotent completion step between Infer and Emit materialises emission
+An idempotent completion step, run before Link and again after Infer, materialises emission
 facts already decided (boundary spellings, source strings); it looks nothing
 up and decides nothing. The phases are tested one by one (`tests/core/test_resolve.py`,
 `test_lower.py`, `test_link.py`, `test_infer_phase.py`, `test_emit.py`) and

@@ -48,8 +48,8 @@ nothing binds (no literal, no workflow input, no edge, no record):
 1. Look at the earlier steps, from the most recent backwards. Within a step,
    look at its outputs from the last declared to the first.
 2. An output matches when its type matches the input's type and its format
-   matches the input's format. Types match when they are equal, or when one is
-   a union that contains the other. `Any` matches only `Any`. A scattered
+   matches the input's format. Types match when they are equal, when one is
+   a union that contains the other, or when two unions share a member. `Any` matches only `Any`. A scattered
    step's outputs are compared as arrays, and an input the step scatters over
    is compared as an array of its declared type, so a step that scatters over
    a scattered producer's output matches without a pin. An output whose name
@@ -134,15 +134,20 @@ applies and a note is printed.
 
 ## Format rules
 
-`inference_rules` in the configuration maps a format to `break` or
-`continue`. When the scan meets an output whose format has the rule `break`,
-it finishes that step's outputs and goes no further back: an input that
-matched nothing up to there becomes a workflow input rather than reaching an
-older step. Use it for a format that marks a boundary, such as a final
-structure that a later step should never read past. `continue` is the
-default and changes nothing. The command line reads the rules, and the
-`renaming_conventions` above, from the configuration; `Workflow.compile()`
-reads no configuration, so a Python compile has neither.
+A step stops the backwards scan with an `inference:` mapping from an output's
+port name to `break` or `continue` under its `wic: steps:` entry. When the
+scan meets an output with the rule `break`, it finishes that step's outputs and
+goes no further back: an input that matched nothing up to there becomes a
+workflow input rather than reaching an older step. Use it for an output that
+marks a boundary, such as a final structure that a later step should never
+read past. `continue` is the default and changes nothing.
+
+`inference_rules` in the configuration maps a format to `break` or `continue`
+and applies only to the converter steps that `--insert_steps_automatically`
+adds, giving each output of that format the rule; it does not change a step
+you wrote. The command line reads those rules, and the `renaming_conventions`
+above, from the configuration; `Workflow.compile()` reads no configuration, so
+a Python compile has neither.
 
 ## Inserting a converter step
 
