@@ -190,7 +190,8 @@ apply. Nothing is parsed, copied or rewritten:
 - `--generate_cwl_workflow` writes nothing and says so;
 - `--graphviz` draws only cwltool's SVG of the file;
 - the flags that rewrite compiled CWL (`--cwl_inline_runtag`,
-  `--cwl_inline_subworkflows`, `--partial_failure_enable`) are an error.
+  `--cwl_inline_subworkflows`, `--partial_failure_enable`,
+  `--docker_remove_entrypoints`) are an error.
 
 The CWL Sophios writes is itself plain CWL. After compiling `greeting.wic`,
 this runs the result without compiling again:

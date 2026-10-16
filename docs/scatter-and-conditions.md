@@ -93,5 +93,9 @@ warns that a source from a conditional step may produce `null`.
 A later step that reads such an output declares how to treat it with
 `pickValue` in a record (`first_non_null`, `the_only_non_null`,
 `all_non_null`), or declares the input optional. Under
-`--partial_failure_enable`, Sophios itself writes a `when:` on every step;
-see [Partial failures](partial-failures.md).
+`--partial_failure_enable`, Sophios itself writes a `when:` on every step that
+has required inputs, and it replaces a `when:` you wrote on that step: for
+`cookbook/when.wic` the compiled step reads
+`when: $(inputs["message"] != null && inputs["enabled"] != null)`. A step with
+no required inputs keeps its own `when:`; see
+[Partial failures](partial-failures.md).

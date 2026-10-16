@@ -34,8 +34,8 @@ a list is `TypeError` when the file is read.
 ### `search_paths_wic`
 
 The same shape, for the `.wic` files a step may call and the real-time
-analyses it may declare. Every `.wic` found is read; a path containing
-`_inputs` is skipped.
+analyses it may declare. Every `.wic` found is indexed by stem and read only
+when a workflow calls it; a path containing `_inputs` is skipped.
 
 ```json
 "search_paths_wic": {
@@ -59,9 +59,12 @@ compares it with an output's name (after `output_` is removed).
 
 ### `inference_rules`
 
-A mapping of format identifiers to `break` or `continue`. `break` stops
-inference's backwards scan after the step whose output carries the format;
-`continue` is the default.
+A mapping of format identifiers to `break` or `continue`. It applies to the
+converter steps that `--insert_steps_automatically` adds: `break` stops
+inference's backwards scan at an inserted step whose output carries the
+format; `continue` is the default. A step you wrote sets its own rules with
+`inference:` under its `wic: steps:` entry
+([Edge inference](edge-inference.md)).
 
 ```json
 "inference_rules": {

@@ -41,8 +41,8 @@ The returned document is the compiled CWL with every `run:` embedded, as
 id rather than CWL's list. A payload that declares a real-time analysis is
 compiled without it, and the server prints a line saying which analysis the
 returned workflow has no step for, since an analysis runs only under
-`--run_local`. A payload the compiler rejects gets the compiler's diagnostics
-as the error. The sample payloads under `tests/contrib/rest_wfb_objects/` in
+`--run_local`. A payload the compiler rejects is a plain `Internal Server Error`
+500; the diagnostics are only in the server's log. The sample payloads under `tests/contrib/rest_wfb_objects/` in
 the repository show the shape the route accepts.
 
 ## ICT to CommandLineTool
