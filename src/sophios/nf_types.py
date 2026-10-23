@@ -1238,6 +1238,11 @@ LINK_MERGES = frozenset({"merge_nested", "merge_flattened"})
 PICK_VALUES = frozenset({"first_non_null", "the_only_non_null", "all_non_null"})
 
 
+#: A connection that carries one source's values, a workflow input's or a process output's, into a process input:
+#: the connection a scatter adapter sits on, and each source of a step input.
+NfSourceConnection = NfWorkflowInputConnection | NfProcessConnection
+
+
 @dataclass(frozen=True, slots=True)
 class NfStepInputConnection:
     """Connect one step input's bound values to one process input through the step-input idioms.
@@ -1249,7 +1254,7 @@ class NfStepInputConnection:
     idioms combine values, never queue channels.
     """
 
-    sources: Sequence[NfWorkflowInputConnection | NfProcessConnection]
+    sources: Sequence[NfSourceConnection]
     link_merge: str
     pick_value: str | None = None
 
