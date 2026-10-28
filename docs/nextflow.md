@@ -152,7 +152,8 @@ print(result.outputs)
 `Workflow.start(target="nextflow")` and `Workflow.run_async(target="nextflow")`
 follow the run as they follow a CWL one ([Running](running.md#follow-a-run-from-python)).
 `--generate_run_script` writes the command to `run.sh` instead, and `--check`
-writes the four files and checks the machine: that each input file or
+writes the four files into a temporary directory it removes, leaving the base
+path as it found it, and checks the machine: that each input file or
 directory can be read (`wic016`), that `nextflow` starts, which needs a Java
 it can run (`wic029` when it does not), and, when a process has a container,
 that Docker can run it (`wic015`). `run.sh` calls the `nextflow` on PATH, so
