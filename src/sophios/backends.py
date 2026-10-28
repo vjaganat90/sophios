@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -420,10 +421,21 @@ class NextflowBackend:
         The workflow is lowered from its bound values, each relative File or Directory path read against
         `settings.root_dir` and written absolute: Nextflow runs from its `nextflow_directory`.
 
+        A check (`settings.check`) writes them into a temporary directory instead, removed when the check ends,
+        so it leaves `basepath` as it found it.
+
         Raises:
             ValueError: The workflow has no Nextflow lowering; no artifact is left.
             SophiosError: What the check found in the way.
         """
+        if not settings.check:
+            return self._prepare(compilation, analyses, basepath, settings)
+        with tempfile.TemporaryDirectory(prefix='sophios-check-') as scratch:
+            return self._prepare(compilation, analyses, Path(scratch), settings)
+
+    def _prepare(self, compilation: CompilationResult, analyses: tuple[realtime.Analysis, ...], basepath: Path,
+                 settings: run_setup.Settings) -> run_setup.Prepared:
+        """`prepare`, writing under `basepath`."""
         artifact = compilation.artifact
         bound = absolute_paths(local_locations_as_paths(artifact.job_inputs), settings.root_dir)
         compilation = replace(compilation, artifact=replace(artifact, job_inputs=bound))

@@ -258,20 +258,24 @@ _NEXTFLOW_SETTINGS = preflight.RunSettings('docker', '', runner='nextflow')
 def test_nextflow_prepare_writes_the_pipeline_from_absolute_paths_and_makes_each_output_directory(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, check: bool) -> None:
     """A relative path is read from the root directory; an output-target Directory that names nothing yet is
-    made, except by a check; and each Nextflow name maps back to its Sophios one."""
+    made; and each Nextflow name maps back to its Sophios one. A check writes none of it under the base path,
+    and makes no directory, as a CWL check does."""
     monkeypatch.setattr(preflight, 'nextflow_problems', lambda _settings: [])
     root = tmp_path / 'root'
     root.mkdir()
     (root / 'source.txt').write_text('', encoding='utf-8')
     settings = run_setup.Settings(_NEXTFLOW_SETTINGS, root, check=check)
     prepared = backends.backend('nextflow', 'nextflow').prepare(_write_into(root), (), tmp_path / 'base', settings)
+    if check:
+        assert not (tmp_path / 'base').exists() and not (root / 'made').exists()
+        return
     base = tmp_path / 'base' / 'nextflow_wf'
     assert prepared.documents == tuple(base / name for name in (
         'nextflow_workflow.json', 'workflow.nf', 'nextflow.config', 'nextflow_params.json'))
     params = json.loads((base / 'nextflow_params.json').read_text(encoding='utf-8'))
     assert params == {'write_into_outDir': {'class': 'Directory', 'path': str(root / 'made')},
                       'write_into_source': {'class': 'File', 'path': str(root / 'source.txt')}}
-    assert (root / 'made').is_dir() is not check
+    assert (root / 'made').is_dir()
     assert json.loads((base / 'nextflow_names.json').read_text(encoding='utf-8')) == {
         'processes': {'write_into': 'write-into'}, 'outputs': {'write_into_outDir': 'write-into~outDir'}}
 

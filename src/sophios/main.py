@@ -116,7 +116,7 @@ def _run_nextflow(args: argparse.Namespace, unknown_args: list[str], compilation
         _not_lowered(error, yaml_stem)
     _report(prepared.notes, args.diagnostics)
     if args.check:
-        _checked(prepared.documents[1])  # workflow.nf, the pipeline the check read
+        _checked(prepared.artifact.name)
         return
     _run(args, unknown_args, prepared.artifact.name, realtime_plans=prepared.plans)
 
