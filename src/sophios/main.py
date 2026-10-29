@@ -52,7 +52,6 @@ def _load_source_bundle(args: argparse.Namespace,
     if (problem := preflight.unwritable(basepath, 'the compiled workflow',
                                         'give --basepath a directory you can write to')) is not None:
         raise SophiosError([problem])
-    basepath.mkdir(parents=True, exist_ok=True)
     bundle = frontdoor.bundle_from_disk(Path(yaml_path), yml_paths, tools_cwl)
     return yaml_path, yaml_stem, bundle
 
@@ -117,7 +116,7 @@ def _run_nextflow(args: argparse.Namespace, unknown_args: list[str], compilation
         _not_lowered(error, yaml_stem)
     _report(prepared.notes, args.diagnostics)
     if args.check:
-        _checked(prepared.documents[1])  # workflow.nf, the pipeline the check read
+        _checked(prepared.artifact.name)
         return
     _run(args, unknown_args, prepared.artifact.name, realtime_plans=prepared.plans)
 
@@ -234,9 +233,10 @@ def _preflight(args: argparse.Namespace, documents: list[Path], jobs: tuple[pref
     return False
 
 
-def _checked(document: Path) -> None:
-    """Say that `--check` found nothing in the way of running `document`."""
-    print(f'Checked {document}: nothing in the way of a local run on this machine. Nothing was pulled or run.')
+def _checked(name: Path | str) -> None:
+    """Say that `--check` found nothing in the way of running `name`."""
+    print(f'Checked {name}: nothing in the way of a local run on this machine. '
+          'Nothing was written, pulled or run.')
 
 
 def _run_settings(args: argparse.Namespace) -> preflight.RunSettings:
@@ -389,6 +389,9 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
         cli.parser.error(f'no workflow file at {args.yaml}')
     if args.inputs_file and not Path(args.inputs_file).is_file():
         cli.parser.error(f'no inputs file at {args.inputs_file}')
+    if args.check and args.graphviz:
+        cli.parser.error('--graphviz writes drawings and --check writes nothing: '
+                         'draw with --generate_cwl_workflow --graphviz')
     if args.allow_raw_cwl and args.target == 'cwl' and _is_plain_cwl_workflow(Path(args.yaml)):
         _pass_through(args, unknown_args)
         return
@@ -441,7 +444,7 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
                                remove_entrypoints=args.docker_remove_entrypoints))
         draw_after_write()
         if args.check:
-            _checked(prepared.documents[0])
+            _checked(prepared.artifact.name)
             return
         _run(args, unknown_args, prepared.artifact.name, realtime_plans=prepared.plans)
 
