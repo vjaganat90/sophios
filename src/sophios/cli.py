@@ -84,9 +84,6 @@ neutral.add_argument('--inference_strict', default=False, action="store_true",
                      help='Treat a guessed edge (wic043) as an error.')
 neutral.add_argument('--validate_plugins', default=False, action="store_true",
                      help='Validate all CWL CommandLineTools')
-neutral.add_argument('--ignore_validation_errors', default=False, action="store_true",
-                     help='Deprecated; does nothing. The parser reports a malformed file, '
-                     'and nothing else validates one.')
 neutral.add_argument('--diagnostics', choices=['text', 'json'], default='text',
                      help='''How diagnostics are printed on stderr: text, or one JSON object per line
                      for programs and agents (see docs/error_codes.md)''')
@@ -165,10 +162,6 @@ cwl.add_argument('--cwl_inline_subworkflows', default=False, action="store_true"
                  subworkflow's own steps. Tools stay separate files. A subworkflow call that has
                  scatter, when or any other key besides in and out, or that is marked
                  inlineable: false, stays a subworkflow, and each one is named on stderr.''')
-cwl.add_argument('--no_skip_dollar_schemas', default=False, action="store_true",
-                 help='''Does not skip processing $schemas tags in CWL files for performance.
-                 Skipping significantly improves initial validation performance, but is not always desired.
-                 See https://github.com/common-workflow-language/cwltool/issues/623''')
 cwl.add_argument('--cachedir', type=str, required=False, default='',
                  help='''With --run_local and cwltool, the directory cwltool caches each step's outputs in:
                  a step whose tool and inputs are unchanged reuses them. No cache unless given.''')
@@ -189,8 +182,6 @@ cwl.add_argument('--graph_inline_depth', type=int, required=False, default=sys.m
                  help='Controls the depth of subgraphs which are displayed.')
 cwl.add_argument('--graph_dark_theme', default=False, action="store_true",
                  help='Draw text, box outlines and inferred edges in white, for a dark background.')
-cwl.add_argument('--custom_net', type=str, required=False,
-                 help='Passes --custom-net flag to cwltool.')
 
 
 def validate_target_args(args: argparse.Namespace) -> None:

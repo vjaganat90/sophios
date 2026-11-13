@@ -317,9 +317,6 @@ def _main(args: argparse.Namespace, unknown_args: list[str]) -> None:
     # at import time — see the note in cli.py.
     if not args.yaml and not (args.generate_config or args.generate_schemas or args.explain):
         cli.parser.error('the following arguments are required: --yaml')
-    if args.ignore_validation_errors:
-        print('Warning: --ignore_validation_errors is deprecated and does nothing; '
-              'nothing validates a file against a schema any more.', file=sys.stderr)
 
     if args.explain:
         explanation = args.explain.explanation
