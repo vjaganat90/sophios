@@ -7,6 +7,8 @@ Import `CWL_VERSION` rather than writing a version literal.
 from enum import StrEnum
 from typing import Final
 
+from cwl_utils.parser import cwl_v1_2 as _standard
+
 
 class CwlVersion(StrEnum):
     """Every CWL version the substrate toolchain actually accepts.
@@ -30,3 +32,18 @@ CWL_VERSION: Final[str] = CwlVersion.V1_2.value
 
 #: Every admissible version as plain strings, for JSON Schema `enum` fields.
 CWL_VERSIONS: Final[tuple[str, ...]] = tuple(version.value for version in CwlVersion)
+
+# CWL's own vocabularies, read from the standard's schema as cwl_utils ships it: nothing else spells them.
+
+#: The types that are not arrays, records or enums.
+ATOMIC_TYPES: Final[frozenset[str]] = frozenset(_standard.CWLTypeLoader.symbols)
+
+#: `scatterMethod`.
+SCATTER_METHODS: Final[frozenset[str]] = frozenset(_standard.ScatterMethodLoader.symbols)
+
+#: `linkMerge`.
+LINK_MERGES: Final[frozenset[str]] = frozenset(_standard.LinkMergeMethodLoader.symbols)
+
+#: `pickValue`, and the two of its methods that give one value where `all_non_null` gives a list.
+PICK_VALUES: Final[frozenset[str]] = frozenset(_standard.PickValueMethodLoader.symbols)
+PICKS_ONE: Final[frozenset[str]] = PICK_VALUES - {'all_non_null'}
