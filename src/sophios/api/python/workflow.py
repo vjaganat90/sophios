@@ -506,24 +506,14 @@ class Step(_ProcessBase):
                 if step_inputs_file is not None:
                     raise TypeError("step_inputs_file is only supported when Step is created from a CWL file path")
                 assert source is not None
-                resolved_name = step_name or tool_name
-                run_path = Path(f"{resolved_name}.cwl")
                 match source.to_cwl_document():
                     case Mapping() as document:
-                        clt, yaml_file = _load_clt_document(document, run_path=run_path)
+                        name = step_name or tool_name
+                        self._initialize_document(document, name, f"{name}.cwl", None, resolved_registry)
                     case _:
                         raise TypeError(
                             "CommandLineTool-like Step source must return a mapping from to_cwl_document()"
                         )
-
-                self._initialize_loaded_tool(
-                    clt=clt,
-                    yaml_file=yaml_file,
-                    clt_path=run_path,
-                    cfg_yaml={},
-                    tool_registry=resolved_registry,
-                    process_name=resolved_name,
-                )
             case _:
                 raise TypeError("Step requires clt_path or a CommandLineTool-like source")
 
@@ -557,23 +547,31 @@ class Step(_ProcessBase):
         Returns:
             Step: A fully initialized step backed by the in-memory tool.
         """
-        default_name = process_name or str(document.get("id") or "in_memory_tool")
-        run_path_value = run_path or f"{default_name}.cwl"
-        clt_path = _coerce_path(run_path_value, field_name="run_path")
-        assert clt_path is not None
-        resolved_registry = {} if tool_registry is None else tool_registry
-        clt, yaml_file = _load_clt_document(document, run_path=clt_path)
-
         step = cls.__new__(cls)
-        step._initialize_loaded_tool(
+        step._initialize_document(document, process_name, run_path, step_inputs, tool_registry)
+        return step
+
+    def _initialize_document(
+        self,
+        document: Mapping[str, Any],
+        process_name: str | None,
+        run_path: StrPath | None,
+        step_inputs: Mapping[str, Any] | None,
+        tool_registry: Tools | None,
+    ) -> None:
+        """Populate a step from an in-memory tool document: the one door a document or a built tool comes through."""
+        clt_path = _coerce_path(run_path or f"{process_name or document.get('id') or 'in_memory_tool'}.cwl",
+                                field_name="run_path")
+        assert clt_path is not None
+        clt, yaml_file = _load_clt_document(document, run_path=clt_path)
+        self._initialize_loaded_tool(
             clt=clt,
             yaml_file=yaml_file,
             clt_path=clt_path,
-            cfg_yaml=dict(step_inputs or {}),
-            tool_registry=resolved_registry,
+            cfg_yaml=step_inputs or {},
+            tool_registry={} if tool_registry is None else tool_registry,
             process_name=process_name,
         )
-        return step
 
     def _initialize_loaded_tool(
         self,
