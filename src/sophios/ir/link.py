@@ -125,8 +125,7 @@ def _check_workflow_inputs(graph: WorkflowGraph, merging: dict[PortId, CwlRecord
             if sink in merging:
                 continue
             sink_type = _effective_type(graph, sink, producing=False)
-            relation = reference_relation(
-                source_type, sink_type, lang_version=graph.lang_version)
+            relation = reference_relation(source_type, sink_type)
             if relation is TypeRelation.DISJOINT:
                 diagnostics.error(
                     SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,
@@ -154,7 +153,7 @@ def _reject_if_disjoint(graph: WorkflowGraph, edge: Edge, diagnostics: Diagnosti
         produced = delivered(produced, sources=len(record.sources), link_merge=fields.get('linkMerge'),
                              pick_value=fields.get('pickValue'))
     consumed = _effective_type(scope, edge.sink, producing=False)
-    if reference_relation(produced, consumed, lang_version=scope.lang_version) is not TypeRelation.DISJOINT:
+    if reference_relation(produced, consumed) is not TypeRelation.DISJOINT:
         return False
     diagnostics.error(
         SophiosErrorCode.INCOMPATIBLE_INPUT_REFERENCE,

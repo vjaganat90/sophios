@@ -82,7 +82,7 @@ use site (`!*`, an obligation on an input port identity). When a child
 refers to a producer outside its scope, Lower records a `DeferredObligation`
 rather than inventing a source string. Link owns the composed graph, so it
 finds the definition at the lowest common ancestor, judges the endpoint types
-with the versioned reference relation, and places the edge in exactly one
+with the reference relation, and places the edge in exactly one
 graph. An obligation still open at the root is `wic025`.
 
 Workflow boundaries are graph facts: Link exposes whatever intermediate input

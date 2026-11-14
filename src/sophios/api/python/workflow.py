@@ -19,7 +19,6 @@ from sophios.lang.diagnostics import Diagnostic, SophiosError
 from sophios.lang.error_codes import SophiosErrorCode
 from sophios.lang.names import check_written_name
 from sophios.lang.spans import SourceSpan
-from sophios.lang.versions import KNOWN_VERSIONS
 from sophios.run_status import RunResult, RunState, RunStatus, StepStatus, WorkflowRunError
 from sophios.wic_types import DEFAULT_BASEPATH, Tools
 
@@ -123,13 +122,9 @@ def _tool_builder_source_name(value: Any) -> str | None:
 
 
 def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
-    """Whether an eager API binding is not disjoint in every known version.
+    """Whether an eager API binding is not provably disjoint.
 
-    A ``Workflow`` object has no resolved language version yet.  Rejecting only
-    when every supported version proves disjoint keeps this convenience check
-    from preempting the authoritative, resolved-version compiler judgment.
-
-    It also has no *scatter* yet: ``scatter_on()`` runs after the binding, and
+    A ``Workflow`` object has no *scatter* yet: ``scatter_on()`` runs after the binding, and
     lifts the sink to an array.  So the sink's declared type is not necessarily
     its effective one, and a pair disjoint as written may be exactly right once
     scattered.  Disjointness is only proven here when it holds for the sink as
@@ -138,11 +133,7 @@ def _python_api_types_match(parameter_type: Any, candidate_type: Any) -> bool:
     the compiler, which knows the scatter.
     """
     def proven_disjoint(sink_type: Any) -> bool:
-        return all(
-            reference_relation(candidate_type, sink_type, lang_version=lang_version)
-            is TypeRelation.DISJOINT
-            for lang_version in KNOWN_VERSIONS
-        )
+        return reference_relation(candidate_type, sink_type) is TypeRelation.DISJOINT
 
     return not (proven_disjoint(parameter_type)
                 and proven_disjoint({'type': 'array', 'items': parameter_type}))
