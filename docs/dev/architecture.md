@@ -39,9 +39,10 @@ real-time declarations.
 7. **Emit** projects the final graph to CWL v1.2 documents and job inputs. It
    does not reopen source, consult registries, or revisit a decision.
 
-An idempotent completion step, run before Link and again after Infer, materialises emission
-facts already decided (boundary spellings, source strings); it looks nothing
-up and decides nothing. The phases are tested one by one (`tests/core/test_resolve.py`,
+A completion step, run once before Link, gives each workflow the boundary its
+steps already determine (an input for each written value, an output for each
+step output); it looks nothing up and decides nothing, and Infer keeps that
+boundary current for what it adds. The phases are tested one by one (`tests/core/test_resolve.py`,
 `test_lower.py`, `test_infer_phase.py`), together by the laws of `test_emit.py`, and
 on example workflows in files (`tests/core/data/examples`, `tests/core/data/compiler`).
 
